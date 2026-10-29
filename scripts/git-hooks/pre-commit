@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Blocks two mistakes in the session-per-worktree workflow:
+#   1. Committing in the main checkout (even via shell tools that bypass
+#      PreToolUse file-edit hooks).
+#   2. Committing directly onto `main` outside of a merge (every change reaches
+#      `main` by merging a worktree branch via the merge-to-main skill).
+
+set -euo pipefail
+
+git_dir="$(git rev-parse --path-format=absolute --git-dir)"
+common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+
+if [[ "$git_dir" == "$common_dir" ]]; then
+  echo "pre-commit: refusing to commit in the main checkout." >&2
+  echo "Create or enter a linked git worktree first (e.g. git worktree add .worktrees/<slug> -b <type>/<slug>)." >&2
+  exit 1
+fi
+
+branch="$(git symbolic-ref --short -q HEAD || true)"
+if [[ "$branch" == "main" || "$branch" == "master" ]]; then
+  if [[ ! -f "$git_dir/MERGE_HEAD" ]]; then
+    echo "pre-commit: refusing direct commit on '$branch'." >&2
+    echo "Work on a worktree branch and merge into '$branch' via the merge-to-main skill." >&2
+    exit 1
+  fi
+fi

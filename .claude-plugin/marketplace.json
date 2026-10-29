@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agent-rig",
+  "description": "Subagent-first workflow rig: mechanical PreToolUse and git guards, Triage/Worker/Verifier dispatch, and documentation graph linters.",
+  "owner": {
+    "name": "impatient0"
+  },
+  "plugins": [
+    {
+      "name": "agent-rig",
+      "description": "Subagent-first workflow rig: PreToolUse guards, Triage/Worker/Verifier dispatch, worktree locks, and documentation graph linters.",
+      "version": "0.1.0",
+      "author": {
+        "name": "impatient0"
+      },
+      "source": "./",
+      "category": "development"
+    }
+  ]
+}

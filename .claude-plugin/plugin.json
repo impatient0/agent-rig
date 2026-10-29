@@ -1,0 +1,11 @@
+{
+  "name": "agent-rig",
+  "version": "0.1.0",
+  "description": "Subagent-first workflow rig: PreToolUse guards, Triage/Worker/Verifier dispatch, worktree locks, and documentation graph linters.",
+  "author": {
+    "name": "impatient0"
+  },
+  "license": "MIT",
+  "skills": "./skills",
+  "hooks": "./hooks/claude-hooks.json"
+}

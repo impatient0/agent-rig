@@ -1,0 +1,44 @@
+{
+  "name": "agent-rig",
+  "version": "0.1.0",
+  "description": "Subagent-first, platform-agnostic workflow rig: dual-protocol PreToolUse guards, Triage/Worker/Verifier dispatch, worktree locks, and documentation graph linters.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "rig": "./bin/rig.mjs"
+  },
+  "files": [
+    "bin/",
+    "hooks/",
+    "rules/",
+    "skills/",
+    "scripts/",
+    "templates/",
+    "docs/",
+    ".claude-plugin/",
+    "plugin.json",
+    "hooks.json",
+    "AGENTS.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "antigravity",
+    "claude-code",
+    "agentic-coding",
+    "skills",
+    "hooks",
+    "subagents",
+    "worktrees"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.mjs && npm run check:doc-links && npm run check:doc-format",
+    "check:hooks": "node --test tests/hookIo.test.mjs tests/guard-*.test.mjs tests/gitHooks.test.mjs",
+    "check:doc-links": "node scripts/check-doc-links.mjs",
+    "check:doc-format": "node scripts/reflow-docs.mjs --check",
+    "format:docs": "node scripts/reflow-docs.mjs"
+  }
+}

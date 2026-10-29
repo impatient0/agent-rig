@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Refuses `git merge` inside the main checkout so merges onto `main` always run
+# inside a linked worktree before `main` is re-detached.
+
+set -euo pipefail
+
+git_dir="$(git rev-parse --path-format=absolute --git-dir)"
+common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+
+if [[ "$git_dir" == "$common_dir" ]]; then
+  echo "pre-merge-commit: refusing to merge in the main checkout." >&2
+  echo "Run the merge from inside your linked worktree (see skills/merge-to-main/SKILL.md)." >&2
+  exit 1
+fi

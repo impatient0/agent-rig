@@ -1,5 +1,7 @@
-node_modules/
+node_modules
 .worktrees/
 .claude/worktrees/
 *.log
 .DS_Store
+.rig.local.json
+

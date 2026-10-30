@@ -51,6 +51,7 @@ Before spawning a Worker subagent, write a persistent task brief (in the session
 ## Step 3 — Spawn Isolated Worker Subagents
 
 Spawn one Worker subagent per independent Bucket 1 slice in its own isolated git worktree (using the harness's native subagent worktree-isolation mode and background execution, or a dedicated linked worktree under `.worktrees/<slug>` on branch `<type>/<slug>`).
+Workers operate in execution tier `worker` (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`).
 
 ### Worker Contract & Five Stop Triggers
 
@@ -85,7 +86,7 @@ Unmandated-call: none
 ## Step 4 — Cold Verifier Subagent (Executor != Verifier)
 
 When a Worker reports completion, the Tech Lead **must not** trust the Worker's summary or review the diff inside the Worker's context.
-Spawn a fresh, read-only **Verifier** subagent following the exact prompt and checklist in [`agents/verifier.md`](../../agents/verifier.md), passing it **only**:
+Spawn a fresh, read-only **Verifier** subagent in execution tier `verifier` (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`) following the exact prompt and checklist in [`agents/verifier.md`](../../agents/verifier.md), passing it **only**:
 1. The grounded task brief from Step 2.
 2. The output of `git log -n 5 --format=fuller <base>..HEAD` and `git diff <base>..HEAD`.
 3. The fresh test and doc-linter output (`scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs --check` when present).

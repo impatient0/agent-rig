@@ -36,6 +36,17 @@ Follow [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md):
 2. **Executor != Verifier:**
    An agent that wrote a diff must never be the sole verifier of that diff.
    Before accepting or merging any Worker branch, spawn a fresh, read-only **Verifier** subagent governed by [`agents/verifier.md`](../agents/verifier.md) that receives **only** the grounded task brief, `git diff <base>..HEAD`, `Unmandated-call:` commit trailers, and test output.
+3. **Execution Tiers & Subagent Model Selection:**
+   Work is structured across four canonical execution tiers governed by the active profile `{{RIG_PROFILE}}`:
+   - **`architect`** (`{{MODEL_ARCHITECT}}`, effort `{{EFFORT_ARCHITECT}}`):
+     Main session / Tech Lead, triage, backlog auditing ([`skills/backlog-audit/SKILL.md`](../skills/backlog-audit/SKILL.md)), doc auditing ([`skills/doc-audit/SKILL.md`](../skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](../skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
+   - **`worker`** (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`):
+     Isolated implementation subagents running in linked worktrees.
+   - **`verifier`** (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`):
+     Cold read-only audit subagent governed by [`agents/verifier.md`](../agents/verifier.md).
+   - **`utility`** (subagent model `{{SUBAGENT_MODEL_UTILITY}}`, target `{{MODEL_UTILITY}}`, effort `{{EFFORT_UTILITY}}`):
+     Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](../skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
+     Whenever launching a subagent, explicitly pass the tier's resolved subagent model argument (`{{SUBAGENT_MODEL_WORKER}}` for Workers, `{{SUBAGENT_MODEL_VERIFIER}}` for Verifiers, `{{SUBAGENT_MODEL_UTILITY}}` for Utility tasks) rather than defaulting to `inherit`.
 
 ---
 

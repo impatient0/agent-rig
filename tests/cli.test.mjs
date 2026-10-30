@@ -29,6 +29,7 @@ test('detectHarnesses, installRig, and updateRig manage state, link verifier sub
 
     const res = installRig({ homeDir: fakeHome, detectedOnly: true });
     assert.deepEqual(res.installedHarnesses, ['antigravity', 'claude']);
+    assert.ok(lstatSync(path.join(fakeHome, '.local/bin/rig')).isSymbolicLink());
 
     const state = readRigState(fakeHome);
     assert.deepEqual(state.installedHarnesses, ['antigravity', 'claude']);

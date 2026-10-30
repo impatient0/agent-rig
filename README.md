@@ -32,19 +32,27 @@ Where a default convention is too heavy for a small project, the CLI provides op
 
 ### 1. Install Globally Into Your Harnesses (`rig install`)
 
-Scan `$HOME` for installed harnesses (`~/.gemini` for Antigravity, `~/.claude` for Claude Code, `~/.codex` for Codex CLI, `~/.cursor` for Cursor) and interactively select where to install the rig:
+Clone the repository, link the `rig` CLI, and run `rig install` to scan `$HOME` for installed harnesses (`~/.gemini` for Antigravity, `~/.claude` for Claude Code, `~/.codex` for Codex CLI, `~/.cursor` for Cursor) and interactively select where to install the rig:
 
 ```bash
-node /path/to/agent-rig/bin/rig.mjs install
-# Or non-interactively for specific harnesses:
-node /path/to/agent-rig/bin/rig.mjs install --harnesses antigravity,claude
-# Or install into all detected harnesses:
-node /path/to/agent-rig/bin/rig.mjs install --detected
+git clone https://github.com/<you>/agent-rig.git ~/projects/agent-rig
+cd ~/projects/agent-rig
+npm link
+rig install
 ```
 
-*(Tip: run `npm link` inside `/path/to/agent-rig` to put `rig` on your `PATH`.)*
+Or run `rig install` non-interactively:
+
+```bash
+# Install into specific harnesses:
+rig install --harnesses antigravity,claude
+# Or install into all detected harnesses:
+rig install --detected
+```
 
 What `rig install` configures:
+- **CLI Binary (`~/.local/bin/rig`):**
+  Symlinks `~/.local/bin/rig` to `bin/rig.mjs` so `rig` remains on your `PATH` even if you switch Node versions in `nvm` later.
 - **Antigravity (`~/.gemini/config/`):**
   Registers `agent-rig` in `~/.gemini/config/plugins.json` and links `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 6 skills under `skills/`, and `hooks.json` across every workspace.
 - **Claude Code (`~/.claude/`):**

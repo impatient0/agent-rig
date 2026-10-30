@@ -327,6 +327,12 @@ export function installRig({
   const updated = [];
   const pruned = [];
 
+  const localBinDir = path.join(homeDir, '.local', 'bin');
+  mkdirSync(localBinDir, { recursive: true });
+  pruneDanglingRigSymlinks(localBinDir, pruned);
+  const localBinRig = path.join(localBinDir, 'rig');
+  linkSafe(path.join(RIG_ROOT, 'bin/rig.mjs'), localBinRig, { force, linked, skipped });
+
   for (const id of selectedIds) {
     if (id === 'antigravity') installForAntigravity(homeDir, { force, linked, skipped, updated, pruned });
     else if (id === 'claude') installForClaude(homeDir, { force, linked, skipped, updated, pruned });
@@ -340,6 +346,7 @@ export function installRig({
   return {
     discovered,
     installedHarnesses: selectedIds,
+    localBin: localBinRig,
     linked,
     skipped,
     updated,

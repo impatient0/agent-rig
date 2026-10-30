@@ -19,7 +19,7 @@ Where a default convention is too heavy for a small project, the CLI provides op
 `agent-rig` separates **how you work across every project** from **what a specific project is about**:
 
 1. **Global Layer (`rig install`):**
-   Installs your universal engineering rules ([`rules/AGENTS.md`](rules/AGENTS.md), [`rules/ui-change-gate.md`](rules/ui-change-gate.md)), all 6 skills (`skills/`), the cold Verifier subagent definition ([`agents/verifier.md`](agents/verifier.md)), and the multi-protocol `PreToolUse` guards (`hooks/`) into your harnesses' global configuration directories (`~/.gemini/config/`, `~/.claude/`, `~/.codex/`, `~/.cursor/`).
+   Installs your universal engineering rules ([`rules/AGENTS.md`](rules/AGENTS.md), [`rules/ui-change-gate.md`](rules/ui-change-gate.md)), all 7 skills (`skills/`), the cold Verifier subagent definition ([`agents/verifier.md`](agents/verifier.md)), and the multi-protocol `PreToolUse` guards (`hooks/`) into your harnesses' global configuration directories (`~/.gemini/config/`, `~/.claude/`, `~/.codex/`, `~/.cursor/`).
    Because these are linked to your `agent-rig` clone, editing an existing skill, rule, or hook inside `agent-rig` takes effect across every project immediately;
    running `rig update` links any newly added skills or agents without re-prompting.
 2. **Per-Project Layer (`rig init`):**
@@ -54,7 +54,7 @@ What `rig install` configures:
 - **CLI Binary (`~/.local/bin/rig`):**
   Symlinks `~/.local/bin/rig` to `bin/rig.mjs` so `rig` remains on your `PATH` even if you switch Node versions in `nvm` later.
 - **Antigravity (`~/.gemini/config/`):**
-  Registers `agent-rig` in `~/.gemini/config/plugins.json` and links `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 6 skills under `skills/`, and `hooks.json` across every workspace.
+  Registers `agent-rig` in `~/.gemini/config/plugins.json` and links `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 7 skills under `skills/`, and `hooks.json` across every workspace.
 - **Claude Code (`~/.claude/`):**
   Symlinks `skills/` into `~/.claude/skills/`, [`agents/verifier.md`](agents/verifier.md) into `~/.claude/agents/verifier.md`, `rules/` into `~/.claude/rules/`, and `hooks/` into `~/.claude/hooks/`, and non-destructively merges `PreToolUse` hooks into `~/.claude/settings.json`.
   (Alternatively, inside Claude Code you can run `/plugin marketplace add impatient0/agent-rig` and `/plugin install agent-rig@agent-rig`.)
@@ -141,6 +141,7 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
   verifies git/worktree cleanliness and test gates, routes undocumented decisions to ADRs or [`docs/backlog.md`](docs/backlog.md), and checks cold-session reachability.
 - [`backlog-audit`](skills/backlog-audit/SKILL.md) — Sorts `Unranked` items in [`docs/backlog.md`](docs/backlog.md) into six actionability tiers after checking existing ADRs for prior rejections.
 - [`doc-audit`](skills/doc-audit/SKILL.md) — Audits documentation for mixed lifecycles (stable decisions vs. chronological slice logs), duplicate prose, and stale code claims.
+- [`rig-onboard`](skills/rig-onboard/SKILL.md) — Onboards an existing repository with legacy agent files (CLAUDE.md), decision logs, or backlog into agent-rig conventions without dual-convention state.
 - [`merge-to-main`](skills/merge-to-main/SKILL.md) — Safe worktree-to-`main` merge procedure.
 - [`secure-credential-handoff`](skills/secure-credential-handoff/SKILL.md) — Mode-`0600` env-file pattern so secrets never enter the chat transcript.
 

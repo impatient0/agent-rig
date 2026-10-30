@@ -10,11 +10,14 @@ description: >-
 
 # Onboard an Existing Repository (`rig-onboard`)
 
-`rig init` is deliberately non-destructive: it scaffolds files that do not exist yet and never rewrites what a project already has.
+`rig init` is deliberately non-destructive:
+it scaffolds files that do not exist yet and never rewrites what a project already has.
 A repository that was worked on before `agent-rig` therefore still carries its own conventions afterwards (a `CLAUDE.md`, a chronological decision diary, a backlog full of finished slices, hard-wrapped docs), and two conventions side by side are worse than either one.
-This skill finishes the job: it converts everything that was done under the old conventions, so the repository ends with exactly one way of doing each thing.
+This skill finishes the job:
+it converts everything that was done under the old conventions, so the repository ends with exactly one way of doing each thing.
 
-The mechanical part is `rig init`; the semantic part (deciding what is a project fact, what is a durable decision, what is finished) is this skill.
+The mechanical part is `rig init`;
+the semantic part (deciding what is a project fact, what is a durable decision, what is finished) is this skill.
 
 ---
 
@@ -54,7 +57,8 @@ Follow the "Writing a Per-Project `AGENTS.md`" section of the `agent-rig` README
 2. **Drop what the global rules already say:**
    generic principles, debugging protocols, commit discipline, doc hygiene, definition of done, and harness-specific instructions (Plan Mode, a specific harness's task list).
 3. **Delete the legacy file** and replace every reference found in Step 1 with `AGENTS.md`, including HTML mockups and code comments.
-4. Never rewrite git history to remove old attribution trailers or session links; history stays as it was.
+4. Never rewrite git history to remove old attribution trailers or session links;
+   history stays as it was.
 
 ---
 
@@ -73,8 +77,7 @@ Follow the "Writing a Per-Project `AGENTS.md`" section of the `agent-rig` README
 
 ## Step 5 — Re-Tier the Backlog Last (Run [`skills/backlog-audit/SKILL.md`](../backlog-audit/SKILL.md))
 
-Only after the ADRs exist:
-remove items that are already built and recorded in an ADR, and classify every remaining item into the six actionability tiers.
+Only after the ADRs exist: remove items that are already built and recorded in an ADR, and classify every remaining item into the six actionability tiers.
 Running it earlier would tier items against decisions that are about to move.
 
 ---

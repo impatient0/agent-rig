@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "description": "Subagent-first, platform-agnostic workflow rig: multi-protocol PreToolUse guards, Triage/Worker/Verifier dispatch, worktree locks, and documentation graph linters.",
   "license": "MIT",
+  "author": "impatient0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/impatient0/agent-rig.git"
+  },
+  "homepage": "https://github.com/impatient0/agent-rig#readme",
+  "bugs": {
+    "url": "https://github.com/impatient0/agent-rig/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22"

@@ -5,6 +5,7 @@
   "author": {
     "name": "impatient0"
   },
+  "repository": "https://github.com/impatient0/agent-rig",
   "license": "MIT",
   "skills": "./skills",
   "agents": "./agents",

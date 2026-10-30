@@ -35,8 +35,8 @@ Where a default convention is too heavy for a small project, the CLI provides op
 Clone the repository, link the `rig` CLI, and run `rig install` to scan `$HOME` for installed harnesses (`~/.gemini` for Antigravity, `~/.claude` for Claude Code, `~/.codex` for Codex CLI, `~/.cursor` for Cursor) and interactively select where to install the rig:
 
 ```bash
-git clone https://github.com/<you>/agent-rig.git ~/projects/agent-rig
-cd ~/projects/agent-rig
+git clone https://github.com/impatient0/agent-rig.git
+cd agent-rig
 npm link
 rig install
 ```

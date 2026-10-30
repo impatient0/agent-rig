@@ -30,11 +30,34 @@ Git refuses to let two worktrees check out `main` simultaneously, making `git sw
 
 ---
 
-## Step 3 — Commit & Release the `main` Lock Immediately
+## Step 3 — Commit, Advance Root Checkout, and Clean Up
 
-1. Commit the verified merge (`git commit -m "Merge branch '$BRANCH' into main"` or fast-forward if linear history is requested).
-2. **Immediately release `main`** so the root checkout and other worktrees are not blocked:
+Execute these steps in order, preferably as separate command calls rather than a single compound `&&` chain so file locks settle cleanly:
+
+1. **Commit the verified merge (inside the worktree):**
+   ```bash
+   git commit -m "Merge branch '$BRANCH' into main"
+   ```
+   *(Or fast-forward if linear history is requested).*
+2. **Release the `main` branch lock in the worktree immediately:**
    ```bash
    git switch --detach main
    ```
-3. Update the root checkout's detached `HEAD` to the new `main` tip if clean (`rig detach`), and optionally remove the completed worktree and branch.
+3. **Advance the root checkout's detached `HEAD` to the new `main` tip first:**
+   Run from the root checkout (or pass `-C <root>`):
+   ```bash
+   git switch --detach main
+   ```
+   *(Or run `rig detach <root>`).*
+   > [!IMPORTANT] Do this **before** attempting to delete the branch.
+   > Git's safe deletion check (`git branch -d`) evaluates reachability relative to the checkout's active `HEAD`.
+   > If the root checkout is still at the pre-merge commit, Git will falsely complain that the branch is not fully merged.
+4. **Remove the completed worktree safely:**
+   ```bash
+   git worktree remove <worktree-path>
+   ```
+   *(Always use `git worktree remove`, never `rm -rf`, so symlinked `node_modules` are not accidentally traversed or deleted).*
+5. **Delete the merged feature branch:**
+   ```bash
+   git branch -d "$BRANCH"
+   ```

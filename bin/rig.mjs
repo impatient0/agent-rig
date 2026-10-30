@@ -509,7 +509,9 @@ export function detachMainCheckout(targetDir, { reanchorToMain = false } = {}) {
   const branchRes = spawnSync('git', ['-C', dir, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8' });
   const currentBranch = branchRes.status === 0 ? branchRes.stdout.trim() : null;
 
-  const statusRes = spawnSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' });
+  // Untracked files never block `git switch --detach`, so only tracked changes count as dirty here;
+  // otherwise freshly scaffolded rig files would keep the main checkout attached to `main`.
+  const statusRes = spawnSync('git', ['-C', dir, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' });
   if (statusRes.stdout.trim().length > 0) {
     return { detached: false, status: 'dirty', previousBranch: currentBranch };
   }
@@ -529,12 +531,88 @@ export function detachMainCheckout(targetDir, { reanchorToMain = false } = {}) {
   return { detached: true, status: 'detached', previousBranch: currentBranch };
 }
 
+function gitOut(dir, args) {
+  const res = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  return res.status === 0 ? res.stdout.trim() : null;
+}
+
+// Where `dir` sits in git: whether it is a repository at all, whether it is a linked worktree,
+// whether it has commits, and the path of the main checkout.
+export function worktreeInfo(dir) {
+  if (!existsSync(dir) || gitOut(dir, ['rev-parse', '--is-inside-work-tree']) !== 'true') {
+    return { isRepo: false, isLinked: false, hasCommits: false, mainCheckout: null };
+  }
+  const gitDir = gitOut(dir, ['rev-parse', '--path-format=absolute', '--git-dir']);
+  const commonDir = gitOut(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  const list = gitOut(dir, ['worktree', 'list', '--porcelain']) ?? '';
+  const first = /^worktree (.+)$/m.exec(list);
+  return {
+    isRepo: true,
+    isLinked: Boolean(gitDir && commonDir && gitDir !== commonDir),
+    hasCommits: gitOut(dir, ['rev-parse', '--verify', '-q', 'HEAD']) !== null,
+    mainCheckout: first ? first[1] : dir,
+  };
+}
+
+// Worktree hygiene for .gitignore: `.worktrees/` is ignored, and a `node_modules/` entry loses its
+// trailing slash, because a trailing slash matches directories only and a worktree's
+// `node_modules` is a symlink to the main checkout's.
+export function normalizeGitignore(content) {
+  const lines = content === '' ? [] : content.replace(/\n$/, '').split('\n');
+  let changed = false;
+  const out = lines.map((line) => {
+    const m = /^(\/?node_modules)\/\s*$/.exec(line);
+    if (m) {
+      changed = true;
+      return m[1];
+    }
+    return line;
+  });
+  if (!out.some((line) => /^\/?\.worktrees\/?\s*$/.test(line))) {
+    out.push('.worktrees/');
+    changed = true;
+  }
+  return { content: out.join('\n') + '\n', changed };
+}
+
+export const INIT_WORKTREE_SLUG = 'rig-init';
+export const INIT_WORKTREE_BRANCH = 'chore/rig-init';
+
+// The pre-commit hook refuses commits in the main checkout, so scaffolding written there could
+// never be committed. In a repository with history, `rig init` scaffolds into a linked worktree.
+function ensureInitWorktree(mainDir) {
+  const wtPath = path.join(mainDir, '.worktrees', INIT_WORKTREE_SLUG);
+  if (existsSync(wtPath)) {
+    const info = worktreeInfo(wtPath);
+    if (!info.isLinked) throw new Error(`${wtPath} exists and is not a linked git worktree`);
+    return { path: wtPath, branch: gitOut(wtPath, ['symbolic-ref', '--short', '-q', 'HEAD']), reused: true };
+  }
+  const branchExists = gitOut(mainDir, ['rev-parse', '--verify', '-q', `refs/heads/${INIT_WORKTREE_BRANCH}`]) !== null;
+  const args = branchExists
+    ? ['worktree', 'add', '-q', wtPath, INIT_WORKTREE_BRANCH]
+    : ['worktree', 'add', '-q', '-b', INIT_WORKTREE_BRANCH, wtPath, 'HEAD'];
+  const res = spawnSync('git', ['-C', mainDir, ...args], { encoding: 'utf8' });
+  if (res.status !== 0) throw new Error(`git worktree add failed: ${res.stderr.trim()}`);
+  const nodeModules = path.join(mainDir, 'node_modules');
+  if (existsSync(nodeModules) && !isSymlink(nodeModules)) {
+    symlinkSync('../../node_modules', path.join(wtPath, 'node_modules'));
+  }
+  return { path: wtPath, branch: INIT_WORKTREE_BRANCH, reused: false };
+}
+
 export function initRepo(
   targetDir,
   { selfContained = false, worktrees = true, ui = false, force = false, homeDir = null } = {},
 ) {
-  const dir = path.resolve(targetDir);
-  mkdirSync(dir, { recursive: true });
+  const requestedDir = path.resolve(targetDir);
+  mkdirSync(requestedDir, { recursive: true });
+
+  const where = worktreeInfo(requestedDir);
+  let initWorktree = null;
+  if (worktrees && where.isRepo && !where.isLinked && where.hasCommits) {
+    initWorktree = ensureInitWorktree(requestedDir);
+  }
+  const dir = initWorktree ? initWorktree.path : requestedDir;
 
   const copied = [];
   const skipped = [];
@@ -584,6 +662,14 @@ export function initRepo(
     if (existsSync(path.join(dir, '.git'))) {
       const cfg = spawnSync('git', ['-C', dir, 'config', 'core.hooksPath', 'scripts/git-hooks']);
       hooksConfigured = cfg.status === 0;
+    }
+
+    const gitignorePath = path.join(dir, '.gitignore');
+    const before = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf8') : '';
+    const normalized = normalizeGitignore(before);
+    if (normalized.changed) {
+      writeFileSync(gitignorePath, normalized.content, 'utf8');
+      merged.push(gitignorePath);
     }
   }
 
@@ -691,20 +777,38 @@ export function initRepo(
     });
   }
 
+  const mainCheckout = where.isRepo ? where.mainCheckout : requestedDir;
   if (homeDir) {
-    writeRigState(homeDir, { initializedRepos: [dir] });
+    writeRigState(homeDir, { initializedRepos: [mainCheckout] });
   }
 
-  const worktreeHead = worktrees
-    ? detachMainCheckout(dir, { reanchorToMain: false })
-    : { detached: false, status: 'skipped' };
+  // Stage what rig init wrote, so `rig check-docs` (which only trusts tracked files) passes at once
+  // and the next step is a plain `git commit`. Nothing is committed here.
+  let staged = [];
+  if (where.isRepo) {
+    staged = [...copied, ...merged]
+      .map((p) => path.relative(dir, p))
+      .filter((p) => p && !p.startsWith('..'));
+    if (staged.length > 0) {
+      const add = spawnSync('git', ['-C', dir, 'add', '--', ...staged], { encoding: 'utf8' });
+      if (add.status !== 0) staged = [];
+    }
+  }
+
+  const worktreeHead = worktrees && where.isRepo
+    ? detachMainCheckout(mainCheckout, { reanchorToMain: false })
+    : { detached: false, status: worktrees ? 'not-a-git-repo' : 'skipped' };
 
   return {
+    dir,
     copied,
     skipped,
     merged,
+    staged,
     hooksConfigured,
     worktreeHead,
+    initWorktree,
+    hasCommits: where.hasCommits,
   };
 }
 
@@ -792,10 +896,24 @@ async function main() {
     const selfContained = args.includes('--self-contained');
     const worktrees = !args.includes('--no-worktrees');
     const ui = args.includes('--ui');
-    const res = initRepo(pos, { selfContained, worktrees, ui, force });
-    console.log(`rig init (${path.resolve(pos)}): copied ${res.copied.length}, merged ${res.merged.length}, skipped ${res.skipped.length}`);
+    const res = initRepo(pos, { selfContained, worktrees, ui, force, homeDir: homedir() });
+    console.log(
+      `rig init (${res.dir}): copied ${res.copied.length}, merged ${res.merged.length}, skipped ${res.skipped.length}, staged ${res.staged.length}`,
+    );
+    if (worktrees && !res.hooksConfigured) {
+      console.warn('  warning: could not set git config core.hooksPath=scripts/git-hooks; set it by hand.');
+    }
+    if (res.initWorktree) {
+      console.log(
+        `  scaffolded in linked worktree ${res.initWorktree.path} on ${res.initWorktree.branch} (the main checkout refuses commits).`,
+      );
+      console.log(`  next: review, git -C ${res.initWorktree.path} commit, then merge via skills/merge-to-main/SKILL.md.`);
+    } else if (worktrees && res.worktreeHead.status === 'no-commits') {
+      console.log('  note: the repository has no commits yet, so the main checkout cannot be parked.');
+      console.log('  next: git commit --no-verify -m "chore: initial commit" (the one commit allowed on main), then rig detach.');
+    }
     if (res.worktreeHead.status === 'dirty') {
-      console.log('  note: working tree has uncommitted files; commit them and run "rig detach" to park HEAD detached at main.');
+      console.log('  note: the main checkout has uncommitted tracked changes; commit or stash them, then run "rig detach".');
     }
     return;
   }

@@ -19,5 +19,6 @@
   - [`skills/wrap-up/SKILL.md`](skills/wrap-up/SKILL.md) — End-of-session audit, decision routing, and reachability check
   - [`skills/backlog-audit/SKILL.md`](skills/backlog-audit/SKILL.md) — Actionability tiering and ADR-rejection check for [`docs/backlog.md`](docs/backlog.md)
   - [`skills/doc-audit/SKILL.md`](skills/doc-audit/SKILL.md) — Token-budget, duplication, and code-grounding audit for Markdown docs
+  - [`skills/rig-onboard/SKILL.md`](skills/rig-onboard/SKILL.md) — Legacy repository onboarding workflow eliminating dual-convention state
   - [`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md) — Worktree merge procedure using `main` as a mutex lock
   - [`skills/secure-credential-handoff/SKILL.md`](skills/secure-credential-handoff/SKILL.md) — Mode-`0600` secret handoff for non-interactive shell calls

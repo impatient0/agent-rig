@@ -85,22 +85,12 @@ Unmandated-call: none
 ## Step 4 — Cold Verifier Subagent (Executor != Verifier)
 
 When a Worker reports completion, the Tech Lead **must not** trust the Worker's summary or review the diff inside the Worker's context.
-Spawn a fresh, read-only **Verifier** subagent and pass it **only**:
+Spawn a fresh, read-only **Verifier** subagent following the exact prompt and checklist in [`agents/verifier.md`](../../agents/verifier.md), passing it **only**:
 1. The grounded task brief from Step 2.
 2. The output of `git log -n 5 --format=fuller <base>..HEAD` and `git diff <base>..HEAD`.
 3. The fresh test and doc-linter output (`scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs --check` when present).
 
-The Cold Verifier checks four questions:
-1. **Spec alignment:**
-   Does the diff implement every requirement in the brief without gold-plating?
-2. **Honest trailers:**
-   Is every judgment call in the diff declared in an `Unmandated-call:` trailer?
-3. **Boundary compliance:**
-   Did the diff stay clear of human-gated UI files?
-4. **Verification green:**
-   Did the test suite and doc linters pass?
-
-If the Verifier flags a defect, send the specific defect back to the Worker (up to 1 remediation round) or halt the slice and surface it to the user.
+If the Verifier returns `VERDICT: FAIL`, send the specific `[BLOCKER]` items back to the Worker (up to 1 remediation round) or halt the slice and surface it to the user.
 
 ---
 
@@ -108,5 +98,5 @@ If the Verifier flags a defect, send the specific defect back to the Worker (up 
 
 After at most **3 completed slices**, pause and present a concise attribution report to the user before starting another wave:
 - Slices completed (branch names and commit SHAs).
-- Cold Verifier findings.
+- Cold Verifier verdict and findings.
 - Consolidated table of every `Unmandated-call:` trailer across the wave so the user can approve or revert any judgment call in seconds.

@@ -35,7 +35,7 @@ Follow [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md):
    Dispatch Bucket 1 Workers immediately in the background while asking the user the concrete questions for Bucket 2.
 2. **Executor != Verifier:**
    An agent that wrote a diff must never be the sole verifier of that diff.
-   Before accepting or merging any Worker branch, spawn a fresh, read-only **Verifier** subagent that receives **only** the grounded task brief, `git diff <base>..HEAD`, `Unmandated-call:` commit trailers, and test output.
+   Before accepting or merging any Worker branch, spawn a fresh, read-only **Verifier** subagent governed by [`agents/verifier.md`](../agents/verifier.md) that receives **only** the grounded task brief, `git diff <base>..HEAD`, `Unmandated-call:` commit trailers, and test output.
 
 ---
 
@@ -57,4 +57,4 @@ Every Markdown file in a rigged repository follows two mechanical invariants enf
    - Every relative link and `#fragment` heading anchor must resolve.
    - Cross-references to repo docs must use standard Markdown links, never wiki-style brackets, wildcard globs, or bare backticked doc paths.
    - Every file under `docs/` must be reachable from `README.md`, `AGENTS.md`, `CLAUDE.md`, a `SKILL.md` file under `skills/`, or a rule file under `rules/`.
-   - Every backticked repo path (`src/...`, `scripts/...`, `bin/...`, `hooks/...`, `skills/...`) must exist on disk or be struck through (`~~\`scripts/removed.mjs\`~~`) when documenting a deletion.
+   - Every backticked repo path (`src/...`, `scripts/...`, `bin/...`, `hooks/...`, `skills/...`, `agents/...`) must exist on disk or be struck through (`~~\`scripts/removed.mjs\`~~`) when documenting a deletion.

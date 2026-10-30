@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // CLI for agent-rig:
-//   rig install-global [--harnesses antigravity,claude,...] [--detected] [--home <dir>] [--force]
+//   rig install [--harnesses antigravity,claude,...] [--detected] [--home <dir>] [--force]
+//   rig update [--home <dir>] [--repo <dir>]
 //   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force]
 //   rig detach [<target-dir>]
 //   rig check-docs [<target-dir>]
@@ -14,6 +15,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -68,6 +70,40 @@ export function detectHarnesses(homeDir = homedir()) {
   });
 }
 
+function stateFilePath(homeDir = homedir()) {
+  return path.join(homeDir, '.config', 'agent-rig', 'state.json');
+}
+
+export function readRigState(homeDir = homedir()) {
+  const p = stateFilePath(homeDir);
+  if (!existsSync(p)) return { installedHarnesses: [], initializedRepos: [] };
+  try {
+    const raw = JSON.parse(readFileSync(p, 'utf8'));
+    return {
+      installedHarnesses: Array.isArray(raw.installedHarnesses) ? raw.installedHarnesses : [],
+      initializedRepos: Array.isArray(raw.initializedRepos) ? raw.initializedRepos : [],
+    };
+  } catch {
+    return { installedHarnesses: [], initializedRepos: [] };
+  }
+}
+
+export function writeRigState(homeDir, patch) {
+  const current = readRigState(homeDir);
+  const next = {
+    installedHarnesses: patch.installedHarnesses
+      ? [...new Set([...current.installedHarnesses, ...patch.installedHarnesses])]
+      : current.installedHarnesses,
+    initializedRepos: patch.initializedRepos
+      ? [...new Set([...current.initializedRepos, ...patch.initializedRepos])]
+      : current.initializedRepos,
+  };
+  const p = stateFilePath(homeDir);
+  mkdirSync(path.dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify(next, null, 2) + '\n', 'utf8');
+  return next;
+}
+
 function copyFileSafe(src, dest, { force = false, copied = [], skipped = [], executable = false } = {}) {
   if ((existsSync(dest) || isSymlink(dest)) && !force) {
     skipped.push(dest);
@@ -89,13 +125,27 @@ function isSymlink(p) {
   }
 }
 
+function pruneDanglingRigSymlinks(dir, pruned = []) {
+  if (!existsSync(dir)) return pruned;
+  for (const entry of readdirSync(dir)) {
+    const full = path.join(dir, entry);
+    if (!isSymlink(full)) continue;
+    const target = path.resolve(dir, readlinkSync(full));
+    if (target.startsWith(RIG_ROOT) && !existsSync(target)) {
+      rmSync(full, { force: true });
+      pruned.push(full);
+    }
+  }
+  return pruned;
+}
+
 function linkSafe(src, dest, { force = false, linked = [], skipped = [] } = {}) {
   if (existsSync(dest) || isSymlink(dest)) {
     if (!force) {
       skipped.push(dest);
       return false;
     }
-    rmSync(dest, { recursive: true, force: true });
+    rmSync(dest, { force: true });
   }
   mkdirSync(path.dirname(dest), { recursive: true });
   symlinkSync(src, dest);
@@ -150,11 +200,12 @@ export function mergeAntigravityPluginsJson(existing, pluginContainerDir) {
   return base;
 }
 
-function installForAntigravity(homeDir, { force = false, linked = [], skipped = [], updated = [] }) {
+function installForAntigravity(homeDir, { force = false, linked = [], skipped = [], updated = [], pruned = [] }) {
   const configDir = path.join(homeDir, '.gemini', 'config');
   const pluginsDir = path.join(configDir, 'plugins');
   const pluginLink = path.join(pluginsDir, 'agent-rig');
   mkdirSync(pluginsDir, { recursive: true });
+  pruneDanglingRigSymlinks(pluginsDir, pruned);
 
   linkSafe(RIG_ROOT, pluginLink, { force, linked, skipped });
 
@@ -172,13 +223,24 @@ function installForAntigravity(homeDir, { force = false, linked = [], skipped = 
   updated.push(pluginsJsonPath);
 }
 
-function installForClaude(homeDir, { force = false, linked = [], skipped = [], updated = [] }) {
+function installForClaude(homeDir, { force = false, linked = [], skipped = [], updated = [], pruned = [] }) {
   const claudeDir = path.join(homeDir, '.claude');
   mkdirSync(claudeDir, { recursive: true });
+
+  for (const sub of ['skills', 'agents', 'rules', 'hooks']) {
+    pruneDanglingRigSymlinks(path.join(claudeDir, sub), pruned);
+  }
 
   const skillsDir = path.join(RIG_ROOT, 'skills');
   for (const skill of readdirSync(skillsDir)) {
     linkSafe(path.join(skillsDir, skill), path.join(claudeDir, 'skills', skill), { force, linked, skipped });
+  }
+
+  const agentsDir = path.join(RIG_ROOT, 'agents');
+  if (existsSync(agentsDir)) {
+    for (const agent of readdirSync(agentsDir)) {
+      linkSafe(path.join(agentsDir, agent), path.join(claudeDir, 'agents', agent), { force, linked, skipped });
+    }
   }
 
   for (const rule of ['AGENTS.md', 'ui-change-gate.md']) {
@@ -222,9 +284,10 @@ function installForClaude(homeDir, { force = false, linked = [], skipped = [], u
   updated.push(settingsPath);
 }
 
-function installForCodex(homeDir, { force = false, linked = [], skipped = [] }) {
+function installForCodex(homeDir, { force = false, linked = [], skipped = [], pruned = [] }) {
   const codexDir = path.join(homeDir, '.codex');
   mkdirSync(codexDir, { recursive: true });
+  pruneDanglingRigSymlinks(path.join(codexDir, 'skills'), pruned);
   const skillsDir = path.join(RIG_ROOT, 'skills');
   for (const skill of readdirSync(skillsDir)) {
     linkSafe(path.join(skillsDir, skill), path.join(codexDir, 'skills', skill), { force, linked, skipped });
@@ -232,9 +295,10 @@ function installForCodex(homeDir, { force = false, linked = [], skipped = [] }) 
   linkSafe(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(codexDir, 'AGENTS.md'), { force, linked, skipped });
 }
 
-function installForCursor(homeDir, { force = false, linked = [], skipped = [] }) {
+function installForCursor(homeDir, { force = false, linked = [], skipped = [], pruned = [] }) {
   const cursorDir = path.join(homeDir, '.cursor');
   mkdirSync(cursorDir, { recursive: true });
+  pruneDanglingRigSymlinks(path.join(cursorDir, 'skills'), pruned);
   const skillsDir = path.join(RIG_ROOT, 'skills');
   for (const skill of readdirSync(skillsDir)) {
     linkSafe(path.join(skillsDir, skill), path.join(cursorDir, 'skills', skill), { force, linked, skipped });
@@ -242,7 +306,7 @@ function installForCursor(homeDir, { force = false, linked = [], skipped = [] })
   linkSafe(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(cursorDir, 'rules/AGENTS.md'), { force, linked, skipped });
 }
 
-export function installGlobal({
+export function installRig({
   homeDir = homedir(),
   harnesses = null,
   detectedOnly = false,
@@ -261,14 +325,17 @@ export function installGlobal({
   const linked = [];
   const skipped = [];
   const updated = [];
+  const pruned = [];
 
   for (const id of selectedIds) {
-    if (id === 'antigravity') installForAntigravity(homeDir, { force, linked, skipped, updated });
-    else if (id === 'claude') installForClaude(homeDir, { force, linked, skipped, updated });
-    else if (id === 'codex') installForCodex(homeDir, { force, linked, skipped });
-    else if (id === 'cursor') installForCursor(homeDir, { force, linked, skipped });
+    if (id === 'antigravity') installForAntigravity(homeDir, { force, linked, skipped, updated, pruned });
+    else if (id === 'claude') installForClaude(homeDir, { force, linked, skipped, updated, pruned });
+    else if (id === 'codex') installForCodex(homeDir, { force, linked, skipped, pruned });
+    else if (id === 'cursor') installForCursor(homeDir, { force, linked, skipped, pruned });
     else throw new Error(`Unknown harness id: ${id}`);
   }
+
+  writeRigState(homeDir, { installedHarnesses: selectedIds });
 
   return {
     discovered,
@@ -276,6 +343,115 @@ export function installGlobal({
     linked,
     skipped,
     updated,
+    pruned,
+  };
+}
+
+export const installGlobal = installRig;
+
+export function updateRepo(targetDir) {
+  const dir = path.resolve(targetDir);
+  const copied = [];
+  const skipped = [];
+
+  if (existsSync(path.join(dir, 'scripts/git-hooks'))) {
+    copyFileSafe(path.join(RIG_ROOT, 'scripts/git-hooks/pre-commit'), path.join(dir, 'scripts/git-hooks/pre-commit'), {
+      force: true,
+      copied,
+      skipped,
+      executable: true,
+    });
+    copyFileSafe(
+      path.join(RIG_ROOT, 'scripts/git-hooks/pre-merge-commit'),
+      path.join(dir, 'scripts/git-hooks/pre-merge-commit'),
+      { force: true, copied, skipped, executable: true },
+    );
+  }
+
+  // If the repo was initialized with --self-contained, refresh static rig assets without touching AGENTS.md or docs/
+  if (existsSync(path.join(dir, 'skills')) && existsSync(path.join(dir, 'rules/AGENTS.md'))) {
+    const skillsDir = path.join(RIG_ROOT, 'skills');
+    for (const skill of readdirSync(skillsDir)) {
+      copyFileSafe(path.join(skillsDir, skill), path.join(dir, 'skills', skill), { force: true, copied, skipped });
+    }
+    if (existsSync(path.join(RIG_ROOT, 'agents'))) {
+      for (const agent of readdirSync(path.join(RIG_ROOT, 'agents'))) {
+        copyFileSafe(path.join(RIG_ROOT, 'agents', agent), path.join(dir, 'agents', agent), {
+          force: true,
+          copied,
+          skipped,
+        });
+      }
+    }
+    copyFileSafe(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(dir, 'rules/AGENTS.md'), {
+      force: true,
+      copied,
+      skipped,
+    });
+    copyFileSafe(path.join(RIG_ROOT, 'rules/ui-change-gate.md'), path.join(dir, 'rules/ui-change-gate.md'), {
+      force: true,
+      copied,
+      skipped,
+    });
+    copyFileSafe(path.join(RIG_ROOT, 'scripts/check-doc-links.mjs'), path.join(dir, 'scripts/check-doc-links.mjs'), {
+      force: true,
+      copied,
+      skipped,
+      executable: true,
+    });
+    copyFileSafe(path.join(RIG_ROOT, 'scripts/reflow-docs.mjs'), path.join(dir, 'scripts/reflow-docs.mjs'), {
+      force: true,
+      copied,
+      skipped,
+      executable: true,
+    });
+    if (existsSync(path.join(dir, 'hooks'))) {
+      copyFileSafe(path.join(RIG_ROOT, 'hooks/lib/hook-io.mjs'), path.join(dir, 'hooks/lib/hook-io.mjs'), {
+        force: true,
+        copied,
+        skipped,
+      });
+      for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
+        if (existsSync(path.join(dir, 'hooks', hf))) {
+          copyFileSafe(path.join(RIG_ROOT, 'hooks', hf), path.join(dir, 'hooks', hf), {
+            force: true,
+            copied,
+            skipped,
+            executable: true,
+          });
+        }
+      }
+    }
+  }
+
+  return { dir, copied };
+}
+
+export function updateRig({ homeDir = homedir(), repoDir = null } = {}) {
+  const state = readRigState(homeDir);
+  const harnesses =
+    state.installedHarnesses.length > 0
+      ? state.installedHarnesses
+      : detectHarnesses(homeDir)
+          .filter((d) => d.detected)
+          .map((d) => d.id);
+
+  const globalRes = installRig({ homeDir, harnesses, force: false });
+
+  const reposToUpdate = [];
+  if (repoDir) {
+    reposToUpdate.push(path.resolve(repoDir));
+  } else {
+    for (const r of state.initializedRepos) {
+      if (existsSync(r)) reposToUpdate.push(r);
+    }
+  }
+
+  const updatedRepos = reposToUpdate.map((r) => updateRepo(r));
+
+  return {
+    ...globalRes,
+    updatedRepos,
   };
 }
 
@@ -347,7 +523,7 @@ export function detachMainCheckout(targetDir, { reanchorToMain = false } = {}) {
 
 export function initRepo(
   targetDir,
-  { selfContained = false, worktrees = true, ui = false, force = false } = {},
+  { selfContained = false, worktrees = true, ui = false, force = false, homeDir = null } = {},
 ) {
   const dir = path.resolve(targetDir);
   mkdirSync(dir, { recursive: true });
@@ -356,7 +532,6 @@ export function initRepo(
   const skipped = [];
   const merged = [];
 
-  // 1. Minimal project docs & templates
   copyFileSafe(path.join(RIG_ROOT, 'templates/docs/backlog.md'), path.join(dir, 'docs/backlog.md'), {
     force,
     copied,
@@ -385,7 +560,6 @@ export function initRepo(
     );
   }
 
-  // 2. Git hooks for worktree isolation
   let hooksConfigured = false;
   if (worktrees) {
     copyFileSafe(path.join(RIG_ROOT, 'scripts/git-hooks/pre-commit'), path.join(dir, 'scripts/git-hooks/pre-commit'), {
@@ -405,11 +579,16 @@ export function initRepo(
     }
   }
 
-  // 3. Optional --self-contained mode: bundle skills, rules, hooks, and doc linters inside the repo
   if (selfContained) {
     const skillsDir = path.join(RIG_ROOT, 'skills');
     for (const skill of readdirSync(skillsDir)) {
       copyFileSafe(path.join(skillsDir, skill), path.join(dir, 'skills', skill), { force, copied, skipped });
+    }
+    const agentsDir = path.join(RIG_ROOT, 'agents');
+    if (existsSync(agentsDir)) {
+      for (const agent of readdirSync(agentsDir)) {
+        copyFileSafe(path.join(agentsDir, agent), path.join(dir, 'agents', agent), { force, copied, skipped });
+      }
     }
     copyFileSafe(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(dir, 'rules/AGENTS.md'), { force, copied, skipped });
     copyFileSafe(path.join(RIG_ROOT, 'rules/ui-change-gate.md'), path.join(dir, 'rules/ui-change-gate.md'), {
@@ -430,7 +609,6 @@ export function initRepo(
       executable: true,
     });
 
-    // Install hooks into hooks/ and .claude/hooks/ and merge .claude/settings.json for self-contained repos
     copyFileSafe(path.join(RIG_ROOT, 'hooks/lib/hook-io.mjs'), path.join(dir, 'hooks/lib/hook-io.mjs'), {
       force,
       copied,
@@ -487,6 +665,7 @@ export function initRepo(
       '- **Active backlog** — [docs/backlog.md](docs/backlog.md)',
       '- **Universal Engineering Rules** — [rules/AGENTS.md](rules/AGENTS.md)',
       '- **Human-in-the-Loop UI Gate** — [rules/ui-change-gate.md](rules/ui-change-gate.md)',
+      '- **Cold Verifier Subagent** — [agents/verifier.md](agents/verifier.md)',
       '',
     ].join('\n');
     const agentsDest = path.join(dir, 'AGENTS.md');
@@ -502,6 +681,10 @@ export function initRepo(
       copied,
       skipped,
     });
+  }
+
+  if (homeDir) {
+    writeRigState(homeDir, { initializedRepos: [dir] });
   }
 
   const worktreeHead = worktrees
@@ -564,7 +747,7 @@ async function main() {
   const cmd = args[0] ?? 'help';
   const force = args.includes('--force');
 
-  if (cmd === 'install-global') {
+  if (cmd === 'install' || cmd === 'install-global') {
     const homeIdx = args.indexOf('--home');
     const homeDir = homeIdx !== -1 && args[homeIdx + 1] ? path.resolve(args[homeIdx + 1]) : homedir();
     const detectedOnly = args.includes('--detected');
@@ -579,9 +762,20 @@ async function main() {
       harnesses = await promptForHarnesses(discovered);
     }
 
-    const res = installGlobal({ homeDir, harnesses, detectedOnly, force });
-    console.log(`rig install-global: configured [${res.installedHarnesses.join(', ')}]`);
+    const res = installRig({ homeDir, harnesses, detectedOnly, force });
+    console.log(`rig install: configured [${res.installedHarnesses.join(', ')}]`);
     console.log(`  linked: ${res.linked.length}, updated configs: ${res.updated.length}, skipped: ${res.skipped.length}`);
+    return;
+  }
+
+  if (cmd === 'update') {
+    const homeIdx = args.indexOf('--home');
+    const homeDir = homeIdx !== -1 && args[homeIdx + 1] ? path.resolve(args[homeIdx + 1]) : homedir();
+    const repoIdx = args.indexOf('--repo');
+    const repoDir = repoIdx !== -1 && args[repoIdx + 1] ? path.resolve(args[repoIdx + 1]) : null;
+    const res = updateRig({ homeDir, repoDir });
+    console.log(`rig update: synced [${res.installedHarnesses.join(', ')}]`);
+    console.log(`  new links: ${res.linked.length}, pruned dangling: ${res.pruned.length}, repos refreshed: ${res.updatedRepos.length}`);
     return;
   }
 
@@ -630,7 +824,8 @@ async function main() {
   }
 
   console.log(`Usage:
-  rig install-global [--harnesses antigravity,claude,codex,cursor] [--detected] [--force]
+  rig install [--harnesses antigravity,claude,codex,cursor] [--detected] [--force]
+  rig update [--repo <target-dir>]
   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force]
   rig detach [<target-dir>]
   rig check-docs [<target-dir>]

@@ -22,6 +22,7 @@ const DEFAULT_DOC_ROOTS = [
   'GEMINI.md',
   'docs',
   'skills',
+  'agents',
   'rules',
   '.claude/skills',
   '.claude/rules',

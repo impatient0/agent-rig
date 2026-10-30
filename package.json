@@ -1,7 +1,7 @@
 {
   "name": "agent-rig",
   "version": "0.1.0",
-  "description": "Subagent-first, platform-agnostic workflow rig: dual-protocol PreToolUse guards, Triage/Worker/Verifier dispatch, worktree locks, and documentation graph linters.",
+  "description": "Subagent-first, platform-agnostic workflow rig: multi-protocol PreToolUse guards, Triage/Worker/Verifier dispatch, worktree locks, and documentation graph linters.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -12,6 +12,7 @@
   },
   "files": [
     "bin/",
+    "agents/",
     "hooks/",
     "rules/",
     "skills/",

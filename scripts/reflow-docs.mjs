@@ -5,7 +5,8 @@
 //   node scripts/reflow-docs.mjs [target-dir]           rewrite every doc in place
 //   node scripts/reflow-docs.mjs [target-dir] --check   exit 1 if any doc is not canonical
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 const args = process.argv.slice(2);
@@ -245,7 +246,7 @@ export function reflowMarkdown(src) {
   return out.join('\n');
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const files = loadDocRoots().flatMap((r) => walk(r));
   const dirty = [];
 

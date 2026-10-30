@@ -6,6 +6,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { readHookInput, emitDecision } from './lib/hook-io.mjs';
 
@@ -58,7 +59,7 @@ export function checkEditTarget(filePath, { harness = 'generic' } = {}) {
   return buildRemediation(harness);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   let parsed;
   try {
     parsed = readHookInput();

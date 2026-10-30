@@ -29,7 +29,13 @@ test('detectHarnesses, installRig, and updateRig manage state, link verifier sub
 
     const res = installRig({ homeDir: fakeHome, detectedOnly: true });
     assert.deepEqual(res.installedHarnesses, ['antigravity', 'claude']);
-    assert.ok(lstatSync(path.join(fakeHome, '.local/bin/rig')).isSymbolicLink());
+    const symlinkedBin = path.join(fakeHome, '.local/bin/rig');
+    assert.ok(lstatSync(symlinkedBin).isSymbolicLink());
+
+    // Invoking rig via symlink (like npm link or ~/.local/bin/rig) must execute main()
+    const cliRun = spawnSync(symlinkedBin, ['status', RIG_ROOT], { encoding: 'utf8' });
+    assert.equal(cliRun.status, 0, cliRun.stderr);
+    assert.equal(JSON.parse(cliRun.stdout).hasAgentsMd, true);
 
     const state = readRigState(fakeHome);
     assert.deepEqual(state.installedHarnesses, ['antigravity', 'claude']);

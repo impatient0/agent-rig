@@ -7,6 +7,7 @@
 
 import { lstatSync } from 'node:fs';
 import path from 'node:path';
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { readHookInput, emitDecision } from './lib/hook-io.mjs';
 
@@ -233,7 +234,7 @@ export function checkCommand(command, cwd = process.cwd()) {
   return null;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   let parsed;
   try {
     parsed = readHookInput();

@@ -50,11 +50,7 @@ Before spawning a Worker subagent, write a persistent task brief (in the session
 
 ## Step 3 — Spawn Isolated Worker Subagents
 
-Spawn one Worker subagent per independent Bucket 1 slice in its own isolated git worktree:
-- **In Antigravity:**
-  Call `invoke_subagent` with `Workspace: "share"` (or create a worktree under `.worktrees/<slug>` on branch `<type>/<slug>`).
-- **In Claude Code:**
-  Call `Task` / `Agent` with `isolation: "worktree"` and `run_in_background: true`.
+Spawn one Worker subagent per independent Bucket 1 slice in its own isolated git worktree (using the harness's native subagent worktree-isolation mode and background execution, or a dedicated linked worktree under `.worktrees/<slug>` on branch `<type>/<slug>`).
 
 ### Worker Contract & Five Stop Triggers
 
@@ -89,7 +85,7 @@ Unmandated-call: none
 ## Step 4 — Cold Verifier Subagent (Executor != Verifier)
 
 When a Worker reports completion, the Tech Lead **must not** trust the Worker's summary or review the diff inside the Worker's context.
-Spawn a fresh, read-only **Verifier** subagent (`research` in Antigravity; `Explore` in Claude Code) and pass it **only**:
+Spawn a fresh, read-only **Verifier** subagent and pass it **only**:
 1. The grounded task brief from Step 2.
 2. The output of `git log -n 5 --format=fuller <base>..HEAD` and `git diff <base>..HEAD`.
 3. The fresh test and doc-linter output (`scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs --check` when present).

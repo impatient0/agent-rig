@@ -16,8 +16,8 @@ By default, parallel agent sessions never share a working tree:
 1. **Root checkout stays parked on a detached `HEAD` at `main`** (`rig detach` or `git switch --detach main`) and is never edited directly.
    `hooks/guard-main-checkout-edits.mjs` and `scripts/git-hooks/pre-commit` enforce this mechanically.
 2. **Work happens in a linked git worktree** on a `<type>/<slug>` branch (`feature/<slug>`, `fix/<slug>`, `docs/<slug>`, `chore/<slug>`):
-   - When dispatching subagents, spawn each Worker in an isolated worktree (`Workspace: "share"` in Antigravity; `isolation: "worktree"` in Claude Code).
-   - When working directly in a session, create a worktree via `git worktree add .worktrees/<slug> -b <type>/<slug>` (or `EnterWorktree` in Claude Code) before editing any file.
+   - When dispatching subagents, spawn each Worker in an isolated worktree using the harness's native worktree-isolation option (or create a worktree under `.worktrees/<slug>`).
+   - When working directly in a session, enter a linked worktree via the harness's native worktree tool or `git worktree add .worktrees/<slug> -b <type>/<slug>` before editing any file.
    - If the repository has a `node_modules` directory at the root, symlink it into the worktree (`ln -s ../../node_modules node_modules`) unless the branch modifies dependencies.
      `hooks/guard-symlinked-node-modules.mjs` blocks `npm`/`pnpm`/`yarn`/`bun` installs against a symlinked `node_modules`.
 3. **Merging to `main` happens only when requested by the user**, following [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md).
@@ -26,14 +26,16 @@ By default, parallel agent sessions never share a working tree:
 
 ## Subagent-First Delegation (`dispatch`) & Executor != Verifier
 
-When given a backlog sweep or a multi-step implementation task, use [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md):
+When multiple tasks or a multi-slice plan are in play, operate as the **Tech Lead** in the main session:
+ground requirements against the codebase, triage, and delegate self-contained implementation slices to isolated Worker subagents rather than executing multi-slice batches inline.
+Follow [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md):
 
 1. **Triage (No All-or-Nothing Refusal):**
    Ground candidate items against the codebase and split them into **Bucket 1 (Dispatch Now)** (passes Gate A non-UI and Gate B spec clarity) and **Bucket 2 (Ask User First)**.
    Dispatch Bucket 1 Workers immediately in the background while asking the user the concrete questions for Bucket 2.
 2. **Executor != Verifier:**
    An agent that wrote a diff must never be the sole verifier of that diff.
-   Before accepting or merging any Worker branch, spawn a fresh, read-only **Verifier** subagent (`research` in Antigravity; `Explore` in Claude Code) that receives **only** the grounded task brief, `git diff <base>..HEAD`, `Unmandated-call:` commit trailers, and test output.
+   Before accepting or merging any Worker branch, spawn a fresh, read-only **Verifier** subagent that receives **only** the grounded task brief, `git diff <base>..HEAD`, `Unmandated-call:` commit trailers, and test output.
 
 ---
 

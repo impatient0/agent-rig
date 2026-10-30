@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -14,7 +14,110 @@ import {
   statusRepo,
   runCheckDocs,
   runReflowDocs,
+  normalizeGitignore,
+  detachMainCheckout,
+  INIT_WORKTREE_BRANCH,
 } from '../bin/rig.mjs';
+
+function makeRepoWithHistory(prefix) {
+  const root = mkdtempSync(path.join(tmpdir(), prefix));
+  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+  git(root, 'init', '-q', '-b', 'main');
+  git(root, 'config', 'user.email', 'test@example.com');
+  git(root, 'config', 'user.name', 'Test');
+  writeFileSync(path.join(root, 'README.md'), '# legacy\n\nSee [`AGENTS.md`](AGENTS.md).\n');
+  writeFileSync(path.join(root, '.gitignore'), 'node_modules/\n*.log\n');
+  writeFileSync(path.join(root, 'app.js'), 'console.log(1);\n');
+  git(root, 'add', '-A');
+  git(root, 'commit', '-qm', 'initial');
+  mkdirSync(path.join(root, 'node_modules'));
+  return { root, git, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+test('normalizeGitignore ignores .worktrees/ and drops the trailing slash from node_modules/', () => {
+  assert.deepEqual(normalizeGitignore('node_modules/\n*.log\n'), {
+    content: 'node_modules\n*.log\n.worktrees/\n',
+    changed: true,
+  });
+  assert.deepEqual(normalizeGitignore('/node_modules/\n'), { content: '/node_modules\n.worktrees/\n', changed: true });
+  assert.deepEqual(normalizeGitignore('node_modules\n.worktrees/\n'), {
+    content: 'node_modules\n.worktrees/\n',
+    changed: false,
+  });
+  assert.deepEqual(normalizeGitignore(''), { content: '.worktrees/\n', changed: true });
+});
+
+test('detachMainCheckout parks HEAD even when untracked files are present, but not over tracked edits', () => {
+  const { root, cleanup } = makeRepoWithHistory('rig-detach-');
+  try {
+    writeFileSync(path.join(root, 'scratch.txt'), 'untracked\n');
+    assert.equal(detachMainCheckout(root).status, 'detached');
+
+    spawnSync('git', ['switch', '-q', 'main'], { cwd: root });
+    writeFileSync(path.join(root, 'app.js'), 'console.log(2);\n');
+    assert.equal(detachMainCheckout(root).status, 'dirty');
+  } finally {
+    cleanup();
+  }
+});
+
+test('initRepo on a main checkout with history scaffolds into a linked worktree that can commit', () => {
+  const { root, git, cleanup } = makeRepoWithHistory('rig-init-history-');
+  try {
+    const res = initRepo(root, { worktrees: true });
+    const wt = path.join(root, '.worktrees/rig-init');
+    assert.equal(res.initWorktree.path, wt);
+    assert.equal(res.initWorktree.branch, INIT_WORKTREE_BRANCH);
+    assert.equal(res.dir, wt);
+    assert.equal(res.hooksConfigured, true);
+
+    // Scaffolding lands in the worktree, never in the main checkout.
+    assert.ok(existsSync(path.join(wt, 'AGENTS.md')));
+    assert.ok(existsSync(path.join(wt, 'scripts/git-hooks/pre-commit')));
+    assert.equal(existsSync(path.join(root, 'AGENTS.md')), false);
+
+    // The worktree shares node_modules through a symlink, and .gitignore covers both it and .worktrees/.
+    assert.ok(lstatSync(path.join(wt, 'node_modules')).isSymbolicLink());
+    assert.equal(readFileSync(path.join(wt, '.gitignore'), 'utf8'), 'node_modules\n*.log\n.worktrees/\n');
+
+    // The main checkout is parked detached, and the worktree stays on its branch.
+    assert.equal(res.worktreeHead.status, 'detached');
+    assert.notEqual(git(root, 'symbolic-ref', '-q', 'HEAD').status, 0);
+    assert.equal(git(wt, 'symbolic-ref', '--short', 'HEAD').stdout.trim(), INIT_WORKTREE_BRANCH);
+
+    // Everything written is staged, so the doc linters pass and the next step is a plain commit.
+    assert.ok(res.staged.includes('AGENTS.md'));
+    assert.ok(res.staged.includes('.gitignore'));
+    assert.equal(git(wt, 'status', '--porcelain').stdout.trim().split('\n').every((l) => l.startsWith('A ') || l.startsWith('M ')), true);
+    const checkLinks = runCheckDocs(wt);
+    assert.equal(checkLinks.status, 0, `${checkLinks.stdout}${checkLinks.stderr}`);
+
+    const commit = git(wt, 'commit', '-qm', 'chore(rig): initialize agent-rig');
+    assert.equal(commit.status, 0, commit.stderr);
+
+    // Running rig init again reuses the worktree instead of failing.
+    const again = initRepo(root, { worktrees: true });
+    assert.equal(again.initWorktree.reused, true);
+  } finally {
+    cleanup();
+  }
+});
+
+test('initRepo targeting a linked worktree scaffolds in place and parks the main checkout', () => {
+  const { root, git, cleanup } = makeRepoWithHistory('rig-init-linked-');
+  try {
+    const wt = path.join(root, '.worktrees/onboard');
+    git(root, 'worktree', 'add', '-q', '-b', 'chore/onboard', wt, 'main');
+    const res = initRepo(wt, { worktrees: true });
+    assert.equal(res.initWorktree, null);
+    assert.equal(res.dir, wt);
+    assert.ok(existsSync(path.join(wt, 'AGENTS.md')));
+    assert.equal(res.worktreeHead.status, 'detached');
+    assert.equal(git(wt, 'symbolic-ref', '--short', 'HEAD').stdout.trim(), 'chore/onboard');
+  } finally {
+    cleanup();
+  }
+});
 
 test('detectHarnesses, installRig, and updateRig manage state, link verifier subagent, and prune dangling symlinks', () => {
   const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-home-'));
@@ -120,7 +223,8 @@ test('self-contained initRepo bundles skills, verifier subagent, rules, hooks, a
     spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
     initRepo(dir, { selfContained: true, worktrees: true });
     const st = statusRepo(dir);
-    assert.equal(st.skillsPresent.length, 6);
+    assert.equal(st.skillsPresent.length, readdirSync(path.join(RIG_ROOT, 'skills')).length);
+    assert.ok(st.skillsPresent.includes('rig-onboard'));
     assert.equal(st.hooksPresent.length, 3);
     assert.ok(existsSync(path.join(dir, 'agents/verifier.md')));
 

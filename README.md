@@ -69,6 +69,12 @@ git pull
 rig update
 ```
 
+To refresh git hooks and scaffolded linters in an initialized project repository after pulling updates:
+
+```bash
+rig update --repo /path/to/your-project
+```
+
 ### 2. Configure Execution Tiers & Model Profiles (`rig profile`)
 
 `agent-rig` organizes work across four canonical execution tiers:
@@ -90,10 +96,11 @@ rig profile use antigravity-pro
 rig profile use claude-pro
 ```
 
-Customize a specific role's model or reasoning effort in `.rig.local.json`:
+Customize a specific role's model, subagent selector, or reasoning effort in `.rig.local.json`:
 
 ```bash
 rig profile set worker claude-opus-5-5 --effort high
+rig profile set worker claude-opus-5-5 --subagent-model opus
 ```
 
 Inspect resolved model parameters for any role:
@@ -101,6 +108,35 @@ Inspect resolved model parameters for any role:
 ```bash
 rig model resolve worker
 rig model resolve verifier --harness claude --json
+```
+
+#### Extending Profiles and Models (`.rig.local.json`)
+
+Model definitions and default subagent selectors are cataloged in [`templates/models.json`](templates/models.json) and validated by [`templates/rig-config.schema.json`](templates/rig-config.schema.json).
+You can define custom models and custom profiles in `.rig.local.json` without modifying `agent-rig` code:
+
+```json
+{
+  "models": {
+    "my-custom-model": {
+      "subagentSelector": {
+        "antigravity": "flash",
+        "claude": "sonnet"
+      }
+    }
+  },
+  "profiles": {
+    "my-custom-profile": {
+      "harness": "antigravity",
+      "roles": {
+        "architect": { "model": "gemini-4-argon", "effort": "high" },
+        "worker": { "model": "my-custom-model", "effort": "medium" },
+        "verifier": { "model": "gemini-3-8-flash", "effort": "medium" },
+        "utility": { "model": "gemini-3-8-flash", "effort": "low" }
+      }
+    }
+  }
+}
 ```
 
 ### 3. Initialize a Project Repository (`rig init`)
@@ -129,6 +165,14 @@ Verify link graph integrity or normalize Markdown files to one sentence per line
 ```bash
 rig check-docs /path/to/your-project
 rig reflow-docs /path/to/your-project --check
+```
+
+### 5. Inspect Repository Status (`rig status`)
+
+Inspect an initialized project repository or worktree at a glance to check active hooks, skills, and documentation files:
+
+```bash
+rig status /path/to/your-project
 ```
 
 ---
@@ -163,12 +207,18 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 1. **Root checkout stays attached to `main` as a merge-only trunk** and is never edited directly.
 2. **Every session or Worker subagent operates in a linked git worktree** on a `<type>/<slug>` branch.
    `hooks/guard-main-checkout-edits.mjs` blocks direct file edits in the root checkout, and `scripts/git-hooks/pre-commit` blocks root-checkout commits made via shell commands.
-3. **Merging happens directly in the root checkout** via [`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md):
+3. **Shared dependency caching via symlinked `node_modules`:**
+   If the repository has a `node_modules` directory at the root, symlink it into the worktree (`ln -s ../../node_modules node_modules`) unless the branch modifies dependencies (`hooks/guard-symlinked-node-modules.mjs` blocks package installs against a symlinked directory).
+4. **Merging happens directly in the root checkout** via [`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md):
    the root checkout runs `git merge --no-commit --no-ff`, verifies the uncommitted merge state, commits on `main`, and removes the worktree.
 
 ---
 
 ## What's Inside
+
+### Universal Engineering Rules (`rules/`)
+- [`rules/AGENTS.md`](rules/AGENTS.md) — Universal agentic engineering rules (investigation first, session-per-worktree isolation, triage & verification, commit trailers, documentation graph invariants).
+- [`rules/ui-change-gate.md`](rules/ui-change-gate.md) — Human-in-the-loop UI change gate (Gate A in `dispatch` triage: visual or interactive changes require a user-approved mockup before implementation).
 
 ### Skills (`skills/`) & Subagents (`agents/`)
 - [`dispatch`](skills/dispatch/SKILL.md) — Triage → Isolated Worker → Cold Verifier pipeline.

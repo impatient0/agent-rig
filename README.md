@@ -80,7 +80,7 @@ rig update --repo /path/to/your-project
 `agent-rig` organizes work across four canonical execution tiers:
 - **`architect`** — Main session / Tech Lead (triage, backlog/doc auditing, repo onboarding, session wrap-up, ADR authoring, and handling Worker stop triggers).
 - **`worker`** — Isolated implementation subagents in [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md).
-- **`verifier`** — Cold, read-only audit subagent in [`agents/verifier.md`](agents/verifier.md).
+- **`verifier`** — Cold audit subagent in [`agents/verifier.md`](agents/verifier.md).
 - **`utility`** — Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
 
 View configured profiles and active assignments:
@@ -200,7 +200,7 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 2. **Parallel Isolated Workers:**
    Bucket 1 tasks (up to 3 per wave) are dispatched immediately to background Worker subagents in isolated git worktrees under five hard stop triggers and the `Unmandated-call:` commit trailer contract, while the Tech Lead asks you the concrete questions for Bucket 2.
 3. **Cold Verifier (`Executor != Verifier`):**
-   When a Worker finishes, the Tech Lead spawns a fresh, read-only Verifier subagent governed by [`agents/verifier.md`](agents/verifier.md) that sees **only** the task brief, `git diff <base>..HEAD`, `Unmandated-call:` trailers, and test output—never the Worker's chain of thought.
+   When a Worker finishes, the Tech Lead spawns a fresh Verifier subagent governed by [`agents/verifier.md`](agents/verifier.md) with command execution enabled to run tests live in the worktree, seeing only the task brief, commit trailers, and diff—never the Worker's chain of thought.
 
 ### 2. Session-Per-Worktree Isolation
 
@@ -222,7 +222,7 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 
 ### Skills (`skills/`) & Subagents (`agents/`)
 - [`dispatch`](skills/dispatch/SKILL.md) — Triage → Isolated Worker → Cold Verifier pipeline.
-- [`agents/verifier.md`](agents/verifier.md) — Rigid, read-only cold Verifier subagent prompt and `VERDICT: PASS | FAIL` checklist.
+- [`agents/verifier.md`](agents/verifier.md) — Cold Verifier subagent prompt and `VERDICT: PASS | FAIL` checklist (runs tests live, strictly read-only for code).
 - [`wrap-up`](skills/wrap-up/SKILL.md) — End-of-session checkpoint:
   verifies git/worktree cleanliness and test gates, routes undocumented decisions to ADRs or [`docs/backlog.md`](docs/backlog.md), and checks cold-session reachability.
 - [`backlog-audit`](skills/backlog-audit/SKILL.md) — Sorts `Unranked` items in [`docs/backlog.md`](docs/backlog.md) into six actionability tiers after checking existing ADRs for prior rejections.

@@ -86,10 +86,13 @@ Unmandated-call: none
 ## Step 4 — Cold Verifier Subagent (Executor != Verifier)
 
 When a Worker reports completion, the Tech Lead **must not** trust the Worker's summary or review the diff inside the Worker's context.
-Spawn a fresh, read-only **Verifier** subagent in execution tier `verifier` (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`) following the exact prompt and checklist in [`agents/verifier.md`](../../agents/verifier.md), passing it **only**:
-1. The grounded task brief from Step 2.
-2. The output of `git log -n 5 --format=fuller <base>..HEAD` and `git diff <base>..HEAD`.
-3. The fresh test and doc-linter output (`scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs --check` when present).
+Spawn a fresh **Verifier** subagent in execution tier `verifier` (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`) following the exact prompt and checklist in [`agents/verifier.md`](../../agents/verifier.md).
+The Verifier must have command execution permissions enabled so it runs `git log`, `git diff`, and the verification command directly in the target worktree.
+Instruct the Verifier strictly in prompt not to edit files, stage changes, or create commits.
+Do not act as an execution proxy;
+pass the Verifier **only**:
+1. The grounded task brief from Step 2 (base commit SHA, files in scope, acceptance criteria, and verification command).
+2. The target worktree path.
 
 If the Verifier returns `VERDICT: FAIL`, send the specific `[BLOCKER]` items back to the Worker (up to 1 remediation round) or halt the slice and surface it to the user.
 

@@ -68,6 +68,13 @@ const DEFAULTS = {
   adrMaxBytes: 24_000,
 };
 
+const COMMON_EXTS = new Set([
+  'js', 'mjs', 'cjs', 'ts', 'mts', 'cts', 'jsx', 'tsx',
+  'go', 'py', 'rs', 'c', 'h', 'cpp', 'hpp', 'java', 'rb',
+  'json', 'yaml', 'yml', 'toml', 'md', 'css', 'scss', 'html',
+  'sql', 'sh', 'bash', 'zsh', 'txt', 'xml', 'svg', 'lock',
+]);
+
 function loadConfig() {
   if (!existsSync('.doclinksrc.json')) return DEFAULTS;
   try {
@@ -269,6 +276,20 @@ for (const [file, { links, bareRefs, repoPaths, externalUrls }] of parsed) {
   }
   for (const { line, raw, targetPath } of repoPaths) {
     if (!existsSync(targetPath)) {
+      const baseName = path.basename(targetPath);
+      const dotIdx = baseName.lastIndexOf('.');
+      if (dotIdx > 0) {
+        const symbol = baseName.slice(dotIdx + 1);
+        const candidateBase = path.join(path.dirname(targetPath), baseName.slice(0, dotIdx));
+        if (
+          !COMMON_EXTS.has(symbol.toLowerCase()) &&
+          /^[A-Za-z_][A-Za-z0-9_]*$/.test(symbol) &&
+          existsSync(candidateBase) &&
+          isCommitted(candidateBase)
+        ) {
+          continue;
+        }
+      }
       errors.push(
         `${file}:${line}: ${raw} — ${targetPath} does not exist (strike through as ~~${raw}~~ if deliberately removed)`,
       );

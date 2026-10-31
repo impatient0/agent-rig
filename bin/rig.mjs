@@ -2,6 +2,10 @@
 // CLI for agent-rig:
 //   rig install [--harnesses antigravity,claude,...] [--detected] [--home <dir>] [--force]
 //   rig update [--home <dir>] [--repo <dir>]
+//   rig profile [list] [--json]
+//   rig profile use <profile-name>
+//   rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]
+//   rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
 //   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force]
 //   rig detach [<target-dir>]
 //   rig check-docs [<target-dir>]
@@ -10,6 +14,7 @@
 
 import {
   cpSync,
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -71,21 +76,174 @@ export function detectHarnesses(homeDir = homedir()) {
   });
 }
 
+export const ROLES = ['architect', 'worker', 'verifier', 'utility'];
+
+export function loadCatalog(rigRoot = RIG_ROOT) {
+  const catalogPath = path.join(rigRoot, 'templates', 'models.json');
+  if (!existsSync(catalogPath)) {
+    return { harnesses: {}, models: {} };
+  }
+  try {
+    return JSON.parse(readFileSync(catalogPath, 'utf8'));
+  } catch {
+    return { harnesses: {}, models: {} };
+  }
+}
+
+export function configFilePath(rigRoot = RIG_ROOT) {
+  return path.join(rigRoot, '.rig.local.json');
+}
+
+export function ensureRigConfig(rigRoot = RIG_ROOT) {
+  const p = configFilePath(rigRoot);
+  if (!existsSync(p)) {
+    const template = path.join(rigRoot, 'templates', 'rig-config.default.json');
+    if (existsSync(template)) {
+      mkdirSync(path.dirname(p), { recursive: true });
+      copyFileSync(template, p);
+    }
+  }
+  return p;
+}
+
+export function loadRigConfig(rigRoot = RIG_ROOT) {
+  ensureRigConfig(rigRoot);
+  const p = configFilePath(rigRoot);
+  if (!existsSync(p)) return { activeProfiles: {}, profiles: {} };
+  try {
+    return JSON.parse(readFileSync(p, 'utf8'));
+  } catch {
+    return { activeProfiles: {}, profiles: {} };
+  }
+}
+
+export function writeRigConfig(config, rigRoot = RIG_ROOT) {
+  const p = configFilePath(rigRoot);
+  mkdirSync(path.dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify(config, null, 2) + '\n', 'utf8');
+  return config;
+}
+
+export function resolveSubagentModel(harness, model, explicitSubagentModel = null, { rigRoot = RIG_ROOT, userConfig = null } = {}) {
+  if (explicitSubagentModel) return explicitSubagentModel;
+  const catalog = loadCatalog(rigRoot);
+  const userModels = userConfig?.models ?? {};
+  const userHarnesses = userConfig?.harnesses ?? {};
+
+  const mergedModels = { ...(catalog.models || {}), ...userModels };
+  const mergedHarnesses = { ...(catalog.harnesses || {}), ...userHarnesses };
+
+  const modelEntry = mergedModels[model];
+  if (modelEntry?.subagentSelector?.[harness]) {
+    return modelEntry.subagentSelector[harness];
+  }
+
+  const harnessEntry = mergedHarnesses[harness];
+  if (harnessEntry?.defaultSubagentSelector !== undefined && harnessEntry.defaultSubagentSelector !== null) {
+    return harnessEntry.defaultSubagentSelector;
+  }
+  return model;
+}
+
+export function resolveProfile(harness, { profileName = null, rigRoot = RIG_ROOT, userConfig = null } = {}) {
+  const cfg = userConfig ?? loadRigConfig(rigRoot);
+  const targetProfileName = profileName || cfg.activeProfiles?.[harness];
+  if (!targetProfileName) {
+    throw new Error(`No active profile configured for harness: ${harness}`);
+  }
+  const profile = cfg.profiles?.[targetProfileName];
+  if (!profile) {
+    throw new Error(`Profile not found: ${targetProfileName}`);
+  }
+
+  const resolvedRoles = {};
+  for (const role of ROLES) {
+    const r = profile.roles?.[role];
+    if (!r) {
+      throw new Error(`Profile ${targetProfileName} missing role definition for: ${role}`);
+    }
+    const subagentModel = resolveSubagentModel(harness, r.model, r.subagentModel, { rigRoot, userConfig: cfg });
+    resolvedRoles[role] = {
+      model: r.model,
+      subagentModel,
+      effort: r.effort,
+    };
+  }
+
+  return {
+    harness,
+    profileName: targetProfileName,
+    roles: resolvedRoles,
+  };
+}
+
+export function hydrateText(templateText, resolvedProfile) {
+  let text = templateText;
+  text = text.replaceAll('{{RIG_PROFILE}}', resolvedProfile.profileName);
+  text = text.replaceAll('{{RIG_HARNESS}}', resolvedProfile.harness);
+
+  for (const role of ROLES) {
+    const roleData = resolvedProfile.roles[role];
+    if (roleData) {
+      const upper = role.toUpperCase();
+      text = text.replaceAll(`{{MODEL_${upper}}}`, roleData.model);
+      text = text.replaceAll(`{{SUBAGENT_MODEL_${upper}}}`, roleData.subagentModel);
+      text = text.replaceAll(`{{EFFORT_${upper}}}`, roleData.effort);
+    }
+  }
+
+  const leftover = text.match(/\{\{[A-Z0-9_]+\}\}/g);
+  if (leftover) {
+    throw new Error(`Unresolved template placeholder(s) in hydrated content: ${[...new Set(leftover)].join(', ')}`);
+  }
+  return text;
+}
+
+export function writeHydratedFile(srcPath, destPath, resolvedProfile, { executable = false } = {}) {
+  const template = readFileSync(srcPath, 'utf8');
+  const hydrated = hydrateText(template, resolvedProfile);
+  mkdirSync(path.dirname(destPath), { recursive: true });
+  if (isSymlink(destPath)) rmSync(destPath, { force: true });
+  writeFileSync(destPath, hydrated, 'utf8');
+  if (executable) chmodSync(destPath, 0o755);
+}
+
+export function copyOrHydrateDir(srcDir, destDir, resolvedProfile, { hydrated = [] } = {}) {
+  if (isSymlink(destDir)) rmSync(destDir, { force: true });
+  mkdirSync(destDir, { recursive: true });
+  for (const entry of readdirSync(srcDir)) {
+    const srcEntry = path.join(srcDir, entry);
+    const destEntry = path.join(destDir, entry);
+    const stat = lstatSync(srcEntry);
+    if (stat.isDirectory()) {
+      copyOrHydrateDir(srcEntry, destEntry, resolvedProfile, { hydrated });
+    } else if (stat.isFile()) {
+      if (srcEntry.endsWith('.md')) {
+        writeHydratedFile(srcEntry, destEntry, resolvedProfile);
+        hydrated.push(destEntry);
+      } else {
+        copyFileSafe(srcEntry, destEntry, { force: true, copied: hydrated });
+      }
+    }
+  }
+}
+
 function stateFilePath(homeDir = homedir()) {
   return path.join(homeDir, '.config', 'agent-rig', 'state.json');
 }
 
 export function readRigState(homeDir = homedir()) {
   const p = stateFilePath(homeDir);
-  if (!existsSync(p)) return { installedHarnesses: [], initializedRepos: [] };
+  if (!existsSync(p)) return { installedHarnesses: [], initializedRepos: [], installedSkills: [] };
   try {
     const raw = JSON.parse(readFileSync(p, 'utf8'));
     return {
       installedHarnesses: Array.isArray(raw.installedHarnesses) ? raw.installedHarnesses : [],
       initializedRepos: Array.isArray(raw.initializedRepos) ? raw.initializedRepos : [],
+      installedSkills: Array.isArray(raw.installedSkills) ? raw.installedSkills : [],
     };
   } catch {
-    return { installedHarnesses: [], initializedRepos: [] };
+    return { installedHarnesses: [], initializedRepos: [], installedSkills: [] };
   }
 }
 
@@ -98,6 +256,9 @@ export function writeRigState(homeDir, patch) {
     initializedRepos: patch.initializedRepos
       ? [...new Set([...current.initializedRepos, ...patch.initializedRepos])]
       : current.initializedRepos,
+    installedSkills: patch.installedSkills
+      ? [...new Set([...current.installedSkills, ...patch.installedSkills])]
+      : current.installedSkills,
   };
   const p = stateFilePath(homeDir);
   mkdirSync(path.dirname(p), { recursive: true });
@@ -134,6 +295,37 @@ function pruneDanglingRigSymlinks(dir, pruned = []) {
     const target = path.resolve(dir, readlinkSync(full));
     if (target.startsWith(RIG_ROOT) && !existsSync(target)) {
       rmSync(full, { force: true });
+      pruned.push(full);
+    }
+  }
+  return pruned;
+}
+
+function pruneRigSymlinks(dir, { rigRoot = RIG_ROOT, pruned = [] } = {}) {
+  if (!existsSync(dir)) return pruned;
+  for (const entry of readdirSync(dir)) {
+    const full = path.join(dir, entry);
+    if (!isSymlink(full)) continue;
+    try {
+      const rawTarget = readlinkSync(full);
+      const target = path.resolve(dir, rawTarget);
+      if (target.startsWith(rigRoot)) {
+        rmSync(full, { force: true });
+        pruned.push(full);
+      }
+    } catch {
+      // ignore broken links
+    }
+  }
+  return pruned;
+}
+
+function pruneMissingRigEntries(installedDir, validNames, { pruned = [] } = {}) {
+  if (!existsSync(installedDir)) return pruned;
+  for (const entry of readdirSync(installedDir)) {
+    if (!validNames.includes(entry)) {
+      const full = path.join(installedDir, entry);
+      rmSync(full, { recursive: true, force: true });
       pruned.push(full);
     }
   }
@@ -201,14 +393,62 @@ export function mergeAntigravityPluginsJson(existing, pluginContainerDir) {
   return base;
 }
 
-function installForAntigravity(homeDir, { force = false, linked = [], skipped = [], updated = [], pruned = [] }) {
+function installForAntigravity(homeDir, { force = false, hydrated = [], linked = [], skipped = [], updated = [], pruned = [], rigRoot = RIG_ROOT }) {
   const configDir = path.join(homeDir, '.gemini', 'config');
   const pluginsDir = path.join(configDir, 'plugins');
-  const pluginLink = path.join(pluginsDir, 'agent-rig');
+  const pluginDir = path.join(pluginsDir, 'agent-rig');
   mkdirSync(pluginsDir, { recursive: true });
-  pruneDanglingRigSymlinks(pluginsDir, pruned);
 
-  linkSafe(RIG_ROOT, pluginLink, { force, linked, skipped });
+  if (isSymlink(pluginDir)) {
+    rmSync(pluginDir, { force: true });
+  }
+  mkdirSync(pluginDir, { recursive: true });
+
+  const resolvedProfile = resolveProfile('antigravity', { rigRoot });
+
+  copyFileSafe(path.join(rigRoot, 'plugin.json'), path.join(pluginDir, 'plugin.json'), { force: true, copied: updated });
+  copyFileSafe(path.join(rigRoot, 'hooks.json'), path.join(pluginDir, 'hooks.json'), { force: true, copied: updated });
+
+  linkSafe(path.join(rigRoot, 'hooks'), path.join(pluginDir, 'hooks'), { force: true, linked, skipped });
+
+  const rulesSrcDir = path.join(rigRoot, 'rules');
+  const rulesDestDir = path.join(pluginDir, 'rules');
+  mkdirSync(rulesDestDir, { recursive: true });
+  for (const rule of readdirSync(rulesSrcDir)) {
+    const src = path.join(rulesSrcDir, rule);
+    const dest = path.join(rulesDestDir, rule);
+    if (rule.endsWith('.md')) {
+      writeHydratedFile(src, dest, resolvedProfile);
+      hydrated.push(dest);
+    } else {
+      copyFileSafe(src, dest, { force: true, copied: hydrated });
+    }
+  }
+
+  const skillsSrcDir = path.join(rigRoot, 'skills');
+  const skillsDestDir = path.join(pluginDir, 'skills');
+  mkdirSync(skillsDestDir, { recursive: true });
+  const rigSkills = readdirSync(skillsSrcDir);
+  for (const skill of rigSkills) {
+    copyOrHydrateDir(path.join(skillsSrcDir, skill), path.join(skillsDestDir, skill), resolvedProfile, { hydrated });
+  }
+  pruneMissingRigEntries(skillsDestDir, rigSkills, { pruned });
+
+  const agentsSrcDir = path.join(rigRoot, 'agents');
+  if (existsSync(agentsSrcDir)) {
+    const agentsDestDir = path.join(pluginDir, 'agents');
+    mkdirSync(agentsDestDir, { recursive: true });
+    for (const agent of readdirSync(agentsSrcDir)) {
+      const src = path.join(agentsSrcDir, agent);
+      const dest = path.join(agentsDestDir, agent);
+      if (agent.endsWith('.md')) {
+        writeHydratedFile(src, dest, resolvedProfile);
+        hydrated.push(dest);
+      } else {
+        copyFileSafe(src, dest, { force: true, copied: hydrated });
+      }
+    }
+  }
 
   const pluginsJsonPath = path.join(configDir, 'plugins.json');
   let current = {};
@@ -224,32 +464,55 @@ function installForAntigravity(homeDir, { force = false, linked = [], skipped = 
   updated.push(pluginsJsonPath);
 }
 
-function installForClaude(homeDir, { force = false, linked = [], skipped = [], updated = [], pruned = [] }) {
+function installForClaude(homeDir, { force = false, hydrated = [], linked = [], skipped = [], updated = [], pruned = [], rigRoot = RIG_ROOT, obsoleteSkills = [] }) {
   const claudeDir = path.join(homeDir, '.claude');
   mkdirSync(claudeDir, { recursive: true });
 
-  for (const sub of ['skills', 'agents', 'rules', 'hooks']) {
-    pruneDanglingRigSymlinks(path.join(claudeDir, sub), pruned);
+  const resolvedProfile = resolveProfile('claude', { rigRoot });
+
+  for (const sub of ['skills', 'agents', 'rules']) {
+    pruneRigSymlinks(path.join(claudeDir, sub), { rigRoot, pruned });
+  }
+  pruneDanglingRigSymlinks(path.join(claudeDir, 'hooks'), pruned);
+
+  for (const oldSkill of obsoleteSkills) {
+    const p = path.join(claudeDir, 'skills', oldSkill);
+    if (existsSync(p)) {
+      rmSync(p, { recursive: true, force: true });
+      pruned.push(p);
+    }
   }
 
-  const skillsDir = path.join(RIG_ROOT, 'skills');
+  const skillsDir = path.join(rigRoot, 'skills');
   for (const skill of readdirSync(skillsDir)) {
-    linkSafe(path.join(skillsDir, skill), path.join(claudeDir, 'skills', skill), { force, linked, skipped });
+    copyOrHydrateDir(path.join(skillsDir, skill), path.join(claudeDir, 'skills', skill), resolvedProfile, { hydrated });
   }
 
-  const agentsDir = path.join(RIG_ROOT, 'agents');
+  const agentsDir = path.join(rigRoot, 'agents');
   if (existsSync(agentsDir)) {
     for (const agent of readdirSync(agentsDir)) {
-      linkSafe(path.join(agentsDir, agent), path.join(claudeDir, 'agents', agent), { force, linked, skipped });
+      const src = path.join(agentsDir, agent);
+      const dest = path.join(claudeDir, 'agents', agent);
+      if (agent.endsWith('.md')) {
+        writeHydratedFile(src, dest, resolvedProfile);
+        hydrated.push(dest);
+      } else {
+        copyFileSafe(src, dest, { force: true, copied: hydrated });
+      }
     }
   }
 
   for (const rule of ['AGENTS.md', 'ui-change-gate.md']) {
-    linkSafe(path.join(RIG_ROOT, 'rules', rule), path.join(claudeDir, 'rules', rule), { force, linked, skipped });
+    const src = path.join(rigRoot, 'rules', rule);
+    const dest = path.join(claudeDir, 'rules', rule);
+    if (existsSync(src)) {
+      writeHydratedFile(src, dest, resolvedProfile);
+      hydrated.push(dest);
+    }
   }
 
   for (const hookEntry of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs', 'lib']) {
-    linkSafe(path.join(RIG_ROOT, 'hooks', hookEntry), path.join(claudeDir, 'hooks', hookEntry), { force, linked, skipped });
+    linkSafe(path.join(rigRoot, 'hooks', hookEntry), path.join(claudeDir, 'hooks', hookEntry), { force: true, linked, skipped });
   }
 
   const settingsPath = path.join(claudeDir, 'settings.json');
@@ -285,26 +548,50 @@ function installForClaude(homeDir, { force = false, linked = [], skipped = [], u
   updated.push(settingsPath);
 }
 
-function installForCodex(homeDir, { force = false, linked = [], skipped = [], pruned = [] }) {
+function installForCodex(homeDir, { force = false, hydrated = [], skipped = [], pruned = [], rigRoot = RIG_ROOT, obsoleteSkills = [] }) {
   const codexDir = path.join(homeDir, '.codex');
   mkdirSync(codexDir, { recursive: true });
-  pruneDanglingRigSymlinks(path.join(codexDir, 'skills'), pruned);
-  const skillsDir = path.join(RIG_ROOT, 'skills');
-  for (const skill of readdirSync(skillsDir)) {
-    linkSafe(path.join(skillsDir, skill), path.join(codexDir, 'skills', skill), { force, linked, skipped });
+  pruneRigSymlinks(path.join(codexDir, 'skills'), { rigRoot, pruned });
+  pruneRigSymlinks(codexDir, { rigRoot, pruned });
+
+  for (const oldSkill of obsoleteSkills) {
+    const p = path.join(codexDir, 'skills', oldSkill);
+    if (existsSync(p)) {
+      rmSync(p, { recursive: true, force: true });
+      pruned.push(p);
+    }
   }
-  linkSafe(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(codexDir, 'AGENTS.md'), { force, linked, skipped });
+
+  const resolvedProfile = resolveProfile('codex', { rigRoot });
+  const skillsDir = path.join(rigRoot, 'skills');
+  for (const skill of readdirSync(skillsDir)) {
+    copyOrHydrateDir(path.join(skillsDir, skill), path.join(codexDir, 'skills', skill), resolvedProfile, { hydrated });
+  }
+  writeHydratedFile(path.join(rigRoot, 'rules/AGENTS.md'), path.join(codexDir, 'AGENTS.md'), resolvedProfile);
+  hydrated.push(path.join(codexDir, 'AGENTS.md'));
 }
 
-function installForCursor(homeDir, { force = false, linked = [], skipped = [], pruned = [] }) {
+function installForCursor(homeDir, { force = false, hydrated = [], skipped = [], pruned = [], rigRoot = RIG_ROOT, obsoleteSkills = [] }) {
   const cursorDir = path.join(homeDir, '.cursor');
   mkdirSync(cursorDir, { recursive: true });
-  pruneDanglingRigSymlinks(path.join(cursorDir, 'skills'), pruned);
-  const skillsDir = path.join(RIG_ROOT, 'skills');
-  for (const skill of readdirSync(skillsDir)) {
-    linkSafe(path.join(skillsDir, skill), path.join(cursorDir, 'skills', skill), { force, linked, skipped });
+  pruneRigSymlinks(path.join(cursorDir, 'skills'), { rigRoot, pruned });
+  pruneRigSymlinks(path.join(cursorDir, 'rules'), { rigRoot, pruned });
+
+  for (const oldSkill of obsoleteSkills) {
+    const p = path.join(cursorDir, 'skills', oldSkill);
+    if (existsSync(p)) {
+      rmSync(p, { recursive: true, force: true });
+      pruned.push(p);
+    }
   }
-  linkSafe(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(cursorDir, 'rules/AGENTS.md'), { force, linked, skipped });
+
+  const resolvedProfile = resolveProfile('cursor', { rigRoot });
+  const skillsDir = path.join(rigRoot, 'skills');
+  for (const skill of readdirSync(skillsDir)) {
+    copyOrHydrateDir(path.join(skillsDir, skill), path.join(cursorDir, 'skills', skill), resolvedProfile, { hydrated });
+  }
+  writeHydratedFile(path.join(rigRoot, 'rules/AGENTS.md'), path.join(cursorDir, 'rules/AGENTS.md'), resolvedProfile);
+  hydrated.push(path.join(cursorDir, 'rules/AGENTS.md'));
 }
 
 export function installRig({
@@ -312,7 +599,9 @@ export function installRig({
   harnesses = null,
   detectedOnly = false,
   force = false,
+  rigRoot = RIG_ROOT,
 } = {}) {
+  ensureRigConfig(rigRoot);
   const discovered = detectHarnesses(homeDir);
   let selectedIds;
   if (Array.isArray(harnesses) && harnesses.length > 0) {
@@ -323,6 +612,11 @@ export function installRig({
     selectedIds = discovered.filter((d) => d.detected).map((d) => d.id);
   }
 
+  const state = readRigState(homeDir);
+  const currentSkills = existsSync(path.join(rigRoot, 'skills')) ? readdirSync(path.join(rigRoot, 'skills')) : [];
+  const obsoleteSkills = (state.installedSkills || []).filter((s) => !currentSkills.includes(s));
+
+  const hydrated = [];
   const linked = [];
   const skipped = [];
   const updated = [];
@@ -332,22 +626,23 @@ export function installRig({
   mkdirSync(localBinDir, { recursive: true });
   pruneDanglingRigSymlinks(localBinDir, pruned);
   const localBinRig = path.join(localBinDir, 'rig');
-  linkSafe(path.join(RIG_ROOT, 'bin/rig.mjs'), localBinRig, { force, linked, skipped });
+  linkSafe(path.join(rigRoot, 'bin/rig.mjs'), localBinRig, { force, linked, skipped });
 
   for (const id of selectedIds) {
-    if (id === 'antigravity') installForAntigravity(homeDir, { force, linked, skipped, updated, pruned });
-    else if (id === 'claude') installForClaude(homeDir, { force, linked, skipped, updated, pruned });
-    else if (id === 'codex') installForCodex(homeDir, { force, linked, skipped, pruned });
-    else if (id === 'cursor') installForCursor(homeDir, { force, linked, skipped, pruned });
+    if (id === 'antigravity') installForAntigravity(homeDir, { force, hydrated, linked, skipped, updated, pruned, rigRoot });
+    else if (id === 'claude') installForClaude(homeDir, { force, hydrated, linked, skipped, updated, pruned, rigRoot, obsoleteSkills });
+    else if (id === 'codex') installForCodex(homeDir, { force, hydrated, skipped, pruned, rigRoot, obsoleteSkills });
+    else if (id === 'cursor') installForCursor(homeDir, { force, hydrated, skipped, pruned, rigRoot, obsoleteSkills });
     else throw new Error(`Unknown harness id: ${id}`);
   }
 
-  writeRigState(homeDir, { installedHarnesses: selectedIds });
+  writeRigState(homeDir, { installedHarnesses: selectedIds, installedSkills: currentSkills });
 
   return {
     discovered,
     installedHarnesses: selectedIds,
     localBin: localBinRig,
+    hydrated,
     linked,
     skipped,
     updated,
@@ -378,29 +673,27 @@ export function updateRepo(targetDir) {
 
   // If the repo was initialized with --self-contained, refresh static rig assets without touching AGENTS.md or docs/
   if (existsSync(path.join(dir, 'skills')) && existsSync(path.join(dir, 'rules/AGENTS.md'))) {
+    const resolvedProfile = resolveProfile('claude', { rigRoot: RIG_ROOT });
     const skillsDir = path.join(RIG_ROOT, 'skills');
     for (const skill of readdirSync(skillsDir)) {
-      copyFileSafe(path.join(skillsDir, skill), path.join(dir, 'skills', skill), { force: true, copied, skipped });
+      copyOrHydrateDir(path.join(skillsDir, skill), path.join(dir, 'skills', skill), resolvedProfile, { hydrated: copied });
     }
     if (existsSync(path.join(RIG_ROOT, 'agents'))) {
       for (const agent of readdirSync(path.join(RIG_ROOT, 'agents'))) {
-        copyFileSafe(path.join(RIG_ROOT, 'agents', agent), path.join(dir, 'agents', agent), {
-          force: true,
-          copied,
-          skipped,
-        });
+        const src = path.join(RIG_ROOT, 'agents', agent);
+        const dest = path.join(dir, 'agents', agent);
+        if (agent.endsWith('.md')) {
+          writeHydratedFile(src, dest, resolvedProfile);
+          copied.push(dest);
+        } else {
+          copyFileSafe(src, dest, { force: true, copied, skipped });
+        }
       }
     }
-    copyFileSafe(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(dir, 'rules/AGENTS.md'), {
-      force: true,
-      copied,
-      skipped,
-    });
-    copyFileSafe(path.join(RIG_ROOT, 'rules/ui-change-gate.md'), path.join(dir, 'rules/ui-change-gate.md'), {
-      force: true,
-      copied,
-      skipped,
-    });
+    writeHydratedFile(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(dir, 'rules/AGENTS.md'), resolvedProfile);
+    copied.push(path.join(dir, 'rules/AGENTS.md'));
+    writeHydratedFile(path.join(RIG_ROOT, 'rules/ui-change-gate.md'), path.join(dir, 'rules/ui-change-gate.md'), resolvedProfile);
+    copied.push(path.join(dir, 'rules/ui-change-gate.md'));
     copyFileSafe(path.join(RIG_ROOT, 'scripts/check-doc-links.mjs'), path.join(dir, 'scripts/check-doc-links.mjs'), {
       force: true,
       copied,
@@ -435,7 +728,7 @@ export function updateRepo(targetDir) {
   return { dir, copied };
 }
 
-export function updateRig({ homeDir = homedir(), repoDir = null } = {}) {
+export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_ROOT } = {}) {
   const state = readRigState(homeDir);
   const harnesses =
     state.installedHarnesses.length > 0
@@ -444,7 +737,7 @@ export function updateRig({ homeDir = homedir(), repoDir = null } = {}) {
           .filter((d) => d.detected)
           .map((d) => d.id);
 
-  const globalRes = installRig({ homeDir, harnesses, force: false });
+  const globalRes = installRig({ homeDir, harnesses, force: false, rigRoot });
 
   const reposToUpdate = [];
   if (repoDir) {
@@ -460,6 +753,124 @@ export function updateRig({ homeDir = homedir(), repoDir = null } = {}) {
   return {
     ...globalRes,
     updatedRepos,
+  };
+}
+
+export function listProfiles(rigRoot = RIG_ROOT) {
+  const cfg = loadRigConfig(rigRoot);
+  const profiles = cfg.profiles || {};
+  const activeProfiles = cfg.activeProfiles || {};
+
+  const summary = {
+    activeProfiles,
+    profiles: {},
+  };
+
+  for (const [name, prof] of Object.entries(profiles)) {
+    const harness = prof.harness;
+    const resolvedRoles = {};
+    for (const role of ROLES) {
+      const r = prof.roles?.[role];
+      if (r) {
+        resolvedRoles[role] = {
+          model: r.model,
+          subagentModel: resolveSubagentModel(harness, r.model, r.subagentModel, { rigRoot, userConfig: cfg }),
+          effort: r.effort,
+        };
+      }
+    }
+    summary.profiles[name] = {
+      harness,
+      isActive: activeProfiles[harness] === name,
+      roles: resolvedRoles,
+    };
+  }
+
+  return summary;
+}
+
+export function useProfile(profileName, { rigRoot = RIG_ROOT, homeDir = homedir() } = {}) {
+  const cfg = loadRigConfig(rigRoot);
+  const profile = cfg.profiles?.[profileName];
+  if (!profile) {
+    throw new Error(`Profile not found: "${profileName}"`);
+  }
+  const harness = profile.harness;
+  if (!harness) {
+    throw new Error(`Profile "${profileName}" does not specify a harness`);
+  }
+  cfg.activeProfiles = cfg.activeProfiles || {};
+  cfg.activeProfiles[harness] = profileName;
+  writeRigConfig(cfg, rigRoot);
+  const updateRes = updateRig({ homeDir, rigRoot });
+  return { profileName, harness, updateRes };
+}
+
+export function setProfileRole(role, model, { effort = null, subagentModel = null, profileName = null, harness = null, rigRoot = RIG_ROOT, homeDir = homedir() } = {}) {
+  if (!ROLES.includes(role)) {
+    throw new Error(`Invalid role "${role}". Valid roles are: ${ROLES.join(', ')}`);
+  }
+  const cfg = loadRigConfig(rigRoot);
+  let targetProfileName = profileName;
+  if (!targetProfileName) {
+    if (harness) {
+      targetProfileName = cfg.activeProfiles?.[harness];
+    } else {
+      const activeList = Object.values(cfg.activeProfiles || {});
+      if (activeList.length === 1) {
+        targetProfileName = activeList[0];
+      } else {
+        throw new Error(`Specify --profile <name> or --harness <id> to choose which profile to update`);
+      }
+    }
+  }
+
+  const profile = cfg.profiles?.[targetProfileName];
+  if (!profile) {
+    throw new Error(`Profile not found: "${targetProfileName}"`);
+  }
+
+  const existingRole = profile.roles?.[role] || {};
+  const newEffort = effort || existingRole.effort || 'medium';
+  const validEfforts = ['low', 'medium', 'high', 'max'];
+  if (!validEfforts.includes(newEffort)) {
+    throw new Error(`Invalid effort "${newEffort}". Valid levels: ${validEfforts.join(', ')}`);
+  }
+
+  const resolvedSub = resolveSubagentModel(profile.harness, model, subagentModel || null, { rigRoot, userConfig: cfg });
+
+  profile.roles = profile.roles || {};
+  profile.roles[role] = {
+    model,
+    subagentModel: resolvedSub,
+    effort: newEffort,
+  };
+
+  writeRigConfig(cfg, rigRoot);
+  const updateRes = updateRig({ homeDir, rigRoot });
+  return { profileName: targetProfileName, harness: profile.harness, role, model, subagentModel: resolvedSub, effort: newEffort, updateRes };
+}
+
+export function resolveRoleModel(role, { harness = null, profileName = null, rigRoot = RIG_ROOT } = {}) {
+  if (!ROLES.includes(role)) {
+    throw new Error(`Invalid role "${role}". Valid roles are: ${ROLES.join(', ')}`);
+  }
+  const cfg = loadRigConfig(rigRoot);
+  let targetHarness = harness;
+  if (!targetHarness) {
+    if (profileName && cfg.profiles?.[profileName]) {
+      targetHarness = cfg.profiles[profileName].harness;
+    } else {
+      targetHarness = 'antigravity';
+    }
+  }
+  const resolvedProf = resolveProfile(targetHarness, { profileName, rigRoot, userConfig: cfg });
+  const roleData = resolvedProf.roles[role];
+  return {
+    harness: targetHarness,
+    profile: resolvedProf.profileName,
+    role,
+    ...roleData,
   };
 }
 
@@ -674,22 +1085,28 @@ export function initRepo(
   }
 
   if (selfContained) {
+    const resolvedProfile = resolveProfile('claude', { rigRoot: RIG_ROOT });
     const skillsDir = path.join(RIG_ROOT, 'skills');
     for (const skill of readdirSync(skillsDir)) {
-      copyFileSafe(path.join(skillsDir, skill), path.join(dir, 'skills', skill), { force, copied, skipped });
+      copyOrHydrateDir(path.join(skillsDir, skill), path.join(dir, 'skills', skill), resolvedProfile, { hydrated: copied });
     }
     const agentsDir = path.join(RIG_ROOT, 'agents');
     if (existsSync(agentsDir)) {
       for (const agent of readdirSync(agentsDir)) {
-        copyFileSafe(path.join(agentsDir, agent), path.join(dir, 'agents', agent), { force, copied, skipped });
+        const src = path.join(agentsDir, agent);
+        const dest = path.join(dir, 'agents', agent);
+        if (agent.endsWith('.md')) {
+          writeHydratedFile(src, dest, resolvedProfile);
+          copied.push(dest);
+        } else {
+          copyFileSafe(src, dest, { force: true, copied, skipped });
+        }
       }
     }
-    copyFileSafe(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(dir, 'rules/AGENTS.md'), { force, copied, skipped });
-    copyFileSafe(path.join(RIG_ROOT, 'rules/ui-change-gate.md'), path.join(dir, 'rules/ui-change-gate.md'), {
-      force,
-      copied,
-      skipped,
-    });
+    writeHydratedFile(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(dir, 'rules/AGENTS.md'), resolvedProfile);
+    copied.push(path.join(dir, 'rules/AGENTS.md'));
+    writeHydratedFile(path.join(RIG_ROOT, 'rules/ui-change-gate.md'), path.join(dir, 'rules/ui-change-gate.md'), resolvedProfile);
+    copied.push(path.join(dir, 'rules/ui-change-gate.md'));
     copyFileSafe(path.join(RIG_ROOT, 'scripts/check-doc-links.mjs'), path.join(dir, 'scripts/check-doc-links.mjs'), {
       force,
       copied,
@@ -891,6 +1308,89 @@ async function main() {
     return;
   }
 
+  if (cmd === 'profile') {
+    const sub = args[1];
+    if (!sub || sub === 'list') {
+      const json = args.includes('--json');
+      const list = listProfiles(RIG_ROOT);
+      if (json) {
+        console.log(JSON.stringify(list, null, 2));
+      } else {
+        console.log('Active profiles per harness:');
+        for (const [h, p] of Object.entries(list.activeProfiles)) {
+          console.log(`  ${h.padEnd(12)} -> ${p}`);
+        }
+        console.log('\nConfigured profiles:');
+        for (const [pName, pData] of Object.entries(list.profiles)) {
+          const mark = pData.isActive ? ' [active]' : '';
+          console.log(`\n  Profile: ${pName} (${pData.harness})${mark}`);
+          for (const [r, rData] of Object.entries(pData.roles)) {
+            console.log(`    ${r.padEnd(10)} model: ${rData.model.padEnd(20)} subagentModel: ${rData.subagentModel.padEnd(12)} effort: ${rData.effort}`);
+          }
+        }
+      }
+      return;
+    }
+    if (sub === 'use') {
+      const pName = args[2];
+      if (!pName) {
+        console.error('Error: specify profile name: rig profile use <profile-name>');
+        process.exit(1);
+      }
+      const res = useProfile(pName, { rigRoot: RIG_ROOT, homeDir: homedir() });
+      console.log(`Activated profile '${res.profileName}' for harness '${res.harness}' and re-hydrated installed harnesses.`);
+      return;
+    }
+    if (sub === 'set') {
+      const role = args[2];
+      const model = args[3];
+      if (!role || !model) {
+        console.error('Error: usage: rig profile set <role> <model> [--effort <level>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]');
+        process.exit(1);
+      }
+      const effortIdx = args.indexOf('--effort');
+      const effort = effortIdx !== -1 ? args[effortIdx + 1] : null;
+      const subIdx = args.indexOf('--subagent-model');
+      const subagentModel = subIdx !== -1 ? args[subIdx + 1] : null;
+      const profIdx = args.indexOf('--profile');
+      const profileName = profIdx !== -1 ? args[profIdx + 1] : null;
+      const hIdx = args.indexOf('--harness');
+      const harness = hIdx !== -1 ? args[hIdx + 1] : null;
+
+      const res = setProfileRole(role, model, { effort, subagentModel, profileName, harness, rigRoot: RIG_ROOT, homeDir: homedir() });
+      console.log(`Updated role '${res.role}' in profile '${res.profileName}' (${res.harness}): model=${res.model}, subagentModel=${res.subagentModel}, effort=${res.effort}. Re-hydrated harnesses.`);
+      return;
+    }
+    console.error(`Unknown profile subcommand: ${sub}. Usage: rig profile [list] | rig profile use <name> | rig profile set <role> <model> [...]`);
+    process.exit(1);
+  }
+
+  if (cmd === 'model') {
+    const sub = args[1];
+    if (sub === 'resolve') {
+      const role = args[2];
+      if (!role) {
+        console.error('Error: specify role: rig model resolve <role> [--harness <id>] [--profile <name>] [--json]');
+        process.exit(1);
+      }
+      const json = args.includes('--json');
+      const hIdx = args.indexOf('--harness');
+      const harness = hIdx !== -1 ? args[hIdx + 1] : null;
+      const pIdx = args.indexOf('--profile');
+      const profileName = pIdx !== -1 ? args[pIdx + 1] : null;
+
+      const res = resolveRoleModel(role, { harness, profileName, rigRoot: RIG_ROOT });
+      if (json) {
+        console.log(JSON.stringify(res, null, 2));
+      } else {
+        console.log(`[${res.harness} / ${res.profile}] ${res.role}: model=${res.model}, subagentModel=${res.subagentModel}, effort=${res.effort}`);
+      }
+      return;
+    }
+    console.error(`Unknown model subcommand: ${sub}. Usage: rig model resolve <role> [--harness <id>] [--profile <name>] [--json]`);
+    process.exit(1);
+  }
+
   if (cmd === 'init') {
     const pos = args.slice(1).find((a) => !a.startsWith('-')) ?? process.cwd();
     const selfContained = args.includes('--self-contained');
@@ -952,6 +1452,10 @@ async function main() {
   console.log(`Usage:
   rig install [--harnesses antigravity,claude,codex,cursor] [--detected] [--force]
   rig update [--repo <target-dir>]
+  rig profile [list] [--json]
+  rig profile use <profile-name>
+  rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]
+  rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force]
   rig detach [<target-dir>]
   rig check-docs [<target-dir>]

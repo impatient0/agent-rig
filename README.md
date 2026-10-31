@@ -20,8 +20,8 @@ Where a default convention is too heavy for a small project, the CLI provides op
 
 1. **Global Layer (`rig install`):**
    Installs your universal engineering rules ([`rules/AGENTS.md`](rules/AGENTS.md), [`rules/ui-change-gate.md`](rules/ui-change-gate.md)), all 7 skills (`skills/`), the cold Verifier subagent definition ([`agents/verifier.md`](agents/verifier.md)), and the multi-protocol `PreToolUse` guards (`hooks/`) into your harnesses' global configuration directories (`~/.gemini/config/`, `~/.claude/`, `~/.codex/`, `~/.cursor/`).
-   Because these are linked to your `agent-rig` clone, editing an existing skill, rule, or hook inside `agent-rig` takes effect across every project immediately;
-   running `rig update` links any newly added skills or agents without re-prompting.
+   Prompts, skills, and agent definitions are statically hydrated with your active model profile from `.rig.local.json` (seeded from [`templates/rig-config.default.json`](templates/rig-config.default.json) and validated by [`templates/rig-config.schema.json`](templates/rig-config.schema.json) using the model catalog [`templates/models.json`](templates/models.json)).
+   Running `rig update` or `rig profile use` re-hydrates your harnesses immediately with any changes.
 2. **Per-Project Layer (`rig init`):**
    Touches a project repository as lightly as possible:
    sets up git worktree commit/merge hooks (`scripts/git-hooks/`), parks the root checkout on a detached `HEAD` at `main`, and creates a minimal 7-line `AGENTS.md` project-context stub alongside [`docs/backlog.md`](docs/backlog.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
@@ -54,12 +54,12 @@ What `rig install` configures:
 - **CLI Binary (`~/.local/bin/rig`):**
   Symlinks `~/.local/bin/rig` to `bin/rig.mjs` so `rig` remains on your `PATH` even if you switch Node versions in `nvm` later.
 - **Antigravity (`~/.gemini/config/`):**
-  Registers `agent-rig` in `~/.gemini/config/plugins.json` and links `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 7 skills under `skills/`, and `hooks.json` across every workspace.
+  Registers `agent-rig` in `~/.gemini/config/plugins.json` and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 7 skills under `skills/`, and `hooks.json` across every workspace with symlinked `hooks/`.
 - **Claude Code (`~/.claude/`):**
-  Symlinks `skills/` into `~/.claude/skills/`, [`agents/verifier.md`](agents/verifier.md) into `~/.claude/agents/verifier.md`, `rules/` into `~/.claude/rules/`, and `hooks/` into `~/.claude/hooks/`, and non-destructively merges `PreToolUse` hooks into `~/.claude/settings.json`.
+  Installs hydrated `skills/` into `~/.claude/skills/`, [`agents/verifier.md`](agents/verifier.md) into `~/.claude/agents/verifier.md`, and `rules/` into `~/.claude/rules/`, symlinks `hooks/` into `~/.claude/hooks/`, and non-destructively merges `PreToolUse` hooks into `~/.claude/settings.json`.
   (Alternatively, inside Claude Code you can run `/plugin marketplace add impatient0/agent-rig` and `/plugin install agent-rig@agent-rig`.)
 - **Codex CLI (`~/.codex/`) & Cursor (`~/.cursor/`):**
-  Symlinks the portable skills and global `AGENTS.md` rules.
+  Installs hydrated skills and global `AGENTS.md` rules.
 
 To sync newly added skills, subagents, or hook entries into your previously selected harnesses after pulling changes in `agent-rig`:
 
@@ -67,7 +67,41 @@ To sync newly added skills, subagents, or hook entries into your previously sele
 rig update
 ```
 
-### 2. Initialize a Project Repository (`rig init`)
+### 2. Configure Execution Tiers & Model Profiles (`rig profile`)
+
+`agent-rig` organizes work across four canonical execution tiers:
+- **`architect`** — Main session / Tech Lead (triage, backlog/doc auditing, repo onboarding, session wrap-up, ADR authoring, and handling Worker stop triggers).
+- **`worker`** — Isolated implementation subagents in [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md).
+- **`verifier`** — Cold, read-only audit subagent in [`agents/verifier.md`](agents/verifier.md).
+- **`utility`** — Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
+
+View configured profiles and active assignments:
+
+```bash
+rig profile
+```
+
+Switch active profiles per harness (re-hydrates installed harness files immediately):
+
+```bash
+rig profile use antigravity-pro
+rig profile use claude-pro
+```
+
+Customize a specific role's model or reasoning effort in `.rig.local.json`:
+
+```bash
+rig profile set worker claude-opus-5-5 --effort high
+```
+
+Inspect resolved model parameters for any role:
+
+```bash
+rig model resolve worker
+rig model resolve verifier --harness claude --json
+```
+
+### 3. Initialize a Project Repository (`rig init`)
 
 When starting or onboarding a repository that should enforce worktree commit locks and track its own backlog and ADRs:
 
@@ -86,7 +120,7 @@ Flags for `rig init`:
 - `--ui` — Also copy `templates/docs/design/mockup-scaffold.html`.
 - `--force` — Overwrite existing files.
 
-### 3. Run Documentation Linters Anywhere (`rig check-docs` & `rig reflow-docs`)
+### 4. Run Documentation Linters Anywhere (`rig check-docs` & `rig reflow-docs`)
 
 Verify link graph integrity or normalize Markdown files to one sentence per line in any repository without copying scripts into that project:
 

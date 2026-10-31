@@ -1,0 +1,64 @@
+{
+  "harnesses": {
+    "antigravity": {
+      "subagentSelectors": [
+        "inherit",
+        "flash_lite",
+        "flash",
+        "pro"
+      ],
+      "defaultSubagentSelector": "inherit"
+    },
+    "claude": {
+      "subagentSelectors": [
+        "inherit",
+        "haiku",
+        "sonnet",
+        "opus"
+      ],
+      "defaultSubagentSelector": "inherit"
+    },
+    "codex": {
+      "subagentSelectors": [],
+      "defaultSubagentSelector": null
+    },
+    "cursor": {
+      "subagentSelectors": [],
+      "defaultSubagentSelector": null
+    }
+  },
+  "models": {
+    "gemini-4-argon": {
+      "subagentSelector": {
+        "antigravity": "pro"
+      }
+    },
+    "gemini-3-8-flash": {
+      "subagentSelector": {
+        "antigravity": "flash"
+      }
+    },
+    "claude-opus-5-5": {
+      "subagentSelector": {
+        "claude": "opus",
+        "antigravity": "pro"
+      }
+    },
+    "claude-sonnet-5-5": {
+      "subagentSelector": {
+        "claude": "sonnet",
+        "antigravity": "pro"
+      }
+    },
+    "claude-haiku-5-5": {
+      "subagentSelector": {
+        "claude": "haiku",
+        "antigravity": "flash"
+      }
+    },
+    "gpt-6-1-sol": {},
+    "gpt-6-luna": {},
+    "grok-4-7": {},
+    "composer-2-5": {}
+  }
+}

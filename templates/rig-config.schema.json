@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent Rig Configuration",
+  "description": "User-local profile and role model configuration for agent-rig",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "activeProfiles": {
+      "type": "object",
+      "description": "Active profile per harness",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "description": "Named profiles containing role model bindings",
+      "additionalProperties": {
+        "$ref": "#/definitions/profile"
+      }
+    },
+    "harnesses": {
+      "type": "object",
+      "description": "Optional user-local harness catalog extensions or overrides",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "subagentSelectors": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "defaultSubagentSelector": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "description": "Optional user-local model catalog extensions or overrides",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "subagentSelector": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "activeProfiles",
+    "profiles"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "profile": {
+      "type": "object",
+      "properties": {
+        "harness": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "object",
+          "properties": {
+            "architect": { "$ref": "#/definitions/roleBinding" },
+            "worker": { "$ref": "#/definitions/roleBinding" },
+            "verifier": { "$ref": "#/definitions/roleBinding" },
+            "utility": { "$ref": "#/definitions/roleBinding" }
+          },
+          "required": [
+            "architect",
+            "worker",
+            "verifier",
+            "utility"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "harness",
+        "roles"
+      ],
+      "additionalProperties": false
+    },
+    "roleBinding": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "subagentModel": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "max"]
+        }
+      },
+      "required": [
+        "model",
+        "effort"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

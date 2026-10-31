@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, rmSync, readdirSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   RIG_ROOT,
+  ROLES,
   detectHarnesses,
   installRig,
   updateRig,
@@ -17,6 +18,14 @@ import {
   normalizeGitignore,
   detachMainCheckout,
   INIT_WORKTREE_BRANCH,
+  loadCatalog,
+  resolveSubagentModel,
+  resolveProfile,
+  hydrateText,
+  listProfiles,
+  useProfile,
+  setProfileRole,
+  resolveRoleModel,
 } from '../bin/rig.mjs';
 
 function makeRepoWithHistory(prefix) {
@@ -119,7 +128,7 @@ test('initRepo targeting a linked worktree scaffolds in place and parks the main
   }
 });
 
-test('detectHarnesses, installRig, and updateRig manage state, link verifier subagent, and prune dangling symlinks', () => {
+test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, and prune dangling symlinks', () => {
   const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-home-'));
   try {
     mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
@@ -142,21 +151,35 @@ test('detectHarnesses, installRig, and updateRig manage state, link verifier sub
 
     const state = readRigState(fakeHome);
     assert.deepEqual(state.installedHarnesses, ['antigravity', 'claude']);
+    assert.ok(state.installedSkills.includes('dispatch'));
 
-    // Antigravity plugin symlink + plugins.json
-    assert.ok(lstatSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig')).isSymbolicLink());
+    // Antigravity plugin directory with hydrated files, symlinked hooks, and plugins.json
+    const agyPluginDir = path.join(fakeHome, '.gemini/config/plugins/agent-rig');
+    assert.equal(lstatSync(agyPluginDir).isSymbolicLink(), false);
+    assert.ok(lstatSync(path.join(agyPluginDir, 'hooks')).isSymbolicLink());
+    const agyAgents = readFileSync(path.join(agyPluginDir, 'rules/AGENTS.md'), 'utf8');
+    assert.match(agyAgents, /antigravity-budget/);
+    assert.equal(agyAgents.includes('{{'), false);
+    const agyVerifier = readFileSync(path.join(agyPluginDir, 'agents/verifier.md'), 'utf8');
+    assert.match(agyVerifier, /gemini-3-8-flash/);
+    assert.equal(agyVerifier.includes('{{'), false);
     const pluginsJson = JSON.parse(readFileSync(path.join(fakeHome, '.gemini/config/plugins.json'), 'utf8'));
     assert.equal(pluginsJson.entries.length, 1);
 
-    // Claude skills, verifier subagent, and settings.json
-    assert.ok(lstatSync(path.join(fakeHome, '.claude/skills/dispatch')).isSymbolicLink());
-    assert.ok(lstatSync(path.join(fakeHome, '.claude/agents/verifier.md')).isSymbolicLink());
+    // Claude hydrated skills, verifier subagent, and settings.json
+    assert.equal(lstatSync(path.join(fakeHome, '.claude/skills/dispatch')).isSymbolicLink(), false);
+    const claudeSkill = readFileSync(path.join(fakeHome, '.claude/skills/dispatch/SKILL.md'), 'utf8');
+    assert.match(claudeSkill, /claude-sonnet-5-5/);
+    assert.equal(claudeSkill.includes('{{'), false);
+    const claudeVerifier = readFileSync(path.join(fakeHome, '.claude/agents/verifier.md'), 'utf8');
+    assert.match(claudeVerifier, /model: sonnet/);
+    assert.equal(claudeVerifier.includes('{{'), false);
     const claudeSettings = JSON.parse(readFileSync(path.join(fakeHome, '.claude/settings.json'), 'utf8'));
     assert.equal(claudeSettings.hooks.PreToolUse.length, 2);
 
-    // Plant a dangling symlink pointing inside RIG_ROOT and verify updateRig prunes it without prompting
-    const dangling = path.join(fakeHome, '.claude/skills/removed-skill');
-    symlinkSync(path.join(RIG_ROOT, 'skills/does-not-exist'), dangling);
+    // Plant a dangling symlink and verify updateRig prunes it without prompting
+    const dangling = path.join(fakeHome, '.claude/hooks/removed-hook');
+    symlinkSync(path.join(RIG_ROOT, 'hooks/does-not-exist'), dangling);
     assert.ok(lstatSync(dangling).isSymbolicLink());
 
     const upd = updateRig({ homeDir: fakeHome });
@@ -252,4 +275,111 @@ test('both Antigravity and Claude Code plugin manifests are valid and point to e
   assert.ok(existsSync(path.join(RIG_ROOT, claudePlugin.skills, 'dispatch/SKILL.md')));
   assert.ok(existsSync(path.join(RIG_ROOT, claudePlugin.agents, 'verifier.md')));
   assert.ok(existsSync(path.join(RIG_ROOT, claudePlugin.hooks)));
+});
+
+test('loadCatalog, resolveSubagentModel, resolveProfile, and hydrateText enforce data-driven resolution without hardcoded model names', () => {
+  const catalog = loadCatalog(RIG_ROOT);
+  assert.ok(catalog.harnesses.antigravity);
+  assert.ok(catalog.harnesses.claude);
+  assert.ok(catalog.models['gemini-4-argon']);
+  assert.ok(catalog.models['claude-opus-5-5']);
+
+  // Builtin model mappings
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-argon', null, { rigRoot: RIG_ROOT }), 'pro');
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-3-8-flash', null, { rigRoot: RIG_ROOT }), 'flash');
+  assert.equal(resolveSubagentModel('claude', 'claude-opus-5-5', null, { rigRoot: RIG_ROOT }), 'opus');
+  assert.equal(resolveSubagentModel('claude', 'claude-sonnet-5-5', null, { rigRoot: RIG_ROOT }), 'sonnet');
+  assert.equal(resolveSubagentModel('claude', 'claude-haiku-5-5', null, { rigRoot: RIG_ROOT }), 'haiku');
+
+  // Explicit selector wins
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-argon', 'flash_lite', { rigRoot: RIG_ROOT }), 'flash_lite');
+
+  // Custom user-defined model from config
+  const customConfig = {
+    models: {
+      'custom-llama': {
+        subagentSelector: {
+          antigravity: 'flash',
+        },
+      },
+    },
+  };
+  assert.equal(resolveSubagentModel('antigravity', 'custom-llama', null, { rigRoot: RIG_ROOT, userConfig: customConfig }), 'flash');
+
+  // Fallback for unknown model to harness defaultSubagentSelector
+  assert.equal(resolveSubagentModel('antigravity', 'completely-unknown-model', null, { rigRoot: RIG_ROOT }), 'inherit');
+
+  // Profile resolution
+  const profile = resolveProfile('antigravity', { rigRoot: RIG_ROOT });
+  assert.equal(profile.harness, 'antigravity');
+  assert.equal(profile.profileName, 'antigravity-budget');
+  assert.deepEqual(Object.keys(profile.roles).sort(), ['architect', 'utility', 'verifier', 'worker']);
+  assert.equal(profile.roles.worker.model, 'gemini-3-8-flash');
+  assert.equal(profile.roles.worker.subagentModel, 'flash');
+
+  // Hydration replaces all placeholders
+  const sampleTemplate = 'Profile: {{RIG_PROFILE}} for {{RIG_HARNESS}}. Worker: {{SUBAGENT_MODEL_WORKER}} ({{MODEL_WORKER}}, {{EFFORT_WORKER}}). Verifier: {{SUBAGENT_MODEL_VERIFIER}}.';
+  const hydrated = hydrateText(sampleTemplate, profile);
+  assert.equal(hydrated, 'Profile: antigravity-budget for antigravity. Worker: flash (gemini-3-8-flash, high). Verifier: flash.');
+
+  // Hydration fails on unresolved token
+  assert.throws(
+    () => hydrateText('Oops {{UNKNOWN_TOKEN}}', profile),
+    /Unresolved template placeholder\(s\) in hydrated content: \{\{UNKNOWN_TOKEN\}\}/,
+  );
+});
+
+test('rig profile and rig model resolve inspect, switch, and set profile roles', () => {
+  const fakeRig = mkdtempSync(path.join(tmpdir(), 'rig-test-root-'));
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-test-home-'));
+  try {
+    // Scaffold fake rig root with templates
+    mkdirSync(path.join(fakeRig, 'templates'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'skills/dispatch'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'agents'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'rules'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'hooks'), { recursive: true });
+    mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
+
+    copyFileSync(path.join(RIG_ROOT, 'templates/models.json'), path.join(fakeRig, 'templates/models.json'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/rig-config.default.json'), path.join(fakeRig, 'templates/rig-config.default.json'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/rig-config.schema.json'), path.join(fakeRig, 'templates/rig-config.schema.json'));
+    copyFileSync(path.join(RIG_ROOT, 'plugin.json'), path.join(fakeRig, 'plugin.json'));
+    copyFileSync(path.join(RIG_ROOT, 'hooks.json'), path.join(fakeRig, 'hooks.json'));
+    writeFileSync(path.join(fakeRig, 'rules/AGENTS.md'), '# Rules\nProfile: {{RIG_PROFILE}}\nWorker: {{MODEL_WORKER}}\n');
+    writeFileSync(path.join(fakeRig, 'skills/dispatch/SKILL.md'), '# Dispatch\nModel: {{SUBAGENT_MODEL_WORKER}}\n');
+
+    // Install rig globally in fakeHome
+    installRig({ homeDir: fakeHome, harnesses: ['antigravity'], rigRoot: fakeRig });
+
+    // Initial inspection
+    const initialProfiles = listProfiles(fakeRig);
+    assert.equal(initialProfiles.activeProfiles.antigravity, 'antigravity-budget');
+    assert.equal(initialProfiles.profiles['antigravity-budget'].isActive, true);
+
+    const resolvedWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig });
+    assert.equal(resolvedWorker.model, 'gemini-3-8-flash');
+    assert.equal(resolvedWorker.subagentModel, 'flash');
+
+    // Switch profile to antigravity-pro
+    useProfile('antigravity-pro', { rigRoot: fakeRig, homeDir: fakeHome });
+    const afterUse = listProfiles(fakeRig);
+    assert.equal(afterUse.activeProfiles.antigravity, 'antigravity-pro');
+    const hydratedAgents = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules/AGENTS.md'), 'utf8');
+    assert.match(hydratedAgents, /Profile: antigravity-pro/);
+    assert.match(hydratedAgents, /Worker: gemini-4-argon/);
+
+    // Update role in profile
+    setProfileRole('worker', 'claude-opus-5-5', { effort: 'medium', rigRoot: fakeRig, homeDir: fakeHome, harness: 'antigravity' });
+    const afterSet = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig });
+    assert.equal(afterSet.model, 'claude-opus-5-5');
+    assert.equal(afterSet.subagentModel, 'pro'); // claude-opus-5-5 mapped to pro on antigravity
+    assert.equal(afterSet.effort, 'medium');
+
+    const rehydratedAgents = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules/AGENTS.md'), 'utf8');
+    assert.match(rehydratedAgents, /Worker: claude-opus-5-5/);
+  } finally {
+    rmSync(fakeRig, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
 });

@@ -1,0 +1,56 @@
+{
+  "$schema": "./templates/rig-config.schema.json",
+  "activeProfiles": {
+    "antigravity": "antigravity-budget",
+    "claude": "claude-pro",
+    "codex": "codex-default",
+    "cursor": "cursor-default"
+  },
+  "profiles": {
+    "antigravity-budget": {
+      "harness": "antigravity",
+      "roles": {
+        "architect": { "model": "gemini-4-argon", "subagentModel": "pro", "effort": "high" },
+        "worker":    { "model": "gemini-3-8-flash", "subagentModel": "flash", "effort": "high" },
+        "verifier":  { "model": "gemini-3-8-flash", "subagentModel": "flash", "effort": "medium" },
+        "utility":   { "model": "gemini-3-8-flash", "subagentModel": "flash_lite", "effort": "low" }
+      }
+    },
+    "antigravity-pro": {
+      "harness": "antigravity",
+      "roles": {
+        "architect": { "model": "gemini-4-argon", "subagentModel": "pro", "effort": "high" },
+        "worker":    { "model": "gemini-4-argon", "subagentModel": "pro", "effort": "high" },
+        "verifier":  { "model": "gemini-3-8-flash", "subagentModel": "flash", "effort": "medium" },
+        "utility":   { "model": "gemini-3-8-flash", "subagentModel": "flash", "effort": "low" }
+      }
+    },
+    "claude-pro": {
+      "harness": "claude",
+      "roles": {
+        "architect": { "model": "claude-opus-5-5", "subagentModel": "opus", "effort": "high" },
+        "worker":    { "model": "claude-sonnet-5-5", "subagentModel": "sonnet", "effort": "medium" },
+        "verifier":  { "model": "claude-sonnet-5-5", "subagentModel": "sonnet", "effort": "low" },
+        "utility":   { "model": "claude-haiku-5-5", "subagentModel": "haiku", "effort": "low" }
+      }
+    },
+    "codex-default": {
+      "harness": "codex",
+      "roles": {
+        "architect": { "model": "gpt-6-1-sol", "effort": "high" },
+        "worker":    { "model": "gpt-6-1-sol", "effort": "medium" },
+        "verifier":  { "model": "gpt-6-luna", "effort": "medium" },
+        "utility":   { "model": "gpt-6-luna", "effort": "low" }
+      }
+    },
+    "cursor-default": {
+      "harness": "cursor",
+      "roles": {
+        "architect": { "model": "claude-opus-5-5", "effort": "high" },
+        "worker":    { "model": "grok-4-7", "effort": "medium" },
+        "verifier":  { "model": "claude-sonnet-5-5", "effort": "low" },
+        "utility":   { "model": "composer-2-5", "effort": "low" }
+      }
+    }
+  }
+}

@@ -199,6 +199,30 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
   }
 });
 
+test('installRig cleanly replaces legacy symlinked plugin directory without throwing ERR_FS_EISDIR', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-legacy-symlink-'));
+  try {
+    const pluginsDir = path.join(fakeHome, '.gemini/config/plugins');
+    mkdirSync(pluginsDir, { recursive: true });
+    const legacyTargetDir = path.join(fakeHome, 'legacy-target');
+    mkdirSync(legacyTargetDir, { recursive: true });
+    writeFileSync(path.join(legacyTargetDir, 'dummy.txt'), 'old\n');
+
+    // Plant a symlink pointing to a directory
+    const pluginLink = path.join(pluginsDir, 'agent-rig');
+    symlinkSync(legacyTargetDir, pluginLink);
+    assert.ok(lstatSync(pluginLink).isSymbolicLink());
+
+    const res = installRig({ homeDir: fakeHome, harnesses: ['antigravity'] });
+    assert.deepEqual(res.installedHarnesses, ['antigravity']);
+    assert.equal(lstatSync(pluginLink).isSymbolicLink(), false);
+    assert.ok(existsSync(path.join(pluginLink, 'plugin.json')));
+    assert.equal(existsSync(path.join(legacyTargetDir, 'dummy.txt')), true);
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
 test('updateRig refreshes repo git hooks without overwriting user-edited AGENTS.md or docs/backlog.md', () => {
   const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-upd-home-'));
   const repo = mkdtempSync(path.join(tmpdir(), 'rig-upd-repo-'));

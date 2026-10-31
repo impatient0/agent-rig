@@ -202,13 +202,13 @@ export function writeHydratedFile(srcPath, destPath, resolvedProfile, { executab
   const template = readFileSync(srcPath, 'utf8');
   const hydrated = hydrateText(template, resolvedProfile);
   mkdirSync(path.dirname(destPath), { recursive: true });
-  if (isSymlink(destPath)) rmSync(destPath, { force: true });
+  if (isSymlink(destPath)) rmSync(destPath, { recursive: true, force: true });
   writeFileSync(destPath, hydrated, 'utf8');
   if (executable) chmodSync(destPath, 0o755);
 }
 
 export function copyOrHydrateDir(srcDir, destDir, resolvedProfile, { hydrated = [] } = {}) {
-  if (isSymlink(destDir)) rmSync(destDir, { force: true });
+  if (isSymlink(destDir)) rmSync(destDir, { recursive: true, force: true });
   mkdirSync(destDir, { recursive: true });
   for (const entry of readdirSync(srcDir)) {
     const srcEntry = path.join(srcDir, entry);
@@ -271,7 +271,7 @@ function copyFileSafe(src, dest, { force = false, copied = [], skipped = [], exe
     return false;
   }
   mkdirSync(path.dirname(dest), { recursive: true });
-  if (isSymlink(dest)) rmSync(dest, { force: true });
+  if (isSymlink(dest)) rmSync(dest, { recursive: true, force: true });
   cpSync(src, dest, { recursive: true, force: true });
   if (executable) chmodSync(dest, 0o755);
   copied.push(dest);
@@ -293,7 +293,7 @@ function pruneDanglingRigSymlinks(dir, pruned = []) {
     if (!isSymlink(full)) continue;
     const target = path.resolve(dir, readlinkSync(full));
     if (target.startsWith(RIG_ROOT) && !existsSync(target)) {
-      rmSync(full, { force: true });
+      rmSync(full, { recursive: true, force: true });
       pruned.push(full);
     }
   }
@@ -309,7 +309,7 @@ function pruneRigSymlinks(dir, { rigRoot = RIG_ROOT, pruned = [] } = {}) {
       const rawTarget = readlinkSync(full);
       const target = path.resolve(dir, rawTarget);
       if (target.startsWith(rigRoot)) {
-        rmSync(full, { force: true });
+        rmSync(full, { recursive: true, force: true });
         pruned.push(full);
       }
     } catch {
@@ -337,7 +337,7 @@ function linkSafe(src, dest, { force = false, linked = [], skipped = [] } = {}) 
       skipped.push(dest);
       return false;
     }
-    rmSync(dest, { force: true });
+    rmSync(dest, { recursive: true, force: true });
   }
   mkdirSync(path.dirname(dest), { recursive: true });
   symlinkSync(src, dest);
@@ -399,7 +399,7 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
   mkdirSync(pluginsDir, { recursive: true });
 
   if (isSymlink(pluginDir)) {
-    rmSync(pluginDir, { force: true });
+    rmSync(pluginDir, { recursive: true, force: true });
   }
   mkdirSync(pluginDir, { recursive: true });
 

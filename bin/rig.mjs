@@ -1162,10 +1162,13 @@ export function initRepo(
     { force, copied, skipped },
   );
 
+  const mainCheckout = where.isRepo ? where.mainCheckout : requestedDir;
+  const projectName = path.basename(mainCheckout);
+
   if (!existsSync(path.join(dir, 'README.md'))) {
     writeFileSync(
       path.join(dir, 'README.md'),
-      '# ' + path.basename(dir) + '\n\nSee [AGENTS.md](AGENTS.md) and [docs/backlog.md](docs/backlog.md).\n',
+      '# ' + projectName + '\n\nSee [AGENTS.md](AGENTS.md) and [docs/backlog.md](docs/backlog.md).\n',
       'utf8',
     );
     copied.push(path.join(dir, 'README.md'));
@@ -1311,7 +1314,6 @@ export function initRepo(
     });
   }
 
-  const mainCheckout = where.isRepo ? where.mainCheckout : requestedDir;
   if (homeDir) {
     writeRigState(homeDir, { initializedRepos: [mainCheckout] });
   }

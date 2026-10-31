@@ -125,6 +125,22 @@ test('initRepo on a main checkout with history scaffolds into a linked worktree 
   }
 });
 
+test('initRepo on a repository without README scaffolds README titled after the main checkout project name', () => {
+  const { root, git, cleanup } = makeRepoWithHistory('custom-service-');
+  try {
+    git(root, 'rm', '-q', 'README.md');
+    git(root, 'commit', '-qm', 'remove legacy readme');
+    const res = initRepo(root, { worktrees: true });
+    const wt = res.initWorktree.path;
+    const readmeContent = readFileSync(path.join(wt, 'README.md'), 'utf8');
+    const expectedTitle = '# ' + path.basename(root) + '\n';
+    assert.ok(readmeContent.startsWith(expectedTitle), `expected README to start with "${expectedTitle}", got:\n${readmeContent}`);
+    assert.equal(readmeContent.includes('# rig-init'), false);
+  } finally {
+    cleanup();
+  }
+});
+
 test('initRepo targeting a linked worktree scaffolds in place and leaves the main checkout attached', () => {
   const { root, git, cleanup } = makeRepoWithHistory('rig-init-linked-');
   try {

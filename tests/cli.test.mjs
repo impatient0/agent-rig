@@ -26,6 +26,7 @@ import {
   useProfile,
   setProfileRole,
   resolveRoleModel,
+  buildRigWrapperScript,
   resolveNodeBinary,
   buildHookCommand,
   hydrateAntigravityHooksJson,
@@ -154,17 +155,19 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
 
     const res = installRig({ homeDir: fakeHome, detectedOnly: true });
     assert.deepEqual(res.installedHarnesses, ['antigravity', 'claude']);
-    const symlinkedBin = path.join(fakeHome, '.local/bin/rig');
-    assert.ok(lstatSync(symlinkedBin).isSymbolicLink());
+    const wrapperBin = path.join(fakeHome, '.local/bin/rig');
+    assert.ok(existsSync(wrapperBin) && !lstatSync(wrapperBin).isSymbolicLink());
+    assert.match(readFileSync(wrapperBin, 'utf8'), /exec /);
 
-    // Invoking rig via symlink (like npm link or ~/.local/bin/rig) must execute main()
-    const cliRun = spawnSync(symlinkedBin, ['status', RIG_ROOT], { encoding: 'utf8' });
+    // Invoking rig via wrapper script must execute main()
+    const cliRun = spawnSync(wrapperBin, ['status', RIG_ROOT], { encoding: 'utf8' });
     assert.equal(cliRun.status, 0, cliRun.stderr);
     assert.equal(JSON.parse(cliRun.stdout).hasAgentsMd, true);
 
     const state = readRigState(fakeHome);
     assert.deepEqual(state.installedHarnesses, ['antigravity', 'claude']);
     assert.ok(state.installedSkills.includes('dispatch'));
+    assert.ok(state.nodeBin);
 
     // Antigravity plugin directory with hydrated files, symlinked hooks, and plugins.json
     const agyPluginDir = path.join(fakeHome, '.gemini/config/plugins/agent-rig');
@@ -532,4 +535,22 @@ test('mergeClaudeSettings updates existing agent-rig hooks in place when node bi
   assert.equal(bashHooks.length, 2);
   assert.equal(bashHooks[1].command, 'my-custom-check.sh');
   assert.match(bashHooks[0].command, /NODE="\/new\/node"/);
+});
+
+test('buildRigWrapperScript generates executable shell wrapper with fail-safe error message', () => {
+  const wrapper = buildRigWrapperScript(path.join(RIG_ROOT, 'bin/rig.mjs'), { nodeBin: '/mock/nvm/node' });
+  assert.match(wrapper, /NODE="\/mock\/nvm\/node"/);
+  assert.match(wrapper, /Run 'rig update' in your terminal to re-point\./);
+  assert.match(wrapper, /exec "\$NODE"/);
+
+  // Executing the wrapper in shell when node does not exist exits 1 with diagnostic
+  const failRun = spawnSync('/bin/sh', ['-c', wrapper, '--', 'status', RIG_ROOT], { encoding: 'utf8' });
+  assert.equal(failRun.status, 1);
+  assert.match(failRun.stderr, /agent-rig: Node runtime not found at '\/mock\/nvm\/node'\. Run 'rig update'/);
+
+  // Executing with the real process.execPath executes successfully
+  const validWrapper = buildRigWrapperScript(path.join(RIG_ROOT, 'bin/rig.mjs'), { nodeBin: process.execPath });
+  const validRun = spawnSync('/bin/sh', ['-c', validWrapper, '--', 'status', RIG_ROOT], { encoding: 'utf8' });
+  assert.equal(validRun.status, 0, validRun.stderr);
+  assert.equal(JSON.parse(validRun.stdout).hasAgentsMd, true);
 });

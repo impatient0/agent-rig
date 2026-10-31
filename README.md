@@ -52,7 +52,7 @@ rig install --detected
 
 What `rig install` configures:
 - **CLI Binary (`~/.local/bin/rig`):**
-  Symlinks `~/.local/bin/rig` to `bin/rig.mjs` so `rig` remains on your `PATH` even if you switch Node versions in `nvm` later.
+  Installs an executable shell wrapper at `~/.local/bin/rig` with resolved Node runtime execution and fail-safe diagnostics advising `rig update` if Node is relocated.
 - **Antigravity (`~/.gemini/config/`):**
   Registers `agent-rig` in `~/.gemini/config/plugins.json` and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 7 skills under `skills/`, and `hooks.json` with dynamic Node runtime resolution across every workspace with symlinked `hooks/`.
 - **Claude Code (`~/.claude/`):**

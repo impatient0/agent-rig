@@ -13,8 +13,9 @@ Do not gold-plate, add speculative abstractions, or refactor adjacent code outsi
 
 By default, parallel agent sessions never share a working tree:
 
-1. **Root checkout stays parked on a detached `HEAD` at `main`** (`rig detach` or `git switch --detach main`) and is never edited directly.
-   `hooks/guard-main-checkout-edits.mjs` and `scripts/git-hooks/pre-commit` enforce this mechanically.
+1. **Root checkout stays attached to `main` as a merge-only trunk** and is never edited directly.
+   `hooks/guard-main-checkout-edits.mjs` blocks direct file edits, and `scripts/git-hooks/pre-commit` ensures only verified merge commits land there.
+   Standard operations (`git pull`, `git status`) work natively in the root checkout.
 2. **Work happens in a linked git worktree** on a `<type>/<slug>` branch (`feature/<slug>`, `fix/<slug>`, `docs/<slug>`, `chore/<slug>`):
    - When dispatching subagents, spawn each Worker in an isolated worktree using the harness's native worktree-isolation option (or create a worktree under `.worktrees/<slug>`).
    - When working directly in a session, enter a linked worktree via the harness's native worktree tool or `git worktree add .worktrees/<slug> -b <type>/<slug>` before editing any file.

@@ -34,8 +34,8 @@ Written instructions in `AGENTS.md` telling sessions to work in a linked git wor
 
 **Fix:**
 1. `hooks/guard-main-checkout-edits.mjs` intercepts file-edit tools (`edit_file`/`write_file` in Antigravity, `Edit`/`Write` in Claude Code) before the file is touched and returns the exact worktree setup command.
-2. `scripts/git-hooks/pre-commit` and `scripts/git-hooks/pre-merge-commit` refuse commits or merges in the root checkout even if an edit was made through a shell command.
-3. Parking the root checkout on a detached `HEAD` at `main` (`rig detach`) allows linked worktrees to temporarily check out `main` as an atomic mutex lock during [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md).
+2. `scripts/git-hooks/pre-commit` enforces that the root checkout only accepts merge commits onto `main` (and the initial commit on an unborn repo), while refusing direct edits and non-merge commits. ~~\`scripts/git-hooks/pre-merge-commit\`~~ was removed because verified merges now happen cleanly in the root checkout rather than inside a worktree.
+3. Keeping the root checkout attached to `main` as a merge-only trunk allows standard operations (`git pull`, `git status`, `git branch -d`) to work natively without detached-`HEAD` friction, while [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md) merges into `main` directly in the root checkout.
 
 ---
 

@@ -7,7 +7,6 @@
 //   rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]
 //   rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
 //   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force]
-//   rig detach [<target-dir>]
 //   rig check-docs [<target-dir>]
 //   rig reflow-docs [<target-dir>] [--check]
 //   rig status [<target-dir>]
@@ -638,6 +637,10 @@ export function installRig({
 
   writeRigState(homeDir, { installedHarnesses: selectedIds, installedSkills: currentSkills });
 
+  if (existsSync(path.join(rigRoot, '.git'))) {
+    attachMainCheckout(rigRoot);
+  }
+
   return {
     discovered,
     installedHarnesses: selectedIds,
@@ -656,6 +659,13 @@ export function updateRepo(targetDir) {
   const dir = path.resolve(targetDir);
   const copied = [];
   const skipped = [];
+  const removed = [];
+
+  const legacyPreMerge = path.join(dir, 'scripts/git-hooks/pre-merge-commit');
+  if (existsSync(legacyPreMerge)) {
+    rmSync(legacyPreMerge, { force: true });
+    removed.push(legacyPreMerge);
+  }
 
   if (existsSync(path.join(dir, 'scripts/git-hooks'))) {
     copyFileSafe(path.join(RIG_ROOT, 'scripts/git-hooks/pre-commit'), path.join(dir, 'scripts/git-hooks/pre-commit'), {
@@ -664,11 +674,6 @@ export function updateRepo(targetDir) {
       skipped,
       executable: true,
     });
-    copyFileSafe(
-      path.join(RIG_ROOT, 'scripts/git-hooks/pre-merge-commit'),
-      path.join(dir, 'scripts/git-hooks/pre-merge-commit'),
-      { force: true, copied, skipped, executable: true },
-    );
   }
 
   // If the repo was initialized with --self-contained, refresh static rig assets without touching AGENTS.md or docs/
@@ -725,7 +730,8 @@ export function updateRepo(targetDir) {
     }
   }
 
-  return { dir, copied };
+  const attachRes = attachMainCheckout(dir);
+  return { dir, copied, removed, attachRes };
 }
 
 export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_ROOT } = {}) {
@@ -749,6 +755,10 @@ export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_R
   }
 
   const updatedRepos = reposToUpdate.map((r) => updateRepo(r));
+
+  if (existsSync(path.join(rigRoot, '.git'))) {
+    attachMainCheckout(rigRoot);
+  }
 
   return {
     ...globalRes,
@@ -908,40 +918,6 @@ async function promptForHarnesses(discovered) {
   }
 }
 
-export function detachMainCheckout(targetDir, { reanchorToMain = false } = {}) {
-  const dir = path.resolve(targetDir);
-  if (!existsSync(path.join(dir, '.git'))) {
-    return { detached: false, status: 'not-a-git-repo' };
-  }
-  const hasHead = spawnSync('git', ['-C', dir, 'rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' });
-  if (hasHead.status !== 0) {
-    return { detached: false, status: 'no-commits' };
-  }
-  const branchRes = spawnSync('git', ['-C', dir, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8' });
-  const currentBranch = branchRes.status === 0 ? branchRes.stdout.trim() : null;
-
-  // Untracked files never block `git switch --detach`, so only tracked changes count as dirty here;
-  // otherwise freshly scaffolded rig files would keep the main checkout attached to `main`.
-  const statusRes = spawnSync('git', ['-C', dir, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' });
-  if (statusRes.stdout.trim().length > 0) {
-    return { detached: false, status: 'dirty', previousBranch: currentBranch };
-  }
-
-  if (!currentBranch && !reanchorToMain) {
-    return { detached: true, status: 'already-detached' };
-  }
-
-  const targetRef = reanchorToMain ? 'main' : 'HEAD';
-  const sw = spawnSync('git', ['-C', dir, 'switch', '--detach', targetRef], { encoding: 'utf8' });
-  if (sw.status !== 0) {
-    const fallback = spawnSync('git', ['-C', dir, 'switch', '--detach'], { encoding: 'utf8' });
-    if (fallback.status !== 0) {
-      return { detached: false, status: 'switch-failed', error: fallback.stderr };
-    }
-  }
-  return { detached: true, status: 'detached', previousBranch: currentBranch };
-}
-
 function gitOut(dir, args) {
   const res = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
   return res.status === 0 ? res.stdout.trim() : null;
@@ -963,6 +939,40 @@ export function worktreeInfo(dir) {
     hasCommits: gitOut(dir, ['rev-parse', '--verify', '-q', 'HEAD']) !== null,
     mainCheckout: first ? first[1] : dir,
   };
+}
+
+export function attachMainCheckout(targetDir) {
+  const dir = path.resolve(targetDir);
+  const info = worktreeInfo(dir);
+  if (!info.isRepo) {
+    return { attached: false, status: 'not-a-git-repo' };
+  }
+  if (!info.hasCommits) {
+    return { attached: false, status: 'no-commits' };
+  }
+  const mainDir = info.mainCheckout || dir;
+  const branchRes = spawnSync('git', ['-C', mainDir, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8' });
+  const currentBranch = branchRes.status === 0 ? branchRes.stdout.trim() : null;
+  if (currentBranch) {
+    return { attached: true, status: 'already-attached', branch: currentBranch };
+  }
+
+  // Untracked files never block `git switch`, so only tracked changes count as dirty here;
+  // otherwise freshly scaffolded rig files would block re-attaching to main.
+  const statusRes = spawnSync('git', ['-C', mainDir, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' });
+  if (statusRes.stdout.trim().length > 0) {
+    return { attached: false, status: 'dirty' };
+  }
+
+  let sw = spawnSync('git', ['-C', mainDir, 'switch', '-q', 'main'], { encoding: 'utf8' });
+  if (sw.status !== 0) {
+    sw = spawnSync('git', ['-C', mainDir, 'switch', '-q', 'master'], { encoding: 'utf8' });
+    if (sw.status !== 0) {
+      return { attached: false, status: 'switch-failed', error: sw.stderr.trim() };
+    }
+    return { attached: true, status: 'attached', branch: 'master' };
+  }
+  return { attached: true, status: 'attached', branch: 'main' };
 }
 
 // Worktree hygiene for .gitignore: `.worktrees/` is ignored, and a `node_modules/` entry loses its
@@ -1065,11 +1075,6 @@ export function initRepo(
       skipped,
       executable: true,
     });
-    copyFileSafe(
-      path.join(RIG_ROOT, 'scripts/git-hooks/pre-merge-commit'),
-      path.join(dir, 'scripts/git-hooks/pre-merge-commit'),
-      { force, copied, skipped, executable: true },
-    );
     if (existsSync(path.join(dir, '.git'))) {
       const cfg = spawnSync('git', ['-C', dir, 'config', 'core.hooksPath', 'scripts/git-hooks']);
       hooksConfigured = cfg.status === 0;
@@ -1212,9 +1217,9 @@ export function initRepo(
     }
   }
 
-  const worktreeHead = worktrees && where.isRepo
-    ? detachMainCheckout(mainCheckout, { reanchorToMain: false })
-    : { detached: false, status: worktrees ? 'not-a-git-repo' : 'skipped' };
+  const mainCheckoutHead = worktrees && where.isRepo
+    ? attachMainCheckout(mainCheckout)
+    : { attached: false, status: worktrees ? 'not-a-git-repo' : 'skipped' };
 
   return {
     dir,
@@ -1223,7 +1228,7 @@ export function initRepo(
     merged,
     staged,
     hooksConfigured,
-    worktreeHead,
+    mainCheckoutHead,
     initWorktree,
     hasCommits: where.hasCommits,
   };
@@ -1405,24 +1410,13 @@ async function main() {
     }
     if (res.initWorktree) {
       console.log(
-        `  scaffolded in linked worktree ${res.initWorktree.path} on ${res.initWorktree.branch} (the main checkout refuses commits).`,
+        `  scaffolded in linked worktree ${res.initWorktree.path} on ${res.initWorktree.branch} (the main checkout only accepts merge commits).`,
       );
       console.log(`  next: review, git -C ${res.initWorktree.path} commit, then merge via skills/merge-to-main/SKILL.md.`);
-    } else if (worktrees && res.worktreeHead.status === 'no-commits') {
-      console.log('  note: the repository has no commits yet, so the main checkout cannot be parked.');
-      console.log('  next: git commit --no-verify -m "chore: initial commit" (the one commit allowed on main), then rig detach.');
+    } else if (worktrees && res.mainCheckoutHead.status === 'no-commits') {
+      console.log('  note: the repository has no commits yet.');
+      console.log('  next: git commit -m "chore: initial commit" (allowed on an unborn repo), then work in linked worktrees.');
     }
-    if (res.worktreeHead.status === 'dirty') {
-      console.log('  note: the main checkout has uncommitted tracked changes; commit or stash them, then run "rig detach".');
-    }
-    return;
-  }
-
-  if (cmd === 'detach') {
-    const pos = args.slice(1).find((a) => !a.startsWith('-')) ?? process.cwd();
-    const res = detachMainCheckout(pos, { reanchorToMain: true });
-    console.log(`rig detach: ${res.status}`);
-    if (!res.detached && res.status === 'dirty') process.exit(1);
     return;
   }
 
@@ -1457,7 +1451,6 @@ async function main() {
   rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]
   rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force]
-  rig detach [<target-dir>]
   rig check-docs [<target-dir>]
   rig reflow-docs [<target-dir>] [--check]
   rig status [<target-dir>]`);

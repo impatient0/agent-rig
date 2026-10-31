@@ -17,7 +17,6 @@ function makeRepoWithWorktree() {
   writeFileSync(path.join(root, 'index.js'), 'export const x = 1;\n');
   git('add', 'index.js');
   git('commit', '-qm', 'init');
-  git('switch', '--detach', 'main');
   const wt = path.join(root, '.worktrees', 'feat-a');
   git('worktree', 'add', '-q', '-b', 'feature/feat-a', wt, 'main');
   return { root, wt, cleanup: () => rmSync(root, { recursive: true, force: true }) };

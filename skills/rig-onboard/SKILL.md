@@ -43,7 +43,7 @@ the user decides whether the global rule wins or the project opts out (`rig init
 ## Step 2 — Worktree & Mechanical Init
 
 1. Run `rig init <repo>` on the main checkout.
-   In a repository with history it creates the linked worktree `.worktrees/rig-init` on `chore/rig-init`, scaffolds and stages everything there (git hooks, `.gitignore` worktree hygiene, the `AGENTS.md` stub, the backlog doc, and ADR 0001 when missing), symlinks `node_modules`, and parks the main checkout on a detached `HEAD`.
+   In a repository with history it creates the linked worktree `.worktrees/rig-init` on `chore/rig-init`, scaffolds and stages everything there (git hooks, `.gitignore` worktree hygiene, the `AGENTS.md` stub, the backlog doc, and ADR 0001 when missing), symlinks `node_modules`, and leaves the main checkout attached to `main`.
 2. Do all remaining work inside that worktree.
 3. Commit the scaffolding as its own Conventional Commit before the semantic work.
 

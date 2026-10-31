@@ -233,16 +233,17 @@ function stateFilePath(homeDir = homedir()) {
 
 export function readRigState(homeDir = homedir()) {
   const p = stateFilePath(homeDir);
-  if (!existsSync(p)) return { installedHarnesses: [], initializedRepos: [], installedSkills: [] };
+  if (!existsSync(p)) return { installedHarnesses: [], initializedRepos: [], installedSkills: [], nodeBin: null };
   try {
     const raw = JSON.parse(readFileSync(p, 'utf8'));
     return {
       installedHarnesses: Array.isArray(raw.installedHarnesses) ? raw.installedHarnesses : [],
       initializedRepos: Array.isArray(raw.initializedRepos) ? raw.initializedRepos : [],
       installedSkills: Array.isArray(raw.installedSkills) ? raw.installedSkills : [],
+      nodeBin: typeof raw.nodeBin === 'string' ? raw.nodeBin : null,
     };
   } catch {
-    return { installedHarnesses: [], initializedRepos: [], installedSkills: [] };
+    return { installedHarnesses: [], initializedRepos: [], installedSkills: [], nodeBin: null };
   }
 }
 
@@ -258,6 +259,7 @@ export function writeRigState(homeDir, patch) {
     installedSkills: patch.installedSkills
       ? [...new Set([...current.installedSkills, ...patch.installedSkills])]
       : current.installedSkills,
+    nodeBin: patch.nodeBin !== undefined ? patch.nodeBin : current.nodeBin,
   };
   const p = stateFilePath(homeDir);
   mkdirSync(path.dirname(p), { recursive: true });
@@ -367,6 +369,19 @@ export function buildHookCommand(scriptPath, args = '', { nodeBin = resolveNodeB
   const argsSuffix = args ? ` ${args}` : '';
   const quotedScript = scriptPath.startsWith('"') && scriptPath.endsWith('"') ? scriptPath : `"${scriptPath}"`;
   return `NODE="${nodeBin}"; if [ ! -x "$NODE" ] && ! command -v "$NODE" >/dev/null 2>&1; then echo "agent-rig: Node runtime not found at '$NODE'. Run 'rig update' in your terminal to re-point hooks." >&2; exit 1; fi; exec "$NODE" ${quotedScript}${argsSuffix}`;
+}
+
+export function buildRigWrapperScript(rigScriptPath, { nodeBin = resolveNodeBinary() } = {}) {
+  const quotedScript =
+    rigScriptPath.startsWith('"') && rigScriptPath.endsWith('"') ? rigScriptPath : `"${rigScriptPath}"`;
+  return `#!/bin/sh
+NODE="${nodeBin}"
+if [ ! -x "$NODE" ] && ! command -v "$NODE" >/dev/null 2>&1; then
+  echo "agent-rig: Node runtime not found at '$NODE'. Run 'rig update' in your terminal to re-point." >&2
+  exit 1
+fi
+exec "$NODE" ${quotedScript} "$@"
+`;
 }
 
 export function hydrateAntigravityHooksJson(rawJsonOrObj, { nodeBin = resolveNodeBinary() } = {}) {
@@ -675,7 +690,7 @@ export function installRig({
   detectedOnly = false,
   force = false,
   rigRoot = RIG_ROOT,
-  nodeBin = resolveNodeBinary(),
+  nodeBin = null,
 } = {}) {
   ensureRigConfig(rigRoot);
   const discovered = detectHarnesses(homeDir);
@@ -689,6 +704,7 @@ export function installRig({
   }
 
   const state = readRigState(homeDir);
+  const resolvedNodeBin = nodeBin || state.nodeBin || resolveNodeBinary();
   const currentSkills = existsSync(path.join(rigRoot, 'skills')) ? readdirSync(path.join(rigRoot, 'skills')) : [];
   const obsoleteSkills = (state.installedSkills || []).filter((s) => !currentSkills.includes(s));
 
@@ -702,17 +718,35 @@ export function installRig({
   mkdirSync(localBinDir, { recursive: true });
   pruneDanglingRigSymlinks(localBinDir, pruned);
   const localBinRig = path.join(localBinDir, 'rig');
-  linkSafe(path.join(rigRoot, 'bin/rig.mjs'), localBinRig, { force, linked, skipped });
+  const rigWrapperContent = buildRigWrapperScript(path.join(rigRoot, 'bin/rig.mjs'), { nodeBin: resolvedNodeBin });
+  try {
+    const existing = existsSync(localBinRig) && !isSymlink(localBinRig) ? readFileSync(localBinRig, 'utf8') : null;
+    if (existing !== rigWrapperContent) {
+      if (existsSync(localBinRig) || isSymlink(localBinRig)) {
+        rmSync(localBinRig, { force: true, recursive: true });
+      }
+      writeFileSync(localBinRig, rigWrapperContent, { encoding: 'utf8', mode: 0o755 });
+      chmodSync(localBinRig, 0o755);
+      updated.push(localBinRig);
+    } else {
+      skipped.push(localBinRig);
+    }
+  } catch {
+    rmSync(localBinRig, { force: true, recursive: true });
+    writeFileSync(localBinRig, rigWrapperContent, { encoding: 'utf8', mode: 0o755 });
+    chmodSync(localBinRig, 0o755);
+    updated.push(localBinRig);
+  }
 
   for (const id of selectedIds) {
-    if (id === 'antigravity') installForAntigravity(homeDir, { force, hydrated, linked, skipped, updated, pruned, rigRoot, nodeBin });
-    else if (id === 'claude') installForClaude(homeDir, { force, hydrated, linked, skipped, updated, pruned, rigRoot, obsoleteSkills, nodeBin });
+    if (id === 'antigravity') installForAntigravity(homeDir, { force, hydrated, linked, skipped, updated, pruned, rigRoot, nodeBin: resolvedNodeBin });
+    else if (id === 'claude') installForClaude(homeDir, { force, hydrated, linked, skipped, updated, pruned, rigRoot, obsoleteSkills, nodeBin: resolvedNodeBin });
     else if (id === 'codex') installForCodex(homeDir, { force, hydrated, skipped, pruned, rigRoot, obsoleteSkills });
     else if (id === 'cursor') installForCursor(homeDir, { force, hydrated, skipped, pruned, rigRoot, obsoleteSkills });
     else throw new Error(`Unknown harness id: ${id}`);
   }
 
-  writeRigState(homeDir, { installedHarnesses: selectedIds, installedSkills: currentSkills });
+  writeRigState(homeDir, { installedHarnesses: selectedIds, installedSkills: currentSkills, nodeBin: resolvedNodeBin });
 
   if (existsSync(path.join(rigRoot, '.git'))) {
     attachMainCheckout(rigRoot);
@@ -811,8 +845,9 @@ export function updateRepo(targetDir) {
   return { dir, copied, removed, attachRes };
 }
 
-export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_ROOT, nodeBin = resolveNodeBinary() } = {}) {
+export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_ROOT, nodeBin = null } = {}) {
   const state = readRigState(homeDir);
+  const resolvedNodeBin = nodeBin || resolveNodeBinary();
   const harnesses =
     state.installedHarnesses.length > 0
       ? state.installedHarnesses
@@ -820,7 +855,7 @@ export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_R
           .filter((d) => d.detected)
           .map((d) => d.id);
 
-  const globalRes = installRig({ homeDir, harnesses, force: false, rigRoot, nodeBin });
+  const globalRes = installRig({ homeDir, harnesses, force: false, rigRoot, nodeBin: resolvedNodeBin });
 
   const reposToUpdate = [];
   if (repoDir) {
@@ -1127,10 +1162,13 @@ export function initRepo(
     { force, copied, skipped },
   );
 
+  const mainCheckout = where.isRepo ? where.mainCheckout : requestedDir;
+  const projectName = path.basename(mainCheckout);
+
   if (!existsSync(path.join(dir, 'README.md'))) {
     writeFileSync(
       path.join(dir, 'README.md'),
-      '# ' + path.basename(dir) + '\n\nSee [AGENTS.md](AGENTS.md) and [docs/backlog.md](docs/backlog.md).\n',
+      '# ' + projectName + '\n\nSee [AGENTS.md](AGENTS.md) and [docs/backlog.md](docs/backlog.md).\n',
       'utf8',
     );
     copied.push(path.join(dir, 'README.md'));
@@ -1276,7 +1314,6 @@ export function initRepo(
     });
   }
 
-  const mainCheckout = where.isRepo ? where.mainCheckout : requestedDir;
   if (homeDir) {
     writeRigState(homeDir, { initializedRepos: [mainCheckout] });
   }

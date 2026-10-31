@@ -345,6 +345,70 @@ function linkSafe(src, dest, { force = false, linked = [], skipped = [] } = {}) 
   return true;
 }
 
+export const DEFAULT_SYSTEM_PATH =
+  process.platform === 'win32'
+    ? (process.env.PATH || '')
+    : '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin';
+
+export function resolveNodeBinary({
+  execPath = process.execPath,
+  systemPath = DEFAULT_SYSTEM_PATH,
+} = {}) {
+  const checkCmd = process.platform === 'win32' ? 'where node' : 'command -v node';
+  const res = spawnSync(checkCmd, {
+    shell: true,
+    env: { ...process.env, PATH: systemPath },
+    stdio: 'ignore',
+  });
+  return res.status === 0 ? 'node' : execPath;
+}
+
+export function buildHookCommand(scriptPath, args = '', { nodeBin = resolveNodeBinary() } = {}) {
+  const argsSuffix = args ? ` ${args}` : '';
+  const quotedScript = scriptPath.startsWith('"') && scriptPath.endsWith('"') ? scriptPath : `"${scriptPath}"`;
+  return `NODE="${nodeBin}"; if [ ! -x "$NODE" ] && ! command -v "$NODE" >/dev/null 2>&1; then echo "agent-rig: Node runtime not found at '$NODE'. Run 'rig update' in your terminal to re-point hooks." >&2; exit 1; fi; exec "$NODE" ${quotedScript}${argsSuffix}`;
+}
+
+export function hydrateAntigravityHooksJson(rawJsonOrObj, { nodeBin = resolveNodeBinary() } = {}) {
+  const obj = typeof rawJsonOrObj === 'string' ? JSON.parse(rawJsonOrObj) : structuredClone(rawJsonOrObj);
+  for (const [key, section] of Object.entries(obj)) {
+    if (!section || typeof section !== 'object') continue;
+    for (const [event, ruleList] of Object.entries(section)) {
+      if (!Array.isArray(ruleList)) continue;
+      for (const rule of ruleList) {
+        if (!rule || !Array.isArray(rule.hooks)) continue;
+        for (const hook of rule.hooks) {
+          if (hook && hook.type === 'command' && typeof hook.command === 'string') {
+            const rawCmd = hook.command;
+            let script = null;
+            let args = '';
+            if (rawCmd.startsWith('node ')) {
+              const parts = rawCmd.slice(5).trim();
+              const firstSpace = parts.indexOf(' ');
+              if (firstSpace === -1) {
+                script = parts;
+              } else {
+                script = parts.slice(0, firstSpace);
+                args = parts.slice(firstSpace + 1);
+              }
+            } else {
+              const match = rawCmd.match(/exec\s+"\$NODE"\s+"?([^"\s]+)"?(?:\s+(.*))?$/);
+              if (match) {
+                script = match[1];
+                args = match[2] || '';
+              }
+            }
+            if (script) {
+              hook.command = buildHookCommand(script, args, { nodeBin });
+            }
+          }
+        }
+      }
+    }
+  }
+  return obj;
+}
+
 export function mergeClaudeSettings(existing, incoming) {
   const result = structuredClone(existing && typeof existing === 'object' ? existing : {});
   if (!incoming?.hooks || typeof incoming.hooks !== 'object') return result;
@@ -369,10 +433,14 @@ export function mergeClaudeSettings(existing, incoming) {
       }
       if (!Array.isArray(existingGroup.hooks)) existingGroup.hooks = [];
       for (const inHook of inGroup.hooks ?? []) {
-        const already = existingGroup.hooks.some(
-          (h) => h.type === inHook.type && h.command === inHook.command,
-        );
-        if (!already) {
+        const rigScriptMatch = inHook.command.match(/guard-(?:remote-mutation|symlinked-node-modules|main-checkout-edits)\.mjs/);
+        const existingIdx = rigScriptMatch
+          ? existingGroup.hooks.findIndex((h) => h.type === inHook.type && h.command.includes(rigScriptMatch[0]))
+          : existingGroup.hooks.findIndex((h) => h.type === inHook.type && h.command === inHook.command);
+
+        if (existingIdx !== -1) {
+          existingGroup.hooks[existingIdx] = structuredClone(inHook);
+        } else {
           existingGroup.hooks.push(structuredClone(inHook));
         }
       }
@@ -392,7 +460,7 @@ export function mergeAntigravityPluginsJson(existing, pluginContainerDir) {
   return base;
 }
 
-function installForAntigravity(homeDir, { force = false, hydrated = [], linked = [], skipped = [], updated = [], pruned = [], rigRoot = RIG_ROOT }) {
+function installForAntigravity(homeDir, { force = false, hydrated = [], linked = [], skipped = [], updated = [], pruned = [], rigRoot = RIG_ROOT, nodeBin = resolveNodeBinary() } = {}) {
   const configDir = path.join(homeDir, '.gemini', 'config');
   const pluginsDir = path.join(configDir, 'plugins');
   const pluginDir = path.join(pluginsDir, 'agent-rig');
@@ -406,7 +474,15 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
   const resolvedProfile = resolveProfile('antigravity', { rigRoot });
 
   copyFileSafe(path.join(rigRoot, 'plugin.json'), path.join(pluginDir, 'plugin.json'), { force: true, copied: updated });
-  copyFileSafe(path.join(rigRoot, 'hooks.json'), path.join(pluginDir, 'hooks.json'), { force: true, copied: updated });
+
+  const hooksSrcPath = path.join(rigRoot, 'hooks.json');
+  const hooksDestPath = path.join(pluginDir, 'hooks.json');
+  if (existsSync(hooksSrcPath)) {
+    const rawTemplate = readFileSync(hooksSrcPath, 'utf8');
+    const hydratedHooks = hydrateAntigravityHooksJson(rawTemplate, { nodeBin });
+    writeFileSync(hooksDestPath, JSON.stringify(hydratedHooks, null, 2) + '\n', 'utf8');
+    updated.push(hooksDestPath);
+  }
 
   linkSafe(path.join(rigRoot, 'hooks'), path.join(pluginDir, 'hooks'), { force: true, linked, skipped });
 
@@ -463,7 +539,7 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
   updated.push(pluginsJsonPath);
 }
 
-function installForClaude(homeDir, { force = false, hydrated = [], linked = [], skipped = [], updated = [], pruned = [], rigRoot = RIG_ROOT, obsoleteSkills = [] }) {
+function installForClaude(homeDir, { force = false, hydrated = [], linked = [], skipped = [], updated = [], pruned = [], rigRoot = RIG_ROOT, obsoleteSkills = [], nodeBin = resolveNodeBinary() } = {}) {
   const claudeDir = path.join(homeDir, '.claude');
   mkdirSync(claudeDir, { recursive: true });
 
@@ -529,14 +605,14 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
         {
           matcher: 'Bash',
           hooks: [
-            { type: 'command', command: `node "${path.join(claudeDir, 'hooks/guard-remote-mutation.mjs')}" --harness=claude` },
-            { type: 'command', command: `node "${path.join(claudeDir, 'hooks/guard-symlinked-node-modules.mjs')}" --harness=claude` },
+            { type: 'command', command: buildHookCommand(path.join(claudeDir, 'hooks/guard-remote-mutation.mjs'), '--harness=claude', { nodeBin }) },
+            { type: 'command', command: buildHookCommand(path.join(claudeDir, 'hooks/guard-symlinked-node-modules.mjs'), '--harness=claude', { nodeBin }) },
           ],
         },
         {
           matcher: 'Edit|Write',
           hooks: [
-            { type: 'command', command: `node "${path.join(claudeDir, 'hooks/guard-main-checkout-edits.mjs')}" --harness=claude` },
+            { type: 'command', command: buildHookCommand(path.join(claudeDir, 'hooks/guard-main-checkout-edits.mjs'), '--harness=claude', { nodeBin }) },
           ],
         },
       ],
@@ -599,6 +675,7 @@ export function installRig({
   detectedOnly = false,
   force = false,
   rigRoot = RIG_ROOT,
+  nodeBin = resolveNodeBinary(),
 } = {}) {
   ensureRigConfig(rigRoot);
   const discovered = detectHarnesses(homeDir);
@@ -628,8 +705,8 @@ export function installRig({
   linkSafe(path.join(rigRoot, 'bin/rig.mjs'), localBinRig, { force, linked, skipped });
 
   for (const id of selectedIds) {
-    if (id === 'antigravity') installForAntigravity(homeDir, { force, hydrated, linked, skipped, updated, pruned, rigRoot });
-    else if (id === 'claude') installForClaude(homeDir, { force, hydrated, linked, skipped, updated, pruned, rigRoot, obsoleteSkills });
+    if (id === 'antigravity') installForAntigravity(homeDir, { force, hydrated, linked, skipped, updated, pruned, rigRoot, nodeBin });
+    else if (id === 'claude') installForClaude(homeDir, { force, hydrated, linked, skipped, updated, pruned, rigRoot, obsoleteSkills, nodeBin });
     else if (id === 'codex') installForCodex(homeDir, { force, hydrated, skipped, pruned, rigRoot, obsoleteSkills });
     else if (id === 'cursor') installForCursor(homeDir, { force, hydrated, skipped, pruned, rigRoot, obsoleteSkills });
     else throw new Error(`Unknown harness id: ${id}`);
@@ -734,7 +811,7 @@ export function updateRepo(targetDir) {
   return { dir, copied, removed, attachRes };
 }
 
-export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_ROOT } = {}) {
+export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_ROOT, nodeBin = resolveNodeBinary() } = {}) {
   const state = readRigState(homeDir);
   const harnesses =
     state.installedHarnesses.length > 0
@@ -743,7 +820,7 @@ export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_R
           .filter((d) => d.detected)
           .map((d) => d.id);
 
-  const globalRes = installRig({ homeDir, harnesses, force: false, rigRoot });
+  const globalRes = installRig({ homeDir, harnesses, force: false, rigRoot, nodeBin });
 
   const reposToUpdate = [];
   if (repoDir) {

@@ -7,11 +7,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-remote-mutation.mjs\" --harness=claude"
+            "command": "NODE=\"node\"; if [ ! -x \"$NODE\" ] && ! command -v \"$NODE\" >/dev/null 2>&1; then echo \"agent-rig: Node runtime not found at '$NODE'. Run 'rig update' in your terminal to re-point hooks.\" >&2; exit 1; fi; exec \"$NODE\" \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-remote-mutation.mjs\" --harness=claude"
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-symlinked-node-modules.mjs\" --harness=claude"
+            "command": "NODE=\"node\"; if [ ! -x \"$NODE\" ] && ! command -v \"$NODE\" >/dev/null 2>&1; then echo \"agent-rig: Node runtime not found at '$NODE'. Run 'rig update' in your terminal to re-point hooks." >&2; exit 1; fi; exec \"$NODE\" \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-symlinked-node-modules.mjs\" --harness=claude"
           }
         ]
       },
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-main-checkout-edits.mjs\" --harness=claude"
+            "command": "NODE=\"node\"; if [ ! -x \"$NODE\" ] && ! command -v \"$NODE\" >/dev/null 2>&1; then echo \"agent-rig: Node runtime not found at '$NODE'. Run 'rig update' in your terminal to re-point hooks.\" >&2; exit 1; fi; exec \"$NODE\" \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-main-checkout-edits.mjs\" --harness=claude"
           }
         ]
       }

@@ -54,9 +54,9 @@ What `rig install` configures:
 - **CLI Binary (`~/.local/bin/rig`):**
   Symlinks `~/.local/bin/rig` to `bin/rig.mjs` so `rig` remains on your `PATH` even if you switch Node versions in `nvm` later.
 - **Antigravity (`~/.gemini/config/`):**
-  Registers `agent-rig` in `~/.gemini/config/plugins.json` and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 7 skills under `skills/`, and `hooks.json` across every workspace with symlinked `hooks/`.
+  Registers `agent-rig` in `~/.gemini/config/plugins.json` and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 7 skills under `skills/`, and `hooks.json` with dynamic Node runtime resolution across every workspace with symlinked `hooks/`.
 - **Claude Code (`~/.claude/`):**
-  Installs hydrated `skills/` into `~/.claude/skills/`, [`agents/verifier.md`](agents/verifier.md) into `~/.claude/agents/verifier.md`, and `rules/` into `~/.claude/rules/`, symlinks `hooks/` into `~/.claude/hooks/`, and non-destructively merges `PreToolUse` hooks into `~/.claude/settings.json`.
+  Installs hydrated `skills/` into `~/.claude/skills/`, [`agents/verifier.md`](agents/verifier.md) into `~/.claude/agents/verifier.md`, and `rules/` into `~/.claude/rules/`, symlinks `hooks/` into `~/.claude/hooks/`, and non-destructively merges dynamically resolved `PreToolUse` hooks into `~/.claude/settings.json`.
   (Alternatively, inside Claude Code you can run `/plugin marketplace add impatient0/agent-rig` and `/plugin install agent-rig@agent-rig`.)
 - **Codex CLI (`~/.codex/`) & Cursor (`~/.cursor/`):**
   Installs hydrated skills and global `AGENTS.md` rules.

@@ -16,7 +16,7 @@ import {
   runCheckDocs,
   runReflowDocs,
   normalizeGitignore,
-  detachMainCheckout,
+  attachMainCheckout,
   INIT_WORKTREE_BRANCH,
   loadCatalog,
   resolveSubagentModel,
@@ -56,15 +56,21 @@ test('normalizeGitignore ignores .worktrees/ and drops the trailing slash from n
   assert.deepEqual(normalizeGitignore(''), { content: '.worktrees/\n', changed: true });
 });
 
-test('detachMainCheckout parks HEAD even when untracked files are present, but not over tracked edits', () => {
-  const { root, cleanup } = makeRepoWithHistory('rig-detach-');
+test('attachMainCheckout re-attaches a detached clean checkout to main and detects dirty state', () => {
+  const { root, cleanup } = makeRepoWithHistory('rig-attach-');
   try {
-    writeFileSync(path.join(root, 'scratch.txt'), 'untracked\n');
-    assert.equal(detachMainCheckout(root).status, 'detached');
+    // Detach HEAD first
+    spawnSync('git', ['switch', '--detach', 'main'], { cwd: root });
+    assert.equal(attachMainCheckout(root).status, 'attached');
+    assert.equal(spawnSync('git', ['symbolic-ref', '--short', '-q', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(), 'main');
 
-    spawnSync('git', ['switch', '-q', 'main'], { cwd: root });
+    // Already attached returns already-attached
+    assert.equal(attachMainCheckout(root).status, 'already-attached');
+
+    // Detached with tracked edits reports dirty
+    spawnSync('git', ['switch', '--detach', 'main'], { cwd: root });
     writeFileSync(path.join(root, 'app.js'), 'console.log(2);\n');
-    assert.equal(detachMainCheckout(root).status, 'dirty');
+    assert.equal(attachMainCheckout(root).status, 'dirty');
   } finally {
     cleanup();
   }
@@ -83,15 +89,16 @@ test('initRepo on a main checkout with history scaffolds into a linked worktree 
     // Scaffolding lands in the worktree, never in the main checkout.
     assert.ok(existsSync(path.join(wt, 'AGENTS.md')));
     assert.ok(existsSync(path.join(wt, 'scripts/git-hooks/pre-commit')));
+    assert.equal(existsSync(path.join(wt, 'scripts/git-hooks/pre-merge-commit')), false);
     assert.equal(existsSync(path.join(root, 'AGENTS.md')), false);
 
     // The worktree shares node_modules through a symlink, and .gitignore covers both it and .worktrees/.
     assert.ok(lstatSync(path.join(wt, 'node_modules')).isSymbolicLink());
     assert.equal(readFileSync(path.join(wt, '.gitignore'), 'utf8'), 'node_modules\n*.log\n.worktrees/\n');
 
-    // The main checkout is parked detached, and the worktree stays on its branch.
-    assert.equal(res.worktreeHead.status, 'detached');
-    assert.notEqual(git(root, 'symbolic-ref', '-q', 'HEAD').status, 0);
+    // The main checkout stays attached to main, and the worktree stays on its branch.
+    assert.equal(res.mainCheckoutHead.status, 'already-attached');
+    assert.equal(git(root, 'symbolic-ref', '--short', 'HEAD').stdout.trim(), 'main');
     assert.equal(git(wt, 'symbolic-ref', '--short', 'HEAD').stdout.trim(), INIT_WORKTREE_BRANCH);
 
     // Everything written is staged, so the doc linters pass and the next step is a plain commit.
@@ -112,7 +119,7 @@ test('initRepo on a main checkout with history scaffolds into a linked worktree 
   }
 });
 
-test('initRepo targeting a linked worktree scaffolds in place and parks the main checkout', () => {
+test('initRepo targeting a linked worktree scaffolds in place and leaves the main checkout attached', () => {
   const { root, git, cleanup } = makeRepoWithHistory('rig-init-linked-');
   try {
     const wt = path.join(root, '.worktrees/onboard');
@@ -121,7 +128,8 @@ test('initRepo targeting a linked worktree scaffolds in place and parks the main
     assert.equal(res.initWorktree, null);
     assert.equal(res.dir, wt);
     assert.ok(existsSync(path.join(wt, 'AGENTS.md')));
-    assert.equal(res.worktreeHead.status, 'detached');
+    assert.equal(res.mainCheckoutHead.status, 'already-attached');
+    assert.equal(git(root, 'symbolic-ref', '--short', 'HEAD').stdout.trim(), 'main');
     assert.equal(git(wt, 'symbolic-ref', '--short', 'HEAD').stdout.trim(), 'chore/onboard');
   } finally {
     cleanup();
@@ -204,14 +212,16 @@ test('updateRig refreshes repo git hooks without overwriting user-edited AGENTS.
     // User customizes AGENTS.md and docs/backlog.md
     writeFileSync(path.join(repo, 'AGENTS.md'), '# Custom Project Rules\n');
     writeFileSync(path.join(repo, 'docs/backlog.md'), '# Custom Backlog\n');
-    // Simulate an outdated pre-commit hook
+    // Simulate an outdated pre-commit hook and legacy pre-merge-commit
     writeFileSync(path.join(repo, 'scripts/git-hooks/pre-commit'), '#!/bin/sh\n# old\n');
+    writeFileSync(path.join(repo, 'scripts/git-hooks/pre-merge-commit'), '#!/bin/sh\n# legacy\n');
 
     const upd = updateRig({ homeDir: fakeHome });
     assert.equal(upd.updatedRepos.length, 1);
     assert.equal(readFileSync(path.join(repo, 'AGENTS.md'), 'utf8'), '# Custom Project Rules\n');
     assert.equal(readFileSync(path.join(repo, 'docs/backlog.md'), 'utf8'), '# Custom Backlog\n');
-    assert.match(readFileSync(path.join(repo, 'scripts/git-hooks/pre-commit'), 'utf8'), /refusing to commit in the main checkout/);
+    assert.match(readFileSync(path.join(repo, 'scripts/git-hooks/pre-commit'), 'utf8'), /The main checkout only accepts merge commits/);
+    assert.equal(existsSync(path.join(repo, 'scripts/git-hooks/pre-merge-commit')), false);
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });

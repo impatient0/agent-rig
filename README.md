@@ -7,7 +7,7 @@ Extracted from production agentic sessions after measuring where human time and 
 ## Design Stance: Audience of One
 
 This repository is built for its author first and published in case its mechanisms are useful to you.
-If making a rule more universally appealing ever conflicts with keeping the author's own workflow sharp — such as requiring a cold read-only Verifier subagent in [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md) or parking the root git checkout on a detached `HEAD` — universal appeal loses every time.
+If making a rule more universally appealing ever conflicts with keeping the author's own workflow sharp — such as requiring a cold read-only Verifier subagent in [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md) or restricting the root git checkout to merge commits only — universal appeal loses every time.
 Nothing here is a speculative prompt template:
 every hook, skill, and check was added only after a simpler written rule failed in a real session.
 Where a default convention is too heavy for a small project, the CLI provides opt-out flags (`rig init --no-worktrees`) rather than watering down the defaults.
@@ -24,7 +24,7 @@ Where a default convention is too heavy for a small project, the CLI provides op
    Running `rig update` or `rig profile use` re-hydrates your harnesses immediately with any changes.
 2. **Per-Project Layer (`rig init`):**
    Touches a project repository as lightly as possible:
-   sets up git worktree commit/merge hooks (`scripts/git-hooks/`), parks the root checkout on a detached `HEAD` at `main`, and creates a minimal 7-line `AGENTS.md` project-context stub alongside [`docs/backlog.md`](docs/backlog.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
+   sets up git worktree commit hooks (`scripts/git-hooks/`), leaves the root checkout attached to `main` as a merge-only trunk, and creates a minimal 7-line `AGENTS.md` project-context stub alongside [`docs/backlog.md`](docs/backlog.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
 
 ---
 
@@ -61,9 +61,11 @@ What `rig install` configures:
 - **Codex CLI (`~/.codex/`) & Cursor (`~/.cursor/`):**
   Installs hydrated skills and global `AGENTS.md` rules.
 
-To sync newly added skills, subagents, or hook entries into your previously selected harnesses after pulling changes in `agent-rig`:
+To pull updates in `agent-rig`, standard `git pull` works directly in the root checkout;
+run `rig update` afterwards to sync newly added skills, subagents, or hook entries into your previously selected harnesses:
 
 ```bash
+git pull
 rig update
 ```
 
@@ -110,13 +112,13 @@ rig init /path/to/your-project
 ```
 
 What `rig init` does by default:
-1. Copies `scripts/git-hooks/pre-commit` and `scripts/git-hooks/pre-merge-commit` and configures `git config core.hooksPath scripts/git-hooks`.
+1. Copies `scripts/git-hooks/pre-commit` and configures `git config core.hooksPath scripts/git-hooks`.
 2. Creates a minimal project-context `AGENTS.md` (`templates/AGENTS.md`), [`docs/backlog.md`](docs/backlog.md), and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) if they do not exist yet.
-3. Parks the root checkout on a detached `HEAD` at `main` if the working tree is clean (or run `rig detach` after committing the initial files).
+3. Leaves the root checkout attached to `main` as a merge-only trunk.
 
 Flags for `rig init`:
 - `--self-contained` — Also copy `skills/`, `agents/`, `rules/`, `hooks/`, `scripts/check-doc-links.mjs`, and `scripts/reflow-docs.mjs` directly into the repository (useful for team repos or CI).
-- `--no-worktrees` — Skip git worktree hooks and detached-`HEAD` setup for single-checkout repos.
+- `--no-worktrees` — Skip git worktree hooks for single-checkout repos.
 - `--ui` — Also copy `templates/docs/design/mockup-scaffold.html`.
 - `--force` — Overwrite existing files.
 
@@ -158,11 +160,11 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 
 ### 2. Session-Per-Worktree Isolation
 
-1. **Root checkout stays parked on a detached `HEAD` at `main`** (`rig detach`) and is never edited directly.
+1. **Root checkout stays attached to `main` as a merge-only trunk** and is never edited directly.
 2. **Every session or Worker subagent operates in a linked git worktree** on a `<type>/<slug>` branch.
    `hooks/guard-main-checkout-edits.mjs` blocks direct file edits in the root checkout, and `scripts/git-hooks/pre-commit` blocks root-checkout commits made via shell commands.
-3. **Merging uses `main` as a mutex lock** via [`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md):
-   the worktree runs `git switch main`, tests the uncommitted merge, commits, and immediately runs `git switch --detach main`.
+3. **Merging happens directly in the root checkout** via [`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md):
+   the root checkout runs `git merge --no-commit --no-ff`, verifies the uncommitted merge state, commits on `main`, and removes the worktree.
 
 ---
 
@@ -184,7 +186,7 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 - `hooks/guard-remote-mutation.mjs` — Prompts (`ask`) before commands that mutate remote or shared state (`ssh`, `scp`, `rsync`, `crontab`, `docker -H`, `git push` to `main`, mutating `gh` calls).
 - `hooks/guard-main-checkout-edits.mjs` — Refuses (`deny`) file edits in the root checkout.
 - `hooks/guard-symlinked-node-modules.mjs` — Refuses (`deny`) `npm`, `pnpm`, `yarn`, and `bun` installs when `node_modules` is a shared symlink (including `cd .worktrees/<slug> && npm install` chains).
-- `scripts/git-hooks/pre-commit` & `scripts/git-hooks/pre-merge-commit` — Refuse commits or merges in the root checkout and direct commits on `main`.
+- `scripts/git-hooks/pre-commit` — Refuses direct non-merge commits in the root checkout and direct commits on `main`.
 
 ### Documentation Graph Linters (`scripts/`)
 - `scripts/check-doc-links.mjs` — Enforces resolved relative links and `#fragment` headings, bans wiki-style refs/globs/bare backticked doc paths, verifies reachability from entry points, checks cited repo paths on disk, and enforces ADR byte budgets.

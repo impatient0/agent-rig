@@ -26,6 +26,11 @@ import {
   useProfile,
   setProfileRole,
   resolveRoleModel,
+  resolveNodeBinary,
+  buildHookCommand,
+  hydrateAntigravityHooksJson,
+  mergeClaudeSettings,
+  DEFAULT_SYSTEM_PATH,
 } from '../bin/rig.mjs';
 
 function makeRepoWithHistory(prefix) {
@@ -173,6 +178,8 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     assert.equal(agyVerifier.includes('{{'), false);
     const pluginsJson = JSON.parse(readFileSync(path.join(fakeHome, '.gemini/config/plugins.json'), 'utf8'));
     assert.equal(pluginsJson.entries.length, 1);
+    const agyHooks = JSON.parse(readFileSync(path.join(agyPluginDir, 'hooks.json'), 'utf8'));
+    assert.match(agyHooks['remote-mutation-guard'].PreToolUse[0].hooks[0].command, /Run 'rig update'/);
 
     // Claude hydrated skills, verifier subagent, and settings.json
     assert.equal(lstatSync(path.join(fakeHome, '.claude/skills/dispatch')).isSymbolicLink(), false);
@@ -184,16 +191,23 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     assert.equal(claudeVerifier.includes('{{'), false);
     const claudeSettings = JSON.parse(readFileSync(path.join(fakeHome, '.claude/settings.json'), 'utf8'));
     assert.equal(claudeSettings.hooks.PreToolUse.length, 2);
+    assert.match(claudeSettings.hooks.PreToolUse[0].hooks[0].command, /Run 'rig update'/);
 
     // Plant a dangling symlink and verify updateRig prunes it without prompting
     const dangling = path.join(fakeHome, '.claude/hooks/removed-hook');
     symlinkSync(path.join(RIG_ROOT, 'hooks/does-not-exist'), dangling);
     assert.ok(lstatSync(dangling).isSymbolicLink());
 
-    const upd = updateRig({ homeDir: fakeHome });
+    const upd = updateRig({ homeDir: fakeHome, nodeBin: '/mock/node/updated' });
     assert.deepEqual(upd.installedHarnesses, ['antigravity', 'claude']);
     assert.deepEqual(upd.pruned, [dangling]);
     assert.equal(existsSync(dangling), false);
+
+    const updatedAgyHooks = JSON.parse(readFileSync(path.join(agyPluginDir, 'hooks.json'), 'utf8'));
+    assert.match(updatedAgyHooks['remote-mutation-guard'].PreToolUse[0].hooks[0].command, /NODE="\/mock\/node\/updated"/);
+    const updatedClaudeSettings = JSON.parse(readFileSync(path.join(fakeHome, '.claude/settings.json'), 'utf8'));
+    assert.equal(updatedClaudeSettings.hooks.PreToolUse[0].hooks.length, 2);
+    assert.match(updatedClaudeSettings.hooks.PreToolUse[0].hooks[0].command, /NODE="\/mock\/node\/updated"/);
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
   }
@@ -416,4 +430,106 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
     rmSync(fakeRig, { recursive: true, force: true });
     rmSync(fakeHome, { recursive: true, force: true });
   }
+});
+
+test('resolveNodeBinary resolves node in systemPath or falls back to execPath', () => {
+  // When systemPath has no node, falls back to execPath
+  assert.equal(
+    resolveNodeBinary({ execPath: '/mock/node/custom', systemPath: '/nonexistent/bin' }),
+    '/mock/node/custom',
+  );
+
+  // When node is available in systemPath, returns 'node'
+  const sysNodeDir = path.dirname(process.execPath);
+  assert.equal(
+    resolveNodeBinary({ execPath: '/mock/node/custom', systemPath: sysNodeDir }),
+    'node',
+  );
+});
+
+test('buildHookCommand wraps node execution with fail-safe error message', () => {
+  const cmd = buildHookCommand('./hooks/guard-remote-mutation.mjs', '--harness=antigravity', {
+    nodeBin: '/fake/node',
+  });
+  assert.match(cmd, /NODE="\/fake\/node"/);
+  assert.match(cmd, /Run 'rig update' in your terminal to re-point hooks\./);
+  assert.match(cmd, /exec "\$NODE" "\.\/hooks\/guard-remote-mutation\.mjs" --harness=antigravity/);
+
+  // Executing the built command in shell when node does not exist exits 1 with the error message
+  const failRun = spawnSync('/bin/sh', ['-c', cmd], { encoding: 'utf8' });
+  assert.equal(failRun.status, 1);
+  assert.match(failRun.stderr, /agent-rig: Node runtime not found at '\/fake\/node'\. Run 'rig update'/);
+
+  // Executing with a valid node (process.execPath) runs successfully
+  const scriptFile = path.join(tmpdir(), `rig-test-hook-${Date.now()}.mjs`);
+  writeFileSync(scriptFile, 'process.stdout.write("OK");');
+  try {
+    const passCmd = buildHookCommand(scriptFile, '', { nodeBin: process.execPath });
+    const passRun = spawnSync('/bin/sh', ['-c', passCmd], { encoding: 'utf8' });
+    assert.equal(passRun.status, 0);
+    assert.equal(passRun.stdout, 'OK');
+  } finally {
+    rmSync(scriptFile, { force: true });
+  }
+});
+
+test('hydrateAntigravityHooksJson updates hooks.json commands with wrapped node binary and is idempotent', () => {
+  const raw = {
+    'remote-mutation-guard': {
+      PreToolUse: [
+        {
+          matcher: 'run_command',
+          hooks: [{ type: 'command', command: 'node ./hooks/guard-remote-mutation.mjs --harness=antigravity' }],
+        },
+      ],
+    },
+  };
+
+  const hydrated = hydrateAntigravityHooksJson(raw, { nodeBin: '/opt/nvm/node' });
+  const hookCmd = hydrated['remote-mutation-guard'].PreToolUse[0].hooks[0].command;
+  assert.match(hookCmd, /NODE="\/opt\/nvm\/node"/);
+  assert.match(hookCmd, /Run 'rig update'/);
+  assert.match(hookCmd, /exec "\$NODE" "\.\/hooks\/guard-remote-mutation\.mjs" --harness=antigravity/);
+
+  // Re-hydrating with a different node path updates the existing wrapped command without nesting
+  const rehydrated = hydrateAntigravityHooksJson(hydrated, { nodeBin: '/new/nvm/node' });
+  const rehookCmd = rehydrated['remote-mutation-guard'].PreToolUse[0].hooks[0].command;
+  assert.match(rehookCmd, /NODE="\/new\/nvm\/node"/);
+  assert.equal(rehookCmd.includes('/opt/nvm/node'), false);
+  assert.equal(rehookCmd.split('Run \'rig update\'').length, 2);
+});
+
+test('mergeClaudeSettings updates existing agent-rig hooks in place when node binary changes', () => {
+  const initialClaude = {
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: 'Bash',
+          hooks: [
+            { type: 'command', command: 'node "/home/user/.claude/hooks/guard-remote-mutation.mjs" --harness=claude' },
+            { type: 'command', command: 'my-custom-check.sh' },
+          ],
+        },
+      ],
+    },
+  };
+
+  const incoming = {
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: 'Bash',
+          hooks: [
+            { type: 'command', command: buildHookCommand('/home/user/.claude/hooks/guard-remote-mutation.mjs', '--harness=claude', { nodeBin: '/new/node' }) },
+          ],
+        },
+      ],
+    },
+  };
+
+  const merged = mergeClaudeSettings(initialClaude, incoming);
+  const bashHooks = merged.hooks.PreToolUse[0].hooks;
+  assert.equal(bashHooks.length, 2);
+  assert.equal(bashHooks[1].command, 'my-custom-check.sh');
+  assert.match(bashHooks[0].command, /NODE="\/new\/node"/);
 });

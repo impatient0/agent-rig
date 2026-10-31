@@ -24,7 +24,7 @@ Self-reviews in the executor's context routinely missed subtle spec drift and om
 **Fix in [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md):**
 Both Antigravity (`Workspace: "share"` + `research` subagent) and Claude Code (`isolation: "worktree"` + `Explore` subagent) support isolated subagents.
 `dispatch` enforces **Executor != Verifier**:
-a fresh, read-only Verifier subagent receives *only* the grounded task brief, `git diff <base>..HEAD`, `Unmandated-call:` trailers, and test output—never the Worker's reasoning.
+a fresh Verifier subagent receives *only* the grounded task brief and commit range, running verification commands directly in the worktree without editing files or receiving the Worker's reasoning.
 
 ---
 

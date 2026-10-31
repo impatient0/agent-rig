@@ -95,5 +95,5 @@ All of the following must hold before handing over:
 ## Step 7 — Cold Verifier, Then Merge Only on Request
 
 1. Commit each step atomically with Conventional Commits and `Unmandated-call:` trailers (for example, how decisions were grouped into ADRs, or which backlog items were judged finished).
-2. Spawn a fresh read-only Verifier per [`agents/verifier.md`](../../agents/verifier.md) with the inventory from Step 1 as the brief, the commit log, the diff, and the gate output.
+2. Spawn a fresh Verifier per [`agents/verifier.md`](../../agents/verifier.md) with command execution enabled to run verification commands live in the worktree, passing the inventory from Step 1 as the brief, base commit SHA, and target worktree path.
 3. Present the attribution table, and merge via [`skills/merge-to-main/SKILL.md`](../merge-to-main/SKILL.md) only when the user asks.

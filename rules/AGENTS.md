@@ -3,8 +3,9 @@
 ## Epistemic Hygiene & Investigation First
 
 Never speculate about code, configuration, or behavior you have not opened and read.
-Before proposing a fix, state the root cause and cite the exact file and line that proves it.
-If a requirement has genuine ambiguity that changes data structures, public interfaces, or user-visible behavior, stop and ask a brief, direct question before writing code.
+During direct interactive pairing, state the root cause and cite the exact file and line that proves it before proposing or executing a fix.
+When preparing tasks for autonomous delegation, ground requirements against live core files and existing ADRs until zero open product, UX, or architectural decisions remain before writing a task brief.
+If a requirement has genuine ambiguity that changes data structures, public interfaces, runtime schemas, or user-visible behavior, stop and ask a brief, direct question before writing code.
 Do not gold-plate, add speculative abstractions, or refactor adjacent code outside the task scope.
 
 ---
@@ -25,29 +26,39 @@ By default, parallel agent sessions never share a working tree:
 
 ---
 
-## Subagent-First Delegation (`dispatch`) & Executor != Verifier
+## Two-Gear Execution Model & `Executor != Verifier`
 
-When multiple tasks or a multi-slice plan are in play, operate as the **Tech Lead** in the main session:
-ground requirements against the codebase, triage, and delegate self-contained implementation slices to isolated Worker subagents rather than executing multi-slice batches inline.
-Follow [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md):
+Work is structured into two explicit, user-selected operational gears while preserving `Executor != Verifier` and session-per-worktree isolation across both gears:
 
-1. **Triage (No All-or-Nothing Refusal):**
-   Ground candidate items against the codebase and split them into **Bucket 1 (Dispatch Now)** (passes Gate A non-UI and Gate B spec clarity) and **Bucket 2 (Ask User First)**.
-   Dispatch Bucket 1 Workers immediately in the background while asking the user the concrete questions for Bucket 2.
-2. **Executor != Verifier:**
-   An agent that wrote a diff must never be the sole verifier of that diff.
-   Before accepting or merging any Worker branch, spawn a fresh **Verifier** subagent governed by [`agents/verifier.md`](../agents/verifier.md) with command execution enabled to run the verification gate live in the worktree without editing files.
-3. **Execution Tiers & Subagent Model Selection:**
-   Work is structured across four canonical execution tiers governed by the active profile `{{RIG_PROFILE}}`:
-   - **`architect`** (`{{MODEL_ARCHITECT}}`, effort `{{EFFORT_ARCHITECT}}`):
-     Main session / Tech Lead, triage, backlog auditing ([`skills/backlog-audit/SKILL.md`](../skills/backlog-audit/SKILL.md)), doc auditing ([`skills/doc-audit/SKILL.md`](../skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](../skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
-   - **`worker`** (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`):
-     Isolated implementation subagents running in linked worktrees.
-   - **`verifier`** (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`):
-     Cold audit subagent governed by [`agents/verifier.md`](../agents/verifier.md).
-   - **`utility`** (subagent model `{{SUBAGENT_MODEL_UTILITY}}`, target `{{MODEL_UTILITY}}`, effort `{{EFFORT_UTILITY}}`):
-     Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](../skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
-     Whenever launching a subagent, explicitly pass the tier's resolved subagent model argument (`{{SUBAGENT_MODEL_WORKER}}` for Workers, `{{SUBAGENT_MODEL_VERIFIER}}` for Verifiers, `{{SUBAGENT_MODEL_UTILITY}}` for Utility tasks) rather than defaulting to `inherit`.
+1. **Gear 1 — Interactive Pairing (Default Mode):**
+   The main session operates as a hands-on **Player-Coach** in the `architect` tier.
+   It reads code deeply alongside the user, co-designs domain contracts, algorithms, and interfaces, edits files directly inside a linked git worktree, and commits with `Unmandated-call:` trailers.
+   Before declaring a slice complete or merging to `main`, it must spawn a fresh **Verifier** subagent governed by [`agents/verifier.md`](../agents/verifier.md) with command execution enabled to run the verification gate live in the worktree without editing files.
+2. **Gear 2 — Autonomous Dispatch ([`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md)):**
+   Invoked explicitly when the user requests `/dispatch`, "sweep the backlog", or runs a multi-slice implementation plan.
+   The main session operates as a **Tech Lead Orchestrator**:
+   it grounds candidate items only until the `Open Decisions = 0` boundary, partitions tasks into **Bucket 1 (Dispatch Now)** and **Bucket 2 (Ask User First)**, dispatches isolated **Worker** subagents governed by [`agents/worker.md`](../agents/worker.md) in linked worktrees, and audits each completed Worker branch with a fresh **Verifier** subagent.
+
+### Human-Gated Boundaries (UI & Domain Contracts)
+
+Autonomous subagents may not mutate visual layouts or system contracts without prior human authorization:
+- **UI & Interaction Boundary:**
+  Governed by [`rules/ui-change-gate.md`](../rules/ui-change-gate.md).
+- **Domain & Schema Contract Boundary:**
+  Governed by [`rules/contract-change-gate.md`](../rules/contract-change-gate.md).
+
+### Execution Tiers & Subagent Model Selection
+
+Work is structured across four canonical execution tiers governed by the active profile `{{RIG_PROFILE}}`:
+- **`architect`** (`{{MODEL_ARCHITECT}}`, effort `{{EFFORT_ARCHITECT}}`):
+  Main session / Tech Lead, triage, backlog auditing ([`skills/backlog-audit/SKILL.md`](../skills/backlog-audit/SKILL.md)), doc auditing ([`skills/doc-audit/SKILL.md`](../skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](../skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
+- **`worker`** (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`):
+  Isolated implementation subagents running in linked worktrees governed by [`agents/worker.md`](../agents/worker.md).
+- **`verifier`** (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`):
+  Cold audit subagent governed by [`agents/verifier.md`](../agents/verifier.md).
+- **`utility`** (subagent model `{{SUBAGENT_MODEL_UTILITY}}`, target `{{MODEL_UTILITY}}`, effort `{{EFFORT_UTILITY}}`):
+  Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](../skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
+  Whenever launching a subagent, explicitly pass the tier's resolved subagent model argument (`{{SUBAGENT_MODEL_WORKER}}` for Workers, `{{SUBAGENT_MODEL_VERIFIER}}` for Verifiers, `{{SUBAGENT_MODEL_UTILITY}}` for Utility tasks) rather than defaulting to `inherit`.
 
 ---
 

@@ -592,12 +592,17 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
     }
   }
 
-  for (const rule of ['AGENTS.md', 'ui-change-gate.md']) {
-    const src = path.join(rigRoot, 'rules', rule);
-    const dest = path.join(claudeDir, 'rules', rule);
-    if (existsSync(src)) {
-      writeHydratedFile(src, dest, resolvedProfile);
-      hydrated.push(dest);
+  const rulesDir = path.join(rigRoot, 'rules');
+  if (existsSync(rulesDir)) {
+    for (const rule of readdirSync(rulesDir)) {
+      const src = path.join(rulesDir, rule);
+      const dest = path.join(claudeDir, 'rules', rule);
+      if (rule.endsWith('.md')) {
+        writeHydratedFile(src, dest, resolvedProfile);
+        hydrated.push(dest);
+      } else {
+        copyFileSafe(src, dest, { force: true, copied: hydrated });
+      }
     }
   }
 
@@ -806,10 +811,19 @@ export function updateRepo(targetDir) {
         }
       }
     }
-    writeHydratedFile(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(dir, 'rules/AGENTS.md'), resolvedProfile);
-    copied.push(path.join(dir, 'rules/AGENTS.md'));
-    writeHydratedFile(path.join(RIG_ROOT, 'rules/ui-change-gate.md'), path.join(dir, 'rules/ui-change-gate.md'), resolvedProfile);
-    copied.push(path.join(dir, 'rules/ui-change-gate.md'));
+    const rulesDir = path.join(RIG_ROOT, 'rules');
+    if (existsSync(rulesDir)) {
+      for (const rule of readdirSync(rulesDir)) {
+        const src = path.join(rulesDir, rule);
+        const dest = path.join(dir, 'rules', rule);
+        if (rule.endsWith('.md')) {
+          writeHydratedFile(src, dest, resolvedProfile);
+          copied.push(dest);
+        } else {
+          copyFileSafe(src, dest, { force: true, copied, skipped });
+        }
+      }
+    }
     copyFileSafe(path.join(RIG_ROOT, 'scripts/check-doc-links.mjs'), path.join(dir, 'scripts/check-doc-links.mjs'), {
       force: true,
       copied,
@@ -1223,10 +1237,19 @@ export function initRepo(
         }
       }
     }
-    writeHydratedFile(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(dir, 'rules/AGENTS.md'), resolvedProfile);
-    copied.push(path.join(dir, 'rules/AGENTS.md'));
-    writeHydratedFile(path.join(RIG_ROOT, 'rules/ui-change-gate.md'), path.join(dir, 'rules/ui-change-gate.md'), resolvedProfile);
-    copied.push(path.join(dir, 'rules/ui-change-gate.md'));
+    const rulesDir = path.join(RIG_ROOT, 'rules');
+    if (existsSync(rulesDir)) {
+      for (const rule of readdirSync(rulesDir)) {
+        const src = path.join(rulesDir, rule);
+        const dest = path.join(dir, 'rules', rule);
+        if (rule.endsWith('.md')) {
+          writeHydratedFile(src, dest, resolvedProfile);
+          copied.push(dest);
+        } else {
+          copyFileSafe(src, dest, { force: true, copied, skipped });
+        }
+      }
+    }
     copyFileSafe(path.join(RIG_ROOT, 'scripts/check-doc-links.mjs'), path.join(dir, 'scripts/check-doc-links.mjs'), {
       force,
       copied,
@@ -1296,6 +1319,8 @@ export function initRepo(
       '- **Active backlog** — [docs/backlog.md](docs/backlog.md)',
       '- **Universal Engineering Rules** — [rules/AGENTS.md](rules/AGENTS.md)',
       '- **Human-in-the-Loop UI Gate** — [rules/ui-change-gate.md](rules/ui-change-gate.md)',
+      '- **Human-in-the-Loop Contract Gate** — [rules/contract-change-gate.md](rules/contract-change-gate.md)',
+      '- **Worker Subagent** — [agents/worker.md](agents/worker.md)',
       '- **Cold Verifier Subagent** — [agents/verifier.md](agents/verifier.md)',
       '',
     ].join('\n');

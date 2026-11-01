@@ -195,6 +195,10 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     const agyVerifier = readFileSync(path.join(agyPluginDir, 'agents/verifier.md'), 'utf8');
     assert.match(agyVerifier, /gemini-3-8-flash/);
     assert.equal(agyVerifier.includes('{{'), false);
+    const agyWorker = readFileSync(path.join(agyPluginDir, 'agents/worker.md'), 'utf8');
+    assert.match(agyWorker, /gemini-3-8-flash/);
+    assert.equal(agyWorker.includes('{{'), false);
+    assert.ok(existsSync(path.join(agyPluginDir, 'rules/contract-change-gate.md')));
     const pluginsJson = JSON.parse(readFileSync(path.join(fakeHome, '.gemini/config/plugins.json'), 'utf8'));
     assert.equal(pluginsJson.entries.length, 1);
     const agyHooks = JSON.parse(readFileSync(path.join(agyPluginDir, 'hooks.json'), 'utf8'));
@@ -208,6 +212,10 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     const claudeVerifier = readFileSync(path.join(fakeHome, '.claude/agents/verifier.md'), 'utf8');
     assert.match(claudeVerifier, /model: sonnet/);
     assert.equal(claudeVerifier.includes('{{'), false);
+    const claudeWorker = readFileSync(path.join(fakeHome, '.claude/agents/worker.md'), 'utf8');
+    assert.match(claudeWorker, /model: sonnet/);
+    assert.equal(claudeWorker.includes('{{'), false);
+    assert.ok(existsSync(path.join(fakeHome, '.claude/rules/contract-change-gate.md')));
     const claudeSettings = JSON.parse(readFileSync(path.join(fakeHome, '.claude/settings.json'), 'utf8'));
     assert.equal(claudeSettings.hooks.PreToolUse.length, 2);
     assert.match(claudeSettings.hooks.PreToolUse[0].hooks[0].command, /Run 'rig update'/);
@@ -307,7 +315,7 @@ test('lightweight initRepo scaffolds a clean project that passes rig check-docs 
   }
 });
 
-test('self-contained initRepo bundles skills, verifier subagent, rules, hooks, and linters into the target repo', () => {
+test('self-contained initRepo bundles skills, subagents, rules, hooks, and linters into the target repo', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'rig-init-self-'));
   try {
     spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
@@ -317,6 +325,8 @@ test('self-contained initRepo bundles skills, verifier subagent, rules, hooks, a
     assert.ok(st.skillsPresent.includes('rig-onboard'));
     assert.equal(st.hooksPresent.length, 3);
     assert.ok(existsSync(path.join(dir, 'agents/verifier.md')));
+    assert.ok(existsSync(path.join(dir, 'agents/worker.md')));
+    assert.ok(existsSync(path.join(dir, 'rules/contract-change-gate.md')));
 
     const checkLinks = runCheckDocs(dir);
     assert.equal(checkLinks.status, 0, `${checkLinks.stdout}${checkLinks.stderr}`);
@@ -341,6 +351,7 @@ test('both Antigravity and Claude Code plugin manifests are valid and point to e
   assert.equal(claudePlugin.hooks, './hooks/claude-hooks.json');
   assert.ok(existsSync(path.join(RIG_ROOT, claudePlugin.skills, 'dispatch/SKILL.md')));
   assert.ok(existsSync(path.join(RIG_ROOT, claudePlugin.agents, 'verifier.md')));
+  assert.ok(existsSync(path.join(RIG_ROOT, claudePlugin.agents, 'worker.md')));
   assert.ok(existsSync(path.join(RIG_ROOT, claudePlugin.hooks)));
 });
 

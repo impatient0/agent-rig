@@ -10,23 +10,27 @@ description: >-
 
 # Subagent-First Task Dispatch (`dispatch`)
 
-Run candidate tasks through a 2-layer **Tech Lead → Isolated Worker → Cold Verifier** pipeline so straightforward slices complete in parallel worktrees while ambiguous items are surfaced to the user immediately.
+Execute candidate tasks under **Gear 2 (Autonomous Dispatch)** through a **Tech Lead → Isolated Worker → Cold Verifier** pipeline so straightforward slices complete in parallel worktrees while ambiguous items are surfaced to the user immediately.
 
 ---
 
-## Step 1 — Ground & Triage (Never Refuse a Whole Batch Over One Ambiguous Item)
+## Step 1 — Ground & Triage (The `Open Decisions = 0` Boundary)
 
 Read the candidate items (from [`docs/backlog.md`](../../docs/backlog.md) or the user's prompt) and inspect the live codebase files they touch.
+Explore the codebase **only** until high-level ambiguity is cleared and zero open product, UX, or architectural decisions remain.
 Partition every candidate item into one of two buckets:
 
 1. **Bucket 1 — Dispatch Now (Autonomous Eligible):**
    Passes both gates:
-   - **Gate A (Zero human-gated UI paths):**
-     Does not modify visual layout, styling, or interactive flows governed by [`rules/ui-change-gate.md`](../../rules/ui-change-gate.md).
+   - **Gate A (Zero unapproved human-gated paths):**
+     Does not modify visual layout, styling, interactive flows, or domain/persistence contracts governed by human-in-the-loop gates ([`rules/ui-change-gate.md`](../../rules/ui-change-gate.md), [`rules/contract-change-gate.md`](../../rules/contract-change-gate.md)) without an explicit, approved specification in the task brief.
    - **Gate B (Grounded specification):**
-     Has unambiguous acceptance criteria, known target files, and a deterministic verification command (`npm test`, `pytest`, `cargo test`, etc.).
+     Has unambiguous acceptance criteria, at least one identified existing Core file, and a deterministic verification command (`npm test`, `pytest`, `cargo test`, etc.).
 2. **Bucket 2 — Ask User First:**
-   Requires a product, UX, or architectural decision not answered by existing ADRs or docs.
+   Requires a product, UX, or architectural decision not answered by existing ADRs, or touches a governed contract without prior approval.
+
+**When to stop reading and delegate:**
+The moment remaining investigation is purely linear and deterministic (e.g., tracing internal helper line numbers or local call sites inside a known module), the Tech Lead **must stop reading code**, write the Task Brief, and dispatch the Worker.
 
 **Immediate action after triage:**
 - Dispatch Bucket 1 items (up to **3 slices per wave**) to Worker subagents right away.
@@ -39,31 +43,36 @@ Partition every candidate item into one of two buckets:
 Before spawning a Worker subagent, write a persistent task brief (in the session's Artifact directory or plan file) recording:
 - **Base commit SHA** (`git rev-parse HEAD`).
 - **Slice scope:**
-  Exact files expected to be created or modified.
+  - **Core files (Required, $\ge 1$ existing file):**
+    Existing repository entry points anchoring the slice (proving the Tech Lead grounded the task in live code).
+  - **Suggested files to create (Optional):**
+    Candidate paths for new modules or unit test files.
+- **Human-gated boundary status:**
+  Explicit confirmation that zero unapproved human-gated files ([`rules/ui-change-gate.md`](../../rules/ui-change-gate.md), [`rules/contract-change-gate.md`](../../rules/contract-change-gate.md)) are required, or links to the approved spec/signature.
 - **Invariants & acceptance criteria:**
   Citing the governing ADR or spec section.
 - **Verification command:**
   Exact test and linter command the Worker must pass.
-- **The 5 Stop Triggers** (copied verbatim into the Worker's prompt).
+- **The 5 Stop Triggers** (governed by [`agents/worker.md`](../../agents/worker.md)).
 
 ---
 
 ## Step 3 — Spawn Isolated Worker Subagents
 
 Spawn one Worker subagent per independent Bucket 1 slice in its own isolated git worktree (using the harness's native subagent worktree-isolation mode and background execution, or a dedicated linked worktree under `.worktrees/<slug>` on branch `<type>/<slug>`).
-Workers operate in execution tier `worker` (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`).
+Workers operate in execution tier `worker` (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`) governed by [`agents/worker.md`](../../agents/worker.md).
 
 ### Worker Contract & Five Stop Triggers
 
-Each Worker must stop and report back to the Tech Lead immediately instead of guessing if any of the five triggers fire:
-1. **Human-gated file needed:**
-   Completing the slice requires editing a UI/visual file covered by [`rules/ui-change-gate.md`](../../rules/ui-change-gate.md).
-2. **Spec contradiction or gap:**
-   Live code contradicts the task brief in a way that changes public interfaces, schema, or user-visible behavior.
+Each Worker traces local call sites from the Core files and must stop and report back to the Tech Lead immediately if any of the five triggers fire:
+1. **Human-gated boundary needed:**
+   Completing the slice requires editing files covered by human-gated boundary rules ([`rules/ui-change-gate.md`](../../rules/ui-change-gate.md), [`rules/contract-change-gate.md`](../../rules/contract-change-gate.md)) not authorized in the brief.
+2. **Spec contradiction or architectural fork:**
+   Live code contradicts the brief, or multiple valid designs exist that alter contracts, public interfaces, schemas, or user-visible behavior.
 3. **Unrelated test failure:**
    The baseline test suite fails outside the slice's scope.
 4. **Scope explosion:**
-   The change requires touching more than twice the files listed in the grounded brief or adding a new dependency.
+   The change requires touching more than twice the Core files listed in the brief (or $> 4$ files when 1 Core file was listed), modifying an unrelated subsystem, or adding a new package dependency.
 5. **Two consecutive fix attempts fail:**
    The same test or build error persists after two targeted fix attempts.
 
@@ -81,6 +90,9 @@ If zero unmandated calls were needed, the Worker appends:
 Unmandated-call: none
 ```
 
+Contractual, schema, or behavioral forks must never be resolved via `Unmandated-call:` trailers;
+they require halting under Stop Trigger #2.
+
 ---
 
 ## Step 4 — Cold Verifier Subagent (Executor != Verifier)
@@ -91,7 +103,7 @@ The Verifier must have command execution permissions enabled so it runs `git log
 Instruct the Verifier strictly in prompt not to edit files, stage changes, or create commits.
 Do not act as an execution proxy;
 pass the Verifier **only**:
-1. The grounded task brief from Step 2 (base commit SHA, files in scope, acceptance criteria, and verification command).
+1. The grounded task brief from Step 2 (base commit SHA, Core files, acceptance criteria, and verification command).
 2. The target worktree path.
 
 If the Verifier returns `VERDICT: FAIL`, send the specific `[BLOCKER]` items back to the Worker (up to 1 remediation round) or halt the slice and surface it to the user.

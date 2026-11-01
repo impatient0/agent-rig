@@ -56,3 +56,30 @@ Parses command chains for leading `cd <dir>` segments as well as `--prefix`, `-C
    Hard-wrapping paragraphs at 80 columns splits multi-word phrases across line breaks, breaking `grep` / `rg` searches and turning one-word edits into full-paragraph git diffs.
 2. **Link & reachability graph (`scripts/check-doc-links.mjs`):**
    Unlinked files under `docs/` become invisible to cold sessions, and unverified backticked file paths rot silently when code is moved.
+
+---
+
+## 5. Why Two-Gear Execution and the `Open Decisions = 0` Boundary Exist
+
+### Failure Mode A: The Double-Read Tax
+
+In earlier dispatch designs, [`rules/AGENTS.md`](../rules/AGENTS.md) applied line-level epistemic rules globally, requiring the Tech Lead to cite exact file and line numbers before proposing a change.
+For delegated tasks, this forced the architect tier to mentally solve 85% of the task during triage.
+When the isolated Worker subagent spawned in a fresh context, it had to re-read those exact same files from scratch to implement the fix, paying token costs and latency twice.
+
+### Failure Mode B: The "Manager Who Stopped Coding" Syndrome
+
+Attempting to eliminate the Double-Read Tax by enforcing universal subagent delegation for all tasks ($N=1$) produced an opposite failure mode:
+the Tech Lead was forbidden from inspecting code deeply, burying the actual code two layers away from the user.
+The user was reduced to managing Jira tickets, and models running on lower tiers produced locally optimal diffs that passed tests but degraded overall architectural taste.
+
+### Fix: Two User-Selected Gears & The `Open Decisions = 0` Boundary
+
+`agent-rig` separates execution into two explicit, user-selected operational gears while keeping `Executor != Verifier` invariant across both:
+1. **Gear 1 — Interactive Pairing (Default Mode):**
+   The main session acts as a Player-Coach, inspecting code deeply with the user and writing diffs directly in a linked worktree.
+   Before completing a slice, it spawns a cold Verifier subagent governed by [`agents/verifier.md`](../agents/verifier.md) to audit the diff.
+2. **Gear 2 — Autonomous Dispatch ([`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md)):**
+   Triggered explicitly by the user (`/dispatch` or backlog sweep).
+   The Tech Lead explores only until **`Open Decisions = 0`** (Gate A human gates under `rules/` cleared, Gate B core files and acceptance criteria known).
+   The Tech Lead dispatches an isolated Worker subagent governed by [`agents/worker.md`](../agents/worker.md) to trace line-level root causes under five hard stop triggers.

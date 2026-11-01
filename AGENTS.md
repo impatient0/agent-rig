@@ -4,7 +4,7 @@
 
 - **Test and verification gate** — `npm test` (runs `node --test tests/*.test.mjs`, `scripts/check-doc-links.mjs`, and `scripts/reflow-docs.mjs --check`)
 - **CLI entry point** — `bin/rig.mjs` (`rig install`, `rig update`, `rig profile`, `rig model resolve`, `rig init`, `rig check-docs`, `rig reflow-docs`, `rig status`)
-- **Architecture and empirical rationale** — [`docs/field-notes.md`](docs/field-notes.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md)
+- **Architecture and empirical rationale** — [`docs/field-notes.md`](docs/field-notes.md), [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md), and [`docs/adr/0002-two-gear-execution-and-worker-subagent.md`](docs/adr/0002-two-gear-execution-and-worker-subagent.md)
 - **Active backlog** — [`docs/backlog.md`](docs/backlog.md)
 
 ---
@@ -13,6 +13,8 @@
 
 - **Universal Engineering Rules** — [`rules/AGENTS.md`](rules/AGENTS.md)
 - **Human-in-the-Loop UI Gate** — [`rules/ui-change-gate.md`](rules/ui-change-gate.md)
+- **Human-in-the-Loop Contract Gate** — [`rules/contract-change-gate.md`](rules/contract-change-gate.md)
+- **Isolated Worker Subagent** — [`agents/worker.md`](agents/worker.md)
 - **Cold Verifier Subagent** — [`agents/verifier.md`](agents/verifier.md)
 - **Skills (`skills/`):**
   - [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md) — Triage → Isolated Worker → Cold Verifier execution pipeline

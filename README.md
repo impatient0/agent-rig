@@ -19,7 +19,7 @@ Where a default convention is too heavy for a small project, the CLI provides op
 `agent-rig` separates **how you work across every project** from **what a specific project is about**:
 
 1. **Global Layer (`rig install`):**
-   Installs your universal engineering rules ([`rules/AGENTS.md`](rules/AGENTS.md), [`rules/ui-change-gate.md`](rules/ui-change-gate.md)), all 7 skills (`skills/`), the cold Verifier subagent definition ([`agents/verifier.md`](agents/verifier.md)), and the multi-protocol `PreToolUse` guards (`hooks/`) into your harnesses' global configuration directories (`~/.gemini/config/`, `~/.claude/`, `~/.codex/`, `~/.cursor/`).
+   Installs your universal engineering rules ([`rules/AGENTS.md`](rules/AGENTS.md), [`rules/ui-change-gate.md`](rules/ui-change-gate.md), [`rules/contract-change-gate.md`](rules/contract-change-gate.md)), all 7 skills (`skills/`), the Worker and Verifier subagent definitions ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and the multi-protocol `PreToolUse` guards (`hooks/`) into your harnesses' global configuration directories (`~/.gemini/config/`, `~/.claude/`, `~/.codex/`, `~/.cursor/`).
    Prompts, skills, and agent definitions are statically hydrated with your active model profile from `.rig.local.json` (seeded from [`templates/rig-config.default.json`](templates/rig-config.default.json) and validated by [`templates/rig-config.schema.json`](templates/rig-config.schema.json) using the model catalog [`templates/models.json`](templates/models.json)).
    Running `rig update` or `rig profile use` re-hydrates your harnesses immediately with any changes.
 2. **Per-Project Layer (`rig init`):**
@@ -56,7 +56,7 @@ What `rig install` configures:
 - **Antigravity (`~/.gemini/config/`):**
   Registers `agent-rig` in `~/.gemini/config/plugins.json` and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 7 skills under `skills/`, and `hooks.json` with dynamic Node runtime resolution across every workspace with symlinked `hooks/`.
 - **Claude Code (`~/.claude/`):**
-  Installs hydrated `skills/` into `~/.claude/skills/`, [`agents/verifier.md`](agents/verifier.md) into `~/.claude/agents/verifier.md`, and `rules/` into `~/.claude/rules/`, symlinks `hooks/` into `~/.claude/hooks/`, and non-destructively merges dynamically resolved `PreToolUse` hooks into `~/.claude/settings.json`.
+  Installs hydrated `skills/` into `~/.claude/skills/`, subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)) into `~/.claude/agents/`, and `rules/` into `~/.claude/rules/`, symlinks `hooks/` into `~/.claude/hooks/`, and non-destructively merges dynamically resolved `PreToolUse` hooks into `~/.claude/settings.json`.
   (Alternatively, inside Claude Code you can run `/plugin marketplace add impatient0/agent-rig` and `/plugin install agent-rig@agent-rig`.)
 - **Codex CLI (`~/.codex/`) & Cursor (`~/.cursor/`):**
   Installs hydrated skills and global `AGENTS.md` rules.
@@ -79,7 +79,7 @@ rig update --repo /path/to/your-project
 
 `agent-rig` organizes work across four canonical execution tiers:
 - **`architect`** — Main session / Tech Lead (triage, backlog/doc auditing, repo onboarding, session wrap-up, ADR authoring, and handling Worker stop triggers).
-- **`worker`** — Isolated implementation subagents in [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md).
+- **`worker`** — Isolated implementation subagents in [`agents/worker.md`](agents/worker.md) under [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md).
 - **`verifier`** — Cold audit subagent in [`agents/verifier.md`](agents/verifier.md).
 - **`utility`** — Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
 
@@ -219,9 +219,11 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 ### Universal Engineering Rules (`rules/`)
 - [`rules/AGENTS.md`](rules/AGENTS.md) — Universal agentic engineering rules (investigation first, session-per-worktree isolation, triage & verification, commit trailers, documentation graph invariants).
 - [`rules/ui-change-gate.md`](rules/ui-change-gate.md) — Human-in-the-loop UI change gate (Gate A in `dispatch` triage: visual or interactive changes require a user-approved mockup before implementation).
+- [`rules/contract-change-gate.md`](rules/contract-change-gate.md) — Human-in-the-loop domain & schema contract gate (Gate A in `dispatch` triage: public interfaces, persistence schemas, wire protocols, and state transitions require explicit prior human approval).
 
 ### Skills (`skills/`) & Subagents (`agents/`)
 - [`dispatch`](skills/dispatch/SKILL.md) — Triage → Isolated Worker → Cold Verifier pipeline.
+- [`agents/worker.md`](agents/worker.md) — Isolated Worker subagent prompt, line-level epistemic hygiene, and five hard stop triggers.
 - [`agents/verifier.md`](agents/verifier.md) — Cold Verifier subagent prompt and `VERDICT: PASS | FAIL` checklist (runs tests live, strictly read-only for code).
 - [`wrap-up`](skills/wrap-up/SKILL.md) — End-of-session checkpoint:
   verifies git/worktree cleanliness and test gates, routes undocumented decisions to ADRs or [`docs/backlog.md`](docs/backlog.md), and checks cold-session reachability.

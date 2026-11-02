@@ -90,7 +90,22 @@ export function loadCatalog(rigRoot = RIG_ROOT) {
 }
 
 export function configFilePath(rigRoot = RIG_ROOT) {
-  return path.join(rigRoot, '.rig.local.json');
+  const local = path.join(rigRoot, '.rig.local.json');
+  if (existsSync(local)) return local;
+  try {
+    const res = spawnSync('git', ['-C', rigRoot, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
+      encoding: 'utf8',
+    });
+    if (res.status === 0 && res.stdout.trim()) {
+      const commonDir = res.stdout.trim();
+      const mainCheckout = path.dirname(commonDir);
+      const mainCfg = path.join(mainCheckout, '.rig.local.json');
+      if (existsSync(mainCfg)) return mainCfg;
+    }
+  } catch {
+    // ignore
+  }
+  return local;
 }
 
 export function ensureRigConfig(rigRoot = RIG_ROOT) {
@@ -98,16 +113,19 @@ export function ensureRigConfig(rigRoot = RIG_ROOT) {
   if (!existsSync(p)) {
     const template = path.join(rigRoot, 'templates', 'rig-config.default.json');
     if (existsSync(template)) {
-      mkdirSync(path.dirname(p), { recursive: true });
-      copyFileSync(template, p);
+      try {
+        mkdirSync(path.dirname(p), { recursive: true });
+        copyFileSync(template, p);
+      } catch {
+        return template;
+      }
     }
   }
   return p;
 }
 
 export function loadRigConfig(rigRoot = RIG_ROOT) {
-  ensureRigConfig(rigRoot);
-  const p = configFilePath(rigRoot);
+  const p = ensureRigConfig(rigRoot);
   if (!existsSync(p)) return { activeProfiles: {}, profiles: {} };
   try {
     return JSON.parse(readFileSync(p, 'utf8'));

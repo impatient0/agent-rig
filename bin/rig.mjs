@@ -96,10 +96,28 @@ export function configFilePath(rigRoot = RIG_ROOT) {
 export function ensureRigConfig(rigRoot = RIG_ROOT) {
   const p = configFilePath(rigRoot);
   if (!existsSync(p)) {
+    // Check if running inside a linked worktree whose main checkout already has .rig.local.json
+    try {
+      const res = spawnSync('git', ['-C', rigRoot, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
+        encoding: 'utf8',
+      });
+      if (res.status === 0 && res.stdout.trim()) {
+        const commonDir = res.stdout.trim();
+        const mainCheckout = path.dirname(commonDir);
+        const mainCfg = path.join(mainCheckout, '.rig.local.json');
+        if (existsSync(mainCfg)) return mainCfg;
+      }
+    } catch {
+      // ignore
+    }
     const template = path.join(rigRoot, 'templates', 'rig-config.default.json');
     if (existsSync(template)) {
-      mkdirSync(path.dirname(p), { recursive: true });
-      copyFileSync(template, p);
+      try {
+        mkdirSync(path.dirname(p), { recursive: true });
+        copyFileSync(template, p);
+      } catch {
+        return template;
+      }
     }
   }
   return p;

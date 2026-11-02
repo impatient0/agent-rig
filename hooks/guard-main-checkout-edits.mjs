@@ -10,8 +10,8 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { readHookInput, emitDecision } from './lib/hook-io.mjs';
 
-function existingAncestor(filePath) {
-  let dir = path.dirname(path.resolve(filePath));
+function existingAncestor(absPath) {
+  let dir = path.dirname(absPath);
   while (!existsSync(dir)) {
     const parent = path.dirname(dir);
     if (parent === dir) return null;
@@ -23,38 +23,49 @@ function existingAncestor(filePath) {
 function buildRemediation(harness) {
   if (harness === 'claude') {
     return (
-      'Main checkout is read-only by convention (see AGENTS.md). ' +
+      'Main checkout is read-only for code by convention (see AGENTS.md). ' +
       'Call EnterWorktree first (or spawn a subagent with isolation: "worktree"), ' +
       'rename the branch to <type>/<slug>, and symlink node_modules if present.'
     );
   }
   return (
-    'Main checkout is read-only by convention (see AGENTS.md). ' +
+    'Main checkout is read-only for code by convention (see AGENTS.md). ' +
     'Create a linked git worktree first (e.g. `git worktree add .worktrees/<slug> -b <type>/<slug>` ' +
     'or spawn a subagent with Workspace: "share"), symlink node_modules if present, ' +
     'and target all file edits and commands inside that worktree path.'
   );
 }
 
-export function checkEditTarget(filePath, { harness = 'generic' } = {}) {
+export function isDocFile(filePath, repoRoot) {
+  const rel = path.relative(repoRoot, filePath);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  const normalized = rel.split(path.sep).join('/');
+  return normalized === 'README.md' || normalized.startsWith('docs/');
+}
+
+export function checkEditTarget(filePath, { harness = 'generic', cwd = process.cwd() } = {}) {
   if (typeof filePath !== 'string' || !filePath.trim()) return null;
 
-  const dir = existingAncestor(filePath);
+  const absPath = path.resolve(cwd, filePath);
+  const dir = existingAncestor(absPath);
   if (!dir) return null;
 
   const res = spawnSync(
     'git',
-    ['-C', dir, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'],
+    ['-C', dir, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir', '--show-toplevel'],
     { encoding: 'utf8' },
   );
   if (res.status !== 0) return null;
 
-  const [gitDir, commonDir] = res.stdout.trim().split('\n');
-  if (!gitDir || !commonDir) return null;
+  const [gitDir, commonDir, topLevel] = res.stdout.trim().split('\n');
+  if (!gitDir || !commonDir || !topLevel) return null;
 
   // In a linked worktree, --git-dir is <common>/worktrees/<name>; in the main
   // checkout the two paths are identical.
   if (gitDir !== commonDir) return null;
+
+  // Documentation and backlog files can be edited directly in the main checkout.
+  if (isDocFile(absPath, topLevel)) return null;
 
   return buildRemediation(harness);
 }
@@ -67,7 +78,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
     process.exit(0);
   }
   try {
-    const reason = checkEditTarget(parsed.filePath, { harness: parsed.harness });
+    const reason = checkEditTarget(parsed.filePath, { harness: parsed.harness, cwd: parsed.cwd });
     if (reason) {
       emitDecision(parsed.schema, 'deny', reason);
     } else {

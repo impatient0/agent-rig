@@ -71,6 +71,29 @@ test('pre-commit allows plain git merge with auto-commit in the main checkout', 
   }
 });
 
+test('pre-commit allows doc-only commits on main checkout and rejects mixed commits', () => {
+  const { root, git, cleanup } = makeRiggedRepo();
+  try {
+    // 1. Doc-only commit on main succeeds when reachability and doc format are valid
+    mkdirSync(path.join(root, 'docs'), { recursive: true });
+    writeFileSync(path.join(root, 'docs/backlog.md'), '# Backlog\n\n- Task 1.\n');
+    writeFileSync(path.join(root, 'README.md'), '# App\n\nSee [docs/backlog.md](docs/backlog.md).\n');
+    git(root, 'add', 'README.md', 'docs/backlog.md');
+    const docCommit = git(root, 'commit', '-m', 'docs: update backlog');
+    assert.equal(docCommit.status, 0, docCommit.stderr);
+
+    // 2. Mixed commit (code + doc) on main is refused
+    writeFileSync(path.join(root, 'docs/backlog.md'), '# Backlog\n\n- Task 2.\n');
+    writeFileSync(path.join(root, 'app.js'), 'console.log(99);\n');
+    git(root, 'add', 'docs/backlog.md', 'app.js');
+    const mixedCommit = git(root, 'commit', '-m', 'feat: mixed code and doc commit');
+    assert.notEqual(mixedCommit.status, 0);
+    assert.match(mixedCommit.stderr, /refusing direct commit in the main checkout/);
+  } finally {
+    cleanup();
+  }
+});
+
 test('pre-commit allows initial commit on an unborn repository', () => {
   const unbornDir = mkdtempSync(path.join(tmpdir(), 'rig-unborn-'));
   const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' });

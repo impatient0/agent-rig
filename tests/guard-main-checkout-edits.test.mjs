@@ -34,6 +34,10 @@ test('refuses an edit in the main checkout with harness-appropriate remediation 
     assert.ok(claudeReason);
     assert.match(claudeReason, /EnterWorktree/);
 
+    // Documentation files in the main checkout are permitted
+    assert.equal(checkEditTarget(path.join(root, 'docs/backlog.md'), { harness: 'antigravity' }), null);
+    assert.equal(checkEditTarget(path.join(root, 'README.md'), { harness: 'claude' }), null);
+
     assert.equal(checkEditTarget(path.join(wt, 'index.js'), { harness: 'antigravity' }), null);
     assert.equal(checkEditTarget(path.join(wt, 'src/new-file.js'), { harness: 'claude' }), null);
   } finally {
@@ -56,6 +60,19 @@ test('end-to-end hook binary handles Antigravity edit_file and Claude Edit paylo
       },
     );
     assert.equal(JSON.parse(agyDeny.stdout).decision, 'deny');
+
+    const agyAllowDoc = spawnSync(
+      process.execPath,
+      [HOOK, '--harness=antigravity'],
+      {
+        input: JSON.stringify({
+          workspacePaths: [root],
+          toolCall: { name: 'edit_file', args: { Path: path.join(root, 'docs/backlog.md') } },
+        }),
+        encoding: 'utf8',
+      },
+    );
+    assert.equal(JSON.parse(agyAllowDoc.stdout).decision, 'allow');
 
     const agyAllow = spawnSync(
       process.execPath,

@@ -41,3 +41,35 @@ test('follows a leading cd <worktree> && segment when run_command starts at the 
     cleanup();
   }
 });
+
+test('refuses package manager mutating operations when node_modules is a symlink', () => {
+  const { wt, cleanup } = makeWorktreeWithSymlink();
+  try {
+    assert.ok(checkCommand('npm rm lodash', wt));
+    assert.ok(checkCommand('npm update', wt));
+    assert.ok(checkCommand('pnpm remove lodash', wt));
+    assert.ok(checkCommand('yarn remove lodash', wt));
+    assert.ok(checkCommand('bun remove lodash', wt));
+    assert.ok(checkCommand('npm uninstall lodash', wt));
+    assert.ok(checkCommand('pnpm unlink foo', wt));
+    assert.ok(checkCommand('yarn upgrade', wt));
+    assert.ok(checkCommand('bun update', wt));
+    assert.equal(checkCommand('npm rm -g lodash', wt), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test('handles grouping commands with parentheses around cd and package manager commands', () => {
+  const { base, cleanup } = makeWorktreeWithSymlink();
+  try {
+    assert.ok(checkCommand('(cd .worktrees/slice-1 && npm i)', base));
+    assert.ok(checkCommand('(cd .worktrees/slice-1 && npm install)', base));
+    assert.ok(checkCommand('(cd .worktrees/slice-1 && npm rm lodash)', base));
+    assert.ok(checkCommand('( cd .worktrees/slice-1 && pnpm remove lodash )', base));
+    assert.equal(checkCommand('(cd .worktrees/slice-1 && npm test)', base), null);
+  } finally {
+    cleanup();
+  }
+});
+

@@ -58,11 +58,68 @@ const NPM_VERBS = new Set([
   'isnta',
   'isntal',
   'isntall',
+  'uninstall',
+  'unlink',
+  'remove',
+  'rm',
+  'r',
+  'un',
+  'update',
+  'up',
+  'upgrade',
+  'prune',
+  'dedupe',
+  'rebuild',
+  'rb',
+  'link',
+  'ln',
 ]);
 
-const PNPM_VERBS = new Set(['i', 'install', 'add', 'ci', 'clean-install', 'ic']);
-const YARN_VERBS = new Set(['install', 'add']);
-const BUN_VERBS = new Set(['i', 'install', 'add', 'ci']);
+const PNPM_VERBS = new Set([
+  'i',
+  'install',
+  'add',
+  'ci',
+  'clean-install',
+  'ic',
+  'remove',
+  'rm',
+  'uninstall',
+  'un',
+  'update',
+  'up',
+  'upgrade',
+  'prune',
+  'dedupe',
+  'rebuild',
+  'link',
+  'unlink',
+]);
+
+const YARN_VERBS = new Set([
+  'install',
+  'add',
+  'remove',
+  'upgrade',
+  'upgrade-interactive',
+  'autoclean',
+  'dedupe',
+  'unlink',
+  'link',
+]);
+
+const BUN_VERBS = new Set([
+  'i',
+  'install',
+  'add',
+  'ci',
+  'remove',
+  'rm',
+  'update',
+  'upgrade',
+  'link',
+  'unlink',
+]);
 
 const FLAGS_WITH_VALUE = new Set([
   '-C',
@@ -174,7 +231,7 @@ function parsePmSegment(seg) {
 function splitSegments(cmd) {
   const masked = cmd.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, (m) => ' '.repeat(m.length));
   const cuts = [0];
-  const sepRe = /[;&|\n]+|\$\(|`/g;
+  const sepRe = /\$\(|[;&|\n()]+|`/g;
   let m;
   while ((m = sepRe.exec(masked)) !== null) {
     cuts.push(m.index, m.index + m[0].length);

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // CLI for agent-rig:
 //   rig install [--harnesses antigravity,claude,...] [--detected] [--home <dir>] [--force]
-//   rig update [--home <dir>] [--repo <dir>]
+//   rig update [--home <dir>] [--repo <dir>] [--harness <id>]
 //   rig profile [list] [--json]
 //   rig profile use <profile-name>
 //   rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]
 //   rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
-//   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force]
+//   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force] [--harness <id>]
 //   rig check-docs [<target-dir>]
 //   rig reflow-docs [<target-dir>] [--check]
 //   rig status [<target-dir>]
@@ -73,6 +73,29 @@ export function detectHarnesses(homeDir = homedir()) {
       detected: existsSync(detectPath),
     };
   });
+}
+
+export function detectRepoHarness(targetDir) {
+  if (!targetDir) return null;
+  const dir = path.resolve(targetDir);
+  if (!existsSync(dir)) return null;
+
+  if (existsSync(path.join(dir, '.gemini'))) return 'antigravity';
+  if (existsSync(path.join(dir, '.claude')) || existsSync(path.join(dir, '.claude-plugin'))) return 'claude';
+  if (existsSync(path.join(dir, '.codex'))) return 'codex';
+  if (existsSync(path.join(dir, '.cursor'))) return 'cursor';
+
+  const localCfgPath = path.join(dir, '.rig.local.json');
+  if (existsSync(localCfgPath)) {
+    try {
+      const cfg = JSON.parse(readFileSync(localCfgPath, 'utf8'));
+      const activeHarnesses = Object.keys(cfg.activeProfiles || {});
+      if (activeHarnesses.length === 1) return activeHarnesses[0];
+    } catch {
+      // ignore
+    }
+  }
+  return null;
 }
 
 export const ROLES = ['architect', 'worker', 'verifier', 'utility'];
@@ -216,16 +239,44 @@ export function hydrateText(templateText, resolvedProfile) {
   return text;
 }
 
-export function writeHydratedFile(srcPath, destPath, resolvedProfile, { executable = false } = {}) {
+export function rewriteDocLinks(text, { harness = null, isGlobal = false, destPath = null } = {}) {
+  let result = text;
+  if (isGlobal) {
+    result = result.replaceAll('../../docs/', 'docs/');
+  }
+  if (harness === 'codex') {
+    const isDirectAgentsMd = destPath && path.basename(destPath) === 'AGENTS.md' && !/[\\/]rules[\\/]/.test(destPath);
+    if (isDirectAgentsMd) {
+      result = result.replaceAll('../skills/', 'skills/');
+      result = result.replaceAll('../rules/', 'rules/');
+      result = result.replaceAll('../agents/', 'agents/');
+    }
+    result = result.replaceAll('../../rules/AGENTS.md', '../../AGENTS.md');
+  }
+  return result;
+}
+
+export function writeHydratedFile(
+  srcPath,
+  destPath,
+  resolvedProfile,
+  { executable = false, isGlobal = false, harness = null } = {},
+) {
   const template = readFileSync(srcPath, 'utf8');
-  const hydrated = hydrateText(template, resolvedProfile);
+  let hydrated = hydrateText(template, resolvedProfile);
+  hydrated = rewriteDocLinks(hydrated, { harness: harness || resolvedProfile?.harness, isGlobal, destPath });
   mkdirSync(path.dirname(destPath), { recursive: true });
   if (isSymlink(destPath)) rmSync(destPath, { recursive: true, force: true });
   writeFileSync(destPath, hydrated, 'utf8');
   if (executable) chmodSync(destPath, 0o755);
 }
 
-export function copyOrHydrateDir(srcDir, destDir, resolvedProfile, { hydrated = [] } = {}) {
+export function copyOrHydrateDir(
+  srcDir,
+  destDir,
+  resolvedProfile,
+  { hydrated = [], isGlobal = false, harness = null } = {},
+) {
   if (isSymlink(destDir)) rmSync(destDir, { recursive: true, force: true });
   mkdirSync(destDir, { recursive: true });
   for (const entry of readdirSync(srcDir)) {
@@ -233,10 +284,10 @@ export function copyOrHydrateDir(srcDir, destDir, resolvedProfile, { hydrated = 
     const destEntry = path.join(destDir, entry);
     const stat = lstatSync(srcEntry);
     if (stat.isDirectory()) {
-      copyOrHydrateDir(srcEntry, destEntry, resolvedProfile, { hydrated });
+      copyOrHydrateDir(srcEntry, destEntry, resolvedProfile, { hydrated, isGlobal, harness });
     } else if (stat.isFile()) {
       if (srcEntry.endsWith('.md')) {
-        writeHydratedFile(srcEntry, destEntry, resolvedProfile);
+        writeHydratedFile(srcEntry, destEntry, resolvedProfile, { isGlobal, harness });
         hydrated.push(destEntry);
       } else {
         copyFileSafe(srcEntry, destEntry, { force: true, copied: hydrated });
@@ -526,7 +577,7 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
     const src = path.join(rulesSrcDir, rule);
     const dest = path.join(rulesDestDir, rule);
     if (rule.endsWith('.md')) {
-      writeHydratedFile(src, dest, resolvedProfile);
+      writeHydratedFile(src, dest, resolvedProfile, { isGlobal: true, harness: 'antigravity' });
       hydrated.push(dest);
     } else {
       copyFileSafe(src, dest, { force: true, copied: hydrated });
@@ -538,7 +589,7 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
   mkdirSync(skillsDestDir, { recursive: true });
   const rigSkills = readdirSync(skillsSrcDir);
   for (const skill of rigSkills) {
-    copyOrHydrateDir(path.join(skillsSrcDir, skill), path.join(skillsDestDir, skill), resolvedProfile, { hydrated });
+    copyOrHydrateDir(path.join(skillsSrcDir, skill), path.join(skillsDestDir, skill), resolvedProfile, { hydrated, isGlobal: true, harness: 'antigravity' });
   }
   pruneMissingRigEntries(skillsDestDir, rigSkills, { pruned });
 
@@ -550,7 +601,7 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
       const src = path.join(agentsSrcDir, agent);
       const dest = path.join(agentsDestDir, agent);
       if (agent.endsWith('.md')) {
-        writeHydratedFile(src, dest, resolvedProfile);
+        writeHydratedFile(src, dest, resolvedProfile, { isGlobal: true, harness: 'antigravity' });
         hydrated.push(dest);
       } else {
         copyFileSafe(src, dest, { force: true, copied: hydrated });
@@ -593,7 +644,7 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
 
   const skillsDir = path.join(rigRoot, 'skills');
   for (const skill of readdirSync(skillsDir)) {
-    copyOrHydrateDir(path.join(skillsDir, skill), path.join(claudeDir, 'skills', skill), resolvedProfile, { hydrated });
+    copyOrHydrateDir(path.join(skillsDir, skill), path.join(claudeDir, 'skills', skill), resolvedProfile, { hydrated, isGlobal: true, harness: 'claude' });
   }
 
   const agentsDir = path.join(rigRoot, 'agents');
@@ -602,7 +653,7 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
       const src = path.join(agentsDir, agent);
       const dest = path.join(claudeDir, 'agents', agent);
       if (agent.endsWith('.md')) {
-        writeHydratedFile(src, dest, resolvedProfile);
+        writeHydratedFile(src, dest, resolvedProfile, { isGlobal: true, harness: 'claude' });
         hydrated.push(dest);
       } else {
         copyFileSafe(src, dest, { force: true, copied: hydrated });
@@ -616,7 +667,7 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
       const src = path.join(rulesDir, rule);
       const dest = path.join(claudeDir, 'rules', rule);
       if (rule.endsWith('.md')) {
-        writeHydratedFile(src, dest, resolvedProfile);
+        writeHydratedFile(src, dest, resolvedProfile, { isGlobal: true, harness: 'claude' });
         hydrated.push(dest);
       } else {
         copyFileSafe(src, dest, { force: true, copied: hydrated });
@@ -678,10 +729,11 @@ function installForCodex(homeDir, { force = false, hydrated = [], skipped = [], 
   const resolvedProfile = resolveProfile('codex', { rigRoot });
   const skillsDir = path.join(rigRoot, 'skills');
   for (const skill of readdirSync(skillsDir)) {
-    copyOrHydrateDir(path.join(skillsDir, skill), path.join(codexDir, 'skills', skill), resolvedProfile, { hydrated });
+    copyOrHydrateDir(path.join(skillsDir, skill), path.join(codexDir, 'skills', skill), resolvedProfile, { hydrated, isGlobal: true, harness: 'codex' });
   }
-  writeHydratedFile(path.join(rigRoot, 'rules/AGENTS.md'), path.join(codexDir, 'AGENTS.md'), resolvedProfile);
-  hydrated.push(path.join(codexDir, 'AGENTS.md'));
+  const codexAgentsMd = path.join(codexDir, 'AGENTS.md');
+  writeHydratedFile(path.join(rigRoot, 'rules/AGENTS.md'), codexAgentsMd, resolvedProfile, { isGlobal: true, harness: 'codex' });
+  hydrated.push(codexAgentsMd);
 }
 
 function installForCursor(homeDir, { force = false, hydrated = [], skipped = [], pruned = [], rigRoot = RIG_ROOT, obsoleteSkills = [] }) {
@@ -701,10 +753,11 @@ function installForCursor(homeDir, { force = false, hydrated = [], skipped = [],
   const resolvedProfile = resolveProfile('cursor', { rigRoot });
   const skillsDir = path.join(rigRoot, 'skills');
   for (const skill of readdirSync(skillsDir)) {
-    copyOrHydrateDir(path.join(skillsDir, skill), path.join(cursorDir, 'skills', skill), resolvedProfile, { hydrated });
+    copyOrHydrateDir(path.join(skillsDir, skill), path.join(cursorDir, 'skills', skill), resolvedProfile, { hydrated, isGlobal: true, harness: 'cursor' });
   }
-  writeHydratedFile(path.join(rigRoot, 'rules/AGENTS.md'), path.join(cursorDir, 'rules/AGENTS.md'), resolvedProfile);
-  hydrated.push(path.join(cursorDir, 'rules/AGENTS.md'));
+  const cursorAgentsMd = path.join(cursorDir, 'rules/AGENTS.md');
+  writeHydratedFile(path.join(rigRoot, 'rules/AGENTS.md'), cursorAgentsMd, resolvedProfile, { isGlobal: true, harness: 'cursor' });
+  hydrated.push(cursorAgentsMd);
 }
 
 export function installRig({
@@ -789,7 +842,7 @@ export function installRig({
 
 export const installGlobal = installRig;
 
-export function updateRepo(targetDir) {
+export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT } = {}) {
   const dir = path.resolve(targetDir);
   const copied = [];
   const skipped = [];
@@ -802,7 +855,7 @@ export function updateRepo(targetDir) {
   }
 
   if (existsSync(path.join(dir, 'scripts/git-hooks'))) {
-    copyFileSafe(path.join(RIG_ROOT, 'scripts/git-hooks/pre-commit'), path.join(dir, 'scripts/git-hooks/pre-commit'), {
+    copyFileSafe(path.join(rigRoot, 'scripts/git-hooks/pre-commit'), path.join(dir, 'scripts/git-hooks/pre-commit'), {
       force: true,
       copied,
       skipped,
@@ -812,57 +865,62 @@ export function updateRepo(targetDir) {
 
   // If the repo was initialized with --self-contained, refresh static rig assets without touching AGENTS.md or docs/
   if (existsSync(path.join(dir, 'skills')) && existsSync(path.join(dir, 'rules/AGENTS.md'))) {
-    const resolvedProfile = resolveProfile('claude', { rigRoot: RIG_ROOT });
-    const skillsDir = path.join(RIG_ROOT, 'skills');
+    const targetHarness = harness || detectRepoHarness(dir) || 'claude';
+    const resolvedProfile = resolveProfile(targetHarness, { rigRoot });
+    const skillsDir = path.join(rigRoot, 'skills');
     for (const skill of readdirSync(skillsDir)) {
-      copyOrHydrateDir(path.join(skillsDir, skill), path.join(dir, 'skills', skill), resolvedProfile, { hydrated: copied });
+      copyOrHydrateDir(path.join(skillsDir, skill), path.join(dir, 'skills', skill), resolvedProfile, {
+        hydrated: copied,
+        isGlobal: false,
+        harness: targetHarness,
+      });
     }
-    if (existsSync(path.join(RIG_ROOT, 'agents'))) {
-      for (const agent of readdirSync(path.join(RIG_ROOT, 'agents'))) {
-        const src = path.join(RIG_ROOT, 'agents', agent);
+    if (existsSync(path.join(rigRoot, 'agents'))) {
+      for (const agent of readdirSync(path.join(rigRoot, 'agents'))) {
+        const src = path.join(rigRoot, 'agents', agent);
         const dest = path.join(dir, 'agents', agent);
         if (agent.endsWith('.md')) {
-          writeHydratedFile(src, dest, resolvedProfile);
+          writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: targetHarness });
           copied.push(dest);
         } else {
           copyFileSafe(src, dest, { force: true, copied, skipped });
         }
       }
     }
-    const rulesDir = path.join(RIG_ROOT, 'rules');
+    const rulesDir = path.join(rigRoot, 'rules');
     if (existsSync(rulesDir)) {
       for (const rule of readdirSync(rulesDir)) {
         const src = path.join(rulesDir, rule);
         const dest = path.join(dir, 'rules', rule);
         if (rule.endsWith('.md')) {
-          writeHydratedFile(src, dest, resolvedProfile);
+          writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: targetHarness });
           copied.push(dest);
         } else {
           copyFileSafe(src, dest, { force: true, copied, skipped });
         }
       }
     }
-    copyFileSafe(path.join(RIG_ROOT, 'scripts/check-doc-links.mjs'), path.join(dir, 'scripts/check-doc-links.mjs'), {
+    copyFileSafe(path.join(rigRoot, 'scripts/check-doc-links.mjs'), path.join(dir, 'scripts/check-doc-links.mjs'), {
       force: true,
       copied,
       skipped,
       executable: true,
     });
-    copyFileSafe(path.join(RIG_ROOT, 'scripts/reflow-docs.mjs'), path.join(dir, 'scripts/reflow-docs.mjs'), {
+    copyFileSafe(path.join(rigRoot, 'scripts/reflow-docs.mjs'), path.join(dir, 'scripts/reflow-docs.mjs'), {
       force: true,
       copied,
       skipped,
       executable: true,
     });
     if (existsSync(path.join(dir, 'hooks'))) {
-      copyFileSafe(path.join(RIG_ROOT, 'hooks/lib/hook-io.mjs'), path.join(dir, 'hooks/lib/hook-io.mjs'), {
+      copyFileSafe(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dir, 'hooks/lib/hook-io.mjs'), {
         force: true,
         copied,
         skipped,
       });
       for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
         if (existsSync(path.join(dir, 'hooks', hf))) {
-          copyFileSafe(path.join(RIG_ROOT, 'hooks', hf), path.join(dir, 'hooks', hf), {
+          copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dir, 'hooks', hf), {
             force: true,
             copied,
             skipped,
@@ -877,7 +935,7 @@ export function updateRepo(targetDir) {
   return { dir, copied, removed, attachRes };
 }
 
-export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_ROOT, nodeBin = null } = {}) {
+export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_ROOT, nodeBin = null, harness = null } = {}) {
   const state = readRigState(homeDir);
   const resolvedNodeBin = nodeBin || resolveNodeBinary();
   const harnesses =
@@ -898,7 +956,7 @@ export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_R
     }
   }
 
-  const updatedRepos = reposToUpdate.map((r) => updateRepo(r));
+  const updatedRepos = reposToUpdate.map((r) => updateRepo(r, { harness, rigRoot }));
 
   if (existsSync(path.join(rigRoot, '.git'))) {
     attachMainCheckout(rigRoot);
@@ -1167,7 +1225,7 @@ function ensureInitWorktree(mainDir) {
 
 export function initRepo(
   targetDir,
-  { selfContained = false, worktrees = true, ui = false, force = false, homeDir = null } = {},
+  { selfContained = false, worktrees = true, ui = false, force = false, homeDir = null, harness = null, rigRoot = RIG_ROOT } = {},
 ) {
   const requestedDir = path.resolve(targetDir);
   mkdirSync(requestedDir, { recursive: true });
@@ -1237,31 +1295,40 @@ export function initRepo(
   }
 
   if (selfContained) {
-    const resolvedProfile = resolveProfile('claude', { rigRoot: RIG_ROOT });
-    const skillsDir = path.join(RIG_ROOT, 'skills');
+    const targetHarness =
+      harness ||
+      detectRepoHarness(dir) ||
+      (where.isRepo && where.mainCheckout ? detectRepoHarness(where.mainCheckout) : null) ||
+      'claude';
+    const resolvedProfile = resolveProfile(targetHarness, { rigRoot });
+    const skillsDir = path.join(rigRoot, 'skills');
     for (const skill of readdirSync(skillsDir)) {
-      copyOrHydrateDir(path.join(skillsDir, skill), path.join(dir, 'skills', skill), resolvedProfile, { hydrated: copied });
+      copyOrHydrateDir(path.join(skillsDir, skill), path.join(dir, 'skills', skill), resolvedProfile, {
+        hydrated: copied,
+        isGlobal: false,
+        harness: targetHarness,
+      });
     }
-    const agentsDir = path.join(RIG_ROOT, 'agents');
+    const agentsDir = path.join(rigRoot, 'agents');
     if (existsSync(agentsDir)) {
       for (const agent of readdirSync(agentsDir)) {
         const src = path.join(agentsDir, agent);
         const dest = path.join(dir, 'agents', agent);
         if (agent.endsWith('.md')) {
-          writeHydratedFile(src, dest, resolvedProfile);
+          writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: targetHarness });
           copied.push(dest);
         } else {
           copyFileSafe(src, dest, { force: true, copied, skipped });
         }
       }
     }
-    const rulesDir = path.join(RIG_ROOT, 'rules');
+    const rulesDir = path.join(rigRoot, 'rules');
     if (existsSync(rulesDir)) {
       for (const rule of readdirSync(rulesDir)) {
         const src = path.join(rulesDir, rule);
         const dest = path.join(dir, 'rules', rule);
         if (rule.endsWith('.md')) {
-          writeHydratedFile(src, dest, resolvedProfile);
+          writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: targetHarness });
           copied.push(dest);
         } else {
           copyFileSafe(src, dest, { force: true, copied, skipped });
@@ -1464,7 +1531,9 @@ async function main() {
     const homeDir = homeIdx !== -1 && args[homeIdx + 1] ? path.resolve(args[homeIdx + 1]) : homedir();
     const repoIdx = args.indexOf('--repo');
     const repoDir = repoIdx !== -1 && args[repoIdx + 1] ? path.resolve(args[repoIdx + 1]) : null;
-    const res = updateRig({ homeDir, repoDir });
+    const hIdx = args.findIndex((a) => a === '--harness' || a.startsWith('--harness='));
+    const harness = hIdx !== -1 ? (args[hIdx].includes('=') ? args[hIdx].split('=')[1] : args[hIdx + 1]) : null;
+    const res = updateRig({ homeDir, repoDir, harness });
     console.log(`rig update: synced [${res.installedHarnesses.join(', ')}]`);
     console.log(`  new links: ${res.linked.length}, pruned dangling: ${res.pruned.length}, repos refreshed: ${res.updatedRepos.length}`);
     return;
@@ -1558,7 +1627,9 @@ async function main() {
     const selfContained = args.includes('--self-contained');
     const worktrees = !args.includes('--no-worktrees');
     const ui = args.includes('--ui');
-    const res = initRepo(pos, { selfContained, worktrees, ui, force, homeDir: homedir() });
+    const hIdx = args.findIndex((a) => a === '--harness' || a.startsWith('--harness='));
+    const harness = hIdx !== -1 ? (args[hIdx].includes('=') ? args[hIdx].split('=')[1] : args[hIdx + 1]) : null;
+    const res = initRepo(pos, { selfContained, worktrees, ui, force, homeDir: homedir(), harness });
     console.log(
       `rig init (${res.dir}): copied ${res.copied.length}, merged ${res.merged.length}, skipped ${res.skipped.length}, staged ${res.staged.length}`,
     );
@@ -1602,12 +1673,12 @@ async function main() {
 
   console.log(`Usage:
   rig install [--harnesses antigravity,claude,codex,cursor] [--detected] [--force]
-  rig update [--repo <target-dir>]
+  rig update [--repo <target-dir>] [--harness <id>]
   rig profile [list] [--json]
   rig profile use <profile-name>
   rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]
   rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
-  rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force]
+  rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force] [--harness <id>]
   rig check-docs [<target-dir>]
   rig reflow-docs [<target-dir>] [--check]
   rig status [<target-dir>]`);

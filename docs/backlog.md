@@ -4,25 +4,9 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Do next
 
-- **Fix main-checkout edit guard false positives in unrigged repos and relative cwd paths:**
-  In `hooks/guard-main-checkout-edits.mjs`, `checkEditTarget` denies edits whenever `gitDir === commonDir`, which blocks file modifications across all standard git repositories on the host when hooks are installed globally.
-  The guard should inspect whether `git config --get core.hooksPath` resolves to `scripts/git-hooks` (or verify `scripts/git-hooks/pre-commit` exists in the repo) before refusing edits in the main checkout.
-  Additionally, `existingAncestor` resolves paths using the hook process's `process.cwd()` rather than `parsed.cwd`, which falsely blocks relative edits issued by subagents running inside `.worktrees/<slug>`.
-  The hook must resolve target paths via `path.resolve(cwd, filePath)` using `parsed.cwd`.
+- None currently queued.
 
 ## Ready, unblocked
-
-- **Harden remote mutation guard against double-quoted subshells and refspec pushes:**
-  In `hooks/guard-remote-mutation.mjs`, `maskQuotes` strips double-quoted strings completely, allowing commands like `bash -c "git push --force origin main"` or `echo "$(ssh ...)"` to bypass mutation rules unprompted.
-  Double-quoted payloads should be recursively unpacked and tokenized using the nested command unwrapping pattern already present in `hooks/guard-symlinked-node-modules.mjs`.
-  Additionally, the git push regex in `hooks/guard-remote-mutation.mjs` misses force-pushes using leading `+` refspecs (`+ref:ref`) as well as bare `git push` commands executed while checked out directly on `main`.
-  The rule should match `+` refspecs and verify the current branch via `git symbolic-ref --short -q HEAD` in `parsed.cwd` when no branch argument is passed.
-
-- **Support mutating verbs and subshell parentheses in symlinked node_modules guard:**
-  `hooks/guard-symlinked-node-modules.mjs` blocks package installation verbs but permits package removal, upgrade, and pruning commands (`uninstall`, `rm`, `remove`, `update`, `prune`, `dedupe`, `rebuild`, `link`).
-  Running any of these verbs in a worktree with a symlinked `node_modules` mutates the shared main checkout dependency tree.
-  Furthermore, `splitSegments` does not isolate subshell parentheses `(...)`, causing grouping commands like `(cd .worktrees/foo && npm i)` to retain a leading `(` on `(cd` and fail directory tracking.
-  The hook should expand package manager verb sets to include all mutating operations and strip or split on subshell parentheses.
 
 - **Fix multi-harness profile resolution and hydrate global install links in CLI:**
   In `bin/rig.mjs`, `initRepo` (when `--self-contained` is set) and `updateRepo` hardcode Claude profile resolution (`resolveProfile('claude', ...)`), injecting Claude model selectors into non-Claude harnesses.

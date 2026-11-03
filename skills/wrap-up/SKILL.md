@@ -11,6 +11,7 @@ description: >-
 # End-of-Session Checkpoint (`wrap-up`)
 
 Run this checklist before closing out a session so the next cold session starts with a clean tree, green tests, and zero trapped context in the conversation transcript.
+Explicitly sequence all conversation archaeology and documentation updates inside the active worktree before merging into `main` so the main checkout edit guard is not triggered.
 
 ---
 
@@ -25,6 +26,8 @@ Run this checklist before closing out a session so the next cold session starts 
 
 ## Step 2 — Conversation Archaeology (Route Trapped Knowledge)
 
+Perform all documentation and rule updates inside the active worktree prior to merging into `main`.
+Attempting to edit rules (such as [`rules/AGENTS.md`](../../rules/AGENTS.md)) or code comments in the root checkout after merging will trigger the main checkout edit guard.
 Scan the session from the first turn to the last for four categories of knowledge that would otherwise vanish when the conversation closes:
 
 1. **Architectural decisions & rejected alternatives:**
@@ -38,9 +41,10 @@ Scan the session from the first turn to the last for four categories of knowledg
 
 ---
 
-## Step 3 — Cold-Session Reachability Check
+## Step 3 — Cold-Session Reachability Check & Worktree Commit
 
 Verify that every new or updated document under `docs/` is linked from an entry point a fresh agent session reads (`README.md`, `AGENTS.md`, `CLAUDE.md`, a `SKILL.md` file under `skills/`, or a rule file under `rules/`).
+Re-run the doc linters and commit all documentation changes directly to the feature branch inside the worktree before proceeding to merge.
 
 ---
 
@@ -48,6 +52,6 @@ Verify that every new or updated document under `docs/` is linked from an entry 
 
 Present a short closing summary to the user separating:
 - **Finish now (< 2 minutes):**
-  Uncommitted changes, missing doc links, unmerged worktree branches ready for [`skills/merge-to-main/SKILL.md`](../merge-to-main/SKILL.md).
+  Uncommitted changes, missing doc links, unmerged worktree branches ready for [`skills/merge-to-main/SKILL.md`](../merge-to-main/SKILL.md) (now carrying all committed documentation updates).
 - **Recorded & safe to defer:**
   Items captured in [`docs/backlog.md`](../../docs/backlog.md) or ADRs with their exact file links.

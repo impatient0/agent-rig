@@ -40,7 +40,9 @@ The moment remaining investigation is purely linear and deterministic (e.g., tra
 
 ## Step 2 — Write Grounded Task Briefs
 
-Before spawning a Worker subagent, write a persistent task brief (in the session's Artifact directory or plan file) recording:
+Before spawning a Worker subagent, write a persistent task brief to a deterministic, gitignored location at `<git-common-dir>/rig-briefs/<slug>.md` (or the harness artifact directory when available).
+Standardizing brief storage to `<git-common-dir>/rig-briefs/<slug>.md` prevents Claude Code and Codex subagents from triggering blocked root edits or leaving untracked files in worktrees.
+Record the following fields:
 - **Base commit SHA** (`git rev-parse HEAD`).
 - **Slice scope:**
   - **Core files (Required, $\ge 1$ existing file):**
@@ -103,7 +105,7 @@ The Verifier must have command execution permissions enabled so it runs `git log
 Instruct the Verifier strictly in prompt not to edit files, stage changes, or create commits.
 Do not act as an execution proxy;
 pass the Verifier **only**:
-1. The grounded task brief from Step 2 (base commit SHA, Core files, acceptance criteria, and verification command).
+1. The grounded task brief from Step 2 (base commit SHA, Core files, acceptance criteria, and verification command, or its `<git-common-dir>/rig-briefs/<slug>.md` path).
 2. The target worktree path.
 
 If the Verifier returns `VERDICT: FAIL`, send the specific `[BLOCKER]` items back to the Worker (up to 1 remediation round) or halt the slice and surface it to the user.

@@ -76,3 +76,54 @@ test('check-doc-links permits code symbols on tracked paths and rejects missing 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('check-doc-links parses double-backtick inline code spans without spurious errors', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rig-double-backticks-'));
+  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+  try {
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'config', 'user.email', 'test@example.com');
+    git(dir, 'config', 'user.name', 'Test');
+    mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+    writeFileSync(path.join(dir, 'scripts', 'run.mjs'), 'console.log("ok");\n');
+    writeFileSync(path.join(dir, 'README.md'), '# App\n\nSee [AGENTS.md](AGENTS.md).\n');
+    writeFileSync(
+      path.join(dir, 'AGENTS.md'),
+      '# Agents\n\n' +
+        'Config ``<git-common-dir>/rig-briefs/<slug>.md`` is valid.\n' +
+        'Nested `` `inner` `` and `scripts/run.mjs` both parse.\n' +
+        'Tracked path in double backticks: ``scripts/run.mjs`` works.\n',
+    );
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'initial');
+
+    // Valid double-backtick code spans and subsequent paths parse without errors
+    const ok = spawnSync(process.execPath, [CHECKER, dir], { encoding: 'utf8' });
+    assert.equal(ok.status, 0, `${ok.stdout}${ok.stderr}`);
+
+    // Missing path inside double backticks is caught
+    writeFileSync(
+      path.join(dir, 'AGENTS.md'),
+      '# Agents\n\nMissing path: ``scripts/missing.mjs`` fails.\n',
+    );
+    git(dir, 'add', 'AGENTS.md');
+    git(dir, 'commit', '-qm', 'bad double backtick path');
+    const badDouble = spawnSync(process.execPath, [CHECKER, dir], { encoding: 'utf8' });
+    assert.notEqual(badDouble.status, 0);
+    assert.match(badDouble.stderr, /scripts\/missing\.mjs does not exist/);
+
+    // Desynchronization test: nested backticks do not hide missing path on same line
+    writeFileSync(
+      path.join(dir, 'AGENTS.md'),
+      '# Agents\n\nInvariant: `` `cmd` `` and `scripts/missing.mjs` are checked.\n',
+    );
+    git(dir, 'add', 'AGENTS.md');
+    git(dir, 'commit', '-qm', 'bad subsequent path');
+    const badSubsequent = spawnSync(process.execPath, [CHECKER, dir], { encoding: 'utf8' });
+    assert.notEqual(badSubsequent.status, 0);
+    assert.match(badSubsequent.stderr, /scripts\/missing\.mjs does not exist/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+

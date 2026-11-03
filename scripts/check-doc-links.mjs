@@ -199,8 +199,8 @@ function parseDoc(file) {
       .replace(/!?\[[^\]]*\]\([^)]*\)/g, '')
       .replace(/~~`[^`]+`~~/g, '')
       .replace(/~~[^~]+~~/g, '');
-    for (const m of withoutLinks.matchAll(/`([^`\n]+)`/g)) {
-      const tok = m[1].trim();
+    for (const m of withoutLinks.matchAll(/(`+)\s*([\s\S]*?)\s*\1/g)) {
+      const tok = m[2].trim();
       if (
         docPrefixRe.test(tok) &&
         (/[*?]/.test(tok) || /(?:^|\/)(?:[\w.-]+\.md|SKILL\.md)(?:#[\w-]+)?$/.test(tok))
@@ -208,7 +208,7 @@ function parseDoc(file) {
         const reason = /[*?]/.test(tok)
           ? 'glob path — link to the specific file'
           : 'bare backticked doc path — wrap in a Markdown link `[`…`](…)` (or strike through `~~`…`~~` if removed)';
-        bareRefs.push({ line: i + 1, raw: `\`${tok}\``, reason });
+        bareRefs.push({ line: i + 1, raw: `${m[1]}${tok}${m[1]}`, reason });
         continue;
       }
       const cleaned = tok.replace(/[.,;:!?)]+$/, '').replace(/#.*$/, '').replace(/:L?\d+.*$/, '');
@@ -219,7 +219,7 @@ function parseDoc(file) {
         !cleaned.includes('…') &&
         !cleaned.includes('...')
       ) {
-        repoPaths.push({ line: i + 1, raw: `\`${tok}\``, targetPath: path.normalize(cleaned) });
+        repoPaths.push({ line: i + 1, raw: `${m[1]}${tok}${m[1]}`, targetPath: path.normalize(cleaned) });
       }
     }
   }

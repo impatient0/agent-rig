@@ -25,17 +25,22 @@ Because the repository's root checkout stays attached to `main` as a merge-only 
 
 ## Step 2 — Test the Uncommitted Merge in the Root Checkout
 
-1. Run the merge without committing:
+1. **Run the merge without committing:**
    ```bash
    git -C <root> merge --no-commit --no-ff "$BRANCH"
    ```
-2. Run the project's full test and documentation verification suite in `<root>` (`npm test`, `rig check-docs`, `rig reflow-docs --check`) on the uncommitted merge state.
-3. If any check fails or merge conflicts occur:
-   Abort the merge immediately:
+2. **Conflict Resolution Ownership:**
+   If any check fails or merge conflicts occur, abort the merge immediately:
    ```bash
    git -C <root> merge --abort
    ```
-   Resolve the failure or conflict **inside the worktree** on `$BRANCH` (for example by merging or rebasing `main` into `$BRANCH` within the worktree), verify there, and retry. *(Never edit conflict files or resolve merges in the root checkout; the edit guard refuses modifications there).*
+   Never edit conflict files or resolve merges in the root checkout;
+   the main checkout edit guard refuses code modifications there, and the orchestrator lacks line-level slice context.
+   All conflict resolution is owned by the authoring Worker whose incoming branch caused the conflict.
+   Task that Worker inside its live worktree to run `git merge main`, resolve conflicting files using its direct domain context of the slice, verify tests, and commit the merge.
+   Spawn a fresh Cold Verifier subagent ([`agents/verifier.md`](../../agents/verifier.md)) to audit the resolved branch diff against `main` before re-attempting Step 2.
+3. **Verification gate:**
+   Once git merges cleanly without conflicts, run the project's full test and documentation verification suite in `<root>` (`npm test`, `rig check-docs`, `rig reflow-docs --check`) on the uncommitted merge state.
 
 ---
 
@@ -57,3 +62,12 @@ Execute these steps in order, preferably as separate command calls rather than a
    git -C <root> branch -d "$BRANCH"
    ```
    *(Safe branch deletion now succeeds immediately because the root checkout's active `HEAD` is already at the new merge commit).*
+
+---
+
+## Sandbox & Read-Only Environment Boundary
+
+In environments where the root repository checkout is mounted read-only or containerized under a sandbox (such as Antigravity Standard Sandbox Mode):
+- Mechanical git plumbing commands that lock refs or update indexes in the root checkout (`git merge`, `git commit`, `git worktree remove`, `git branch -d`) must be executed with elevated filesystem access (`BypassSandbox: true`).
+- Verification commands (`npm test`, `rig check-docs`, `rig reflow-docs --check`) continue running sandboxed (`BypassSandbox: false`).
+- In non-sandboxed environments (Claude Code, Codex CLI, local shell), standard command execution applies without modification.

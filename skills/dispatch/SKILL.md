@@ -61,8 +61,35 @@ Record the following fields:
 
 ## Step 3 — Spawn Isolated Worker Subagents
 
-Spawn one Worker subagent per independent Bucket 1 slice in its own isolated git worktree (using the harness's native subagent worktree-isolation mode and background execution, or a dedicated linked worktree under `.worktrees/<slug>` on branch `<type>/<slug>`).
+Spawn one Worker subagent per independent Bucket 1 slice in its own isolated git worktree.
+If the harness provides native worktree isolation (such as subagent workspace branching), the Worker renames the initial harness-allocated branch rather than creating a second branch:
+
+```bash
+git branch -m <type>/<slug>
+```
+
+If the harness does not provide native worktree isolation, the orchestrator or Worker creates a dedicated linked worktree under `.worktrees/<slug>` on branch `<type>/<slug>`:
+
+```bash
+git worktree add .worktrees/<slug> -b <type>/<slug>
+```
+
 Workers operate in execution tier `worker` (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`) governed by [`agents/worker.md`](../../agents/worker.md).
+
+### Worker Lifecycle & Hold-Until-Merged
+
+Workers follow a strict five-stage lifecycle:
+1. **Spawn:**
+   Launched in an isolated worktree with a grounded Task Brief.
+2. **Implement & Self-Verify:**
+   Traces root cause from Core files, writes code and tests, and verifies exit status `0`.
+3. **Report:**
+   Sends completion message with commit SHA and diff summary to Tech Lead.
+4. **On-Hold in Worktree:**
+   The Worker must remain alive and idle in its worktree until its branch is merged into `main`.
+   If a subsequent merge collision occurs during `merge-to-main`, the Tech Lead messages this Worker to merge `main` and resolve conflicts in its native context.
+5. **Terminate:**
+   The Worker is suspended or terminated only after its branch has successfully landed in `main`.
 
 ### Worker Contract & Five Stop Triggers
 
@@ -118,3 +145,6 @@ After at most **3 completed slices**, pause and present a concise attribution re
 - Slices completed (branch names and commit SHAs).
 - Cold Verifier verdict and findings.
 - Consolidated table of every `Unmandated-call:` trailer across the wave so the user can approve or revert any judgment call in seconds.
+
+Workers remain on hold in their worktrees until each slice is merged into `main` via [`skills/merge-to-main/SKILL.md`](../merge-to-main/SKILL.md);
+only after a slice is committed to `main` is its worktree removed and its Worker subagent terminated.

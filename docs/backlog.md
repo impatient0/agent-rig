@@ -8,23 +8,7 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Ready, unblocked
 
-- **Fix multi-harness profile resolution and hydrate global install links in CLI:**
-  In `bin/rig.mjs`, `initRepo` (when `--self-contained` is set) and `updateRepo` hardcode Claude profile resolution (`resolveProfile('claude', ...)`), injecting Claude model selectors into non-Claude harnesses.
-  Both commands should accept `--harness` or resolve profiles against the target repository's configured harness.
-  In addition, `installForCodex` hydrates [`rules/AGENTS.md`](../rules/AGENTS.md) directly into `~/.codex/AGENTS.md`, which breaks relative links to skills (`../skills/...`), while globally installed skills reference repo-local `../../docs/backlog.md`.
-  Installation routines should rewrite relative inter-doc links to match each target harness's installed layout and distinguish repo-relative paths in global skill prompts.
-
-- **Preserve existing git hook managers in rig init and add runtime fallbacks to hook wrappers:**
-  `rig init` in `bin/rig.mjs` unconditionally overrides `git config core.hooksPath scripts/git-hooks`, silently disabling pre-existing Husky, Lefthook, or Python pre-commit configurations in existing codebases.
-  Initialization should check existing hook configurations, warn if another hook runner is present, and offer chaining guidance.
-  Furthermore, `buildHookCommand` and `buildRigWrapperScript` bake absolute Node paths that break if the active Node version is uninstalled after an NVM or fnm upgrade.
-  Hook wrappers should fall back to probing standard version manager shims and current aliases before failing.
-
-- **Standardize task brief storage, wrap-up doc workflow, and double-backtick doc linter parsing:**
-  [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md) instructs writing task briefs to the session artifact directory, which is only supported out-of-repo by Antigravity and leads to blocked root edits or untracked worktree files in Claude Code and Codex.
-  Brief paths should be standardized to a deterministic, gitignored location such as `<git-common-dir>/rig-briefs/<slug>.md`.
-  In [`skills/wrap-up/SKILL.md`](../skills/wrap-up/SKILL.md), documentation updates should be explicitly sequenced inside the active worktree prior to merging into `main` so the main checkout edit guard is not triggered.
-  In `scripts/check-doc-links.mjs`, the inline code-span regex should match variable backtick runs (`/(`+)\s*([\s\S]*?)\s*\1/g`) so double-backtick inline spans are parsed without error.
+- None currently queued.
 
 ## Gated on an in-flight milestone
 

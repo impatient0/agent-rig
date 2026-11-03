@@ -12,6 +12,9 @@ import {
   updateRig,
   readRigState,
   initRepo,
+  updateRepo,
+  detectRepoHarness,
+  rewriteDocLinks,
   statusRepo,
   runCheckDocs,
   runReflowDocs,
@@ -586,6 +589,112 @@ test('buildRigWrapperScript generates executable shell wrapper with fail-safe er
   const validRun = spawnSync('/bin/sh', ['-c', validWrapper, '--', 'status', RIG_ROOT], { encoding: 'utf8' });
   assert.equal(validRun.status, 0, validRun.stderr);
   assert.equal(JSON.parse(validRun.stdout).hasAgentsMd, true);
+});
+
+test('initRepo and updateRepo accept --harness and probe target repo harness', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rig-harness-opt-'));
+  try {
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+
+    // 1. Explicit --harness antigravity on initRepo
+    initRepo(dir, { selfContained: true, worktrees: true, harness: 'antigravity' });
+    const workerContent = readFileSync(path.join(dir, 'agents/worker.md'), 'utf8');
+    assert.match(workerContent, /model: flash/);
+    assert.match(workerContent, /gemini-3-8-flash/);
+    assert.equal(workerContent.includes('claude-sonnet-5-5'), false);
+
+    const verifierContent = readFileSync(path.join(dir, 'agents/verifier.md'), 'utf8');
+    assert.match(verifierContent, /model: flash/);
+    assert.match(verifierContent, /gemini-3-8-flash/);
+
+    const dispatchContent = readFileSync(path.join(dir, 'skills/dispatch/SKILL.md'), 'utf8');
+    assert.match(dispatchContent, /subagent model `flash`, target `gemini-3-8-flash`/);
+
+    // Links inside self-contained repo retain relative repo structure and pass check-doc-links
+    const checkLinks = runCheckDocs(dir);
+    assert.equal(checkLinks.status, 0, `${checkLinks.stdout}${checkLinks.stderr}`);
+
+    // 2. updateRepo with explicit harness overrides
+    updateRepo(dir, { harness: 'claude' });
+    const updatedWorker = readFileSync(path.join(dir, 'agents/worker.md'), 'utf8');
+    assert.match(updatedWorker, /model: sonnet/);
+    assert.match(updatedWorker, /claude-sonnet-5-5/);
+
+    // 3. Probing target repo with .gemini directory
+    mkdirSync(path.join(dir, '.gemini'), { recursive: true });
+    assert.equal(detectRepoHarness(dir), 'antigravity');
+
+    updateRepo(dir); // probes .gemini -> antigravity
+    const probedWorker = readFileSync(path.join(dir, 'agents/worker.md'), 'utf8');
+    assert.match(probedWorker, /model: flash/);
+    assert.match(probedWorker, /gemini-3-8-flash/);
+
+    // 4. CLI end-to-end init with --harness option
+    const cliDir = mkdtempSync(path.join(tmpdir(), 'rig-cli-harness-'));
+    const fakeCliHome = mkdtempSync(path.join(tmpdir(), 'rig-cli-home-'));
+    try {
+      spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: cliDir });
+      const cliRes = spawnSync(process.execPath, [
+        path.join(RIG_ROOT, 'bin/rig.mjs'),
+        'init',
+        cliDir,
+        '--self-contained',
+        '--harness',
+        'antigravity',
+      ], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: fakeCliHome },
+      });
+      assert.equal(cliRes.status, 0, cliRes.stderr);
+      const cliWorker = readFileSync(path.join(cliDir, 'agents/worker.md'), 'utf8');
+      assert.match(cliWorker, /model: flash/);
+      assert.match(cliWorker, /gemini-3-8-flash/);
+    } finally {
+      rmSync(cliDir, { recursive: true, force: true });
+      rmSync(fakeCliHome, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('installRig rewrites relative inter-doc links for Codex and hydrates repo-relative docs links in global skills', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-links-home-'));
+  try {
+    const res = installRig({ homeDir: fakeHome, harnesses: ['codex', 'claude'] });
+    assert.deepEqual(res.installedHarnesses, ['codex', 'claude']);
+
+    // Codex: AGENTS.md is hydrated directly into ~/.codex/AGENTS.md
+    const codexAgentsPath = path.join(fakeHome, '.codex/AGENTS.md');
+    assert.ok(existsSync(codexAgentsPath));
+    const codexAgents = readFileSync(codexAgentsPath, 'utf8');
+
+    // Inter-doc links in ~/.codex/AGENTS.md must point to skills/... instead of broken ../skills/...
+    assert.match(codexAgents, /\[`skills\/dispatch\/SKILL\.md`\]\(skills\/dispatch\/SKILL\.md\)/);
+    assert.match(codexAgents, /\[`skills\/merge-to-main\/SKILL\.md`\]\(skills\/merge-to-main\/SKILL\.md\)/);
+    assert.equal(codexAgents.includes('../skills/'), false);
+
+    // Codex skills must point to repo-relative docs/backlog.md rather than ../../docs/backlog.md
+    const codexBacklogSkill = readFileSync(path.join(fakeHome, '.codex/skills/backlog-audit/SKILL.md'), 'utf8');
+    assert.match(codexBacklogSkill, /\[`docs\/backlog\.md`\]\(docs\/backlog\.md\)/);
+    assert.equal(codexBacklogSkill.includes('../../docs/backlog.md'), false);
+
+    // Codex skills pointing to rules/AGENTS.md must point to ~/.codex/AGENTS.md via ../../AGENTS.md
+    const codexWrapUp = readFileSync(path.join(fakeHome, '.codex/skills/wrap-up/SKILL.md'), 'utf8');
+    assert.match(codexWrapUp, /\.\.\/\.\.\/AGENTS\.md/);
+    assert.equal(codexWrapUp.includes('../../rules/AGENTS.md'), false);
+
+    // Claude: rules/AGENTS.md sits inside ~/.claude/rules/, so ../skills/... correctly resolves to ~/.claude/skills/
+    const claudeAgents = readFileSync(path.join(fakeHome, '.claude/rules/AGENTS.md'), 'utf8');
+    assert.match(claudeAgents, /\[`skills\/dispatch\/SKILL\.md`\]\(\.\.\/skills\/dispatch\/SKILL\.md\)/);
+
+    // Global Claude skills also rewrite ../../docs/ to repo-relative docs/
+    const claudeBacklogSkill = readFileSync(path.join(fakeHome, '.claude/skills/backlog-audit/SKILL.md'), 'utf8');
+    assert.match(claudeBacklogSkill, /\[`docs\/backlog\.md`\]\(docs\/backlog\.md\)/);
+    assert.equal(claudeBacklogSkill.includes('../../docs/backlog.md'), false);
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
 });
 
 test('detectExistingHookManager and getHookChainingGuidance detect hook runners and provide chaining templates', () => {

@@ -434,21 +434,70 @@ export function resolveNodeBinary({
   return res.status === 0 ? 'node' : execPath;
 }
 
+export function buildNodeFallbackShell(nodeBin, { isHook = false, singleLine = false } = {}) {
+  const repointMsg = isHook
+    ? "agent-rig: Node runtime not found at '$NODE'. Run 'rig update' in your terminal to re-point hooks."
+    : "agent-rig: Node runtime not found at '$NODE'. Run 'rig update' in your terminal to re-point.";
+
+  if (singleLine) {
+    return `NODE="${nodeBin}"; if [ ! -x "$NODE" ] && ! command -v "$NODE" >/dev/null 2>&1; then _FOUND=""; if command -v node >/dev/null 2>&1; then _FOUND="$(command -v node)"; elif [ -x "\${FNM_DIR:-$HOME/.local/share/fnm}/current/bin/node" ]; then _FOUND="\${FNM_DIR:-$HOME/.local/share/fnm}/current/bin/node"; elif [ -x "\${FNM_DIR:-$HOME/.local/share/fnm}/aliases/default/bin/node" ]; then _FOUND="\${FNM_DIR:-$HOME/.local/share/fnm}/aliases/default/bin/node"; elif [ -x "$HOME/.fnm/current/bin/node" ]; then _FOUND="$HOME/.fnm/current/bin/node"; elif [ -x "$HOME/.fnm/aliases/default/bin/node" ]; then _FOUND="$HOME/.fnm/aliases/default/bin/node"; elif [ -n "$NVM_BIN" ] && [ -x "$NVM_BIN/node" ]; then _FOUND="$NVM_BIN/node"; elif [ -x "\${NVM_DIR:-$HOME/.nvm}/current/bin/node" ]; then _FOUND="\${NVM_DIR:-$HOME/.nvm}/current/bin/node"; elif [ -s "\${NVM_DIR:-$HOME/.nvm}/alias/default" ] && [ -x "\${NVM_DIR:-$HOME/.nvm}/versions/node/$(cat "\${NVM_DIR:-$HOME/.nvm}/alias/default" 2>/dev/null)/bin/node" ]; then _FOUND="\${NVM_DIR:-$HOME/.nvm}/versions/node/$(cat "\${NVM_DIR:-$HOME/.nvm}/alias/default" 2>/dev/null)/bin/node"; elif [ -x "\${ASDF_DATA_DIR:-$HOME/.asdf}/shims/node" ]; then _FOUND="\${ASDF_DATA_DIR:-$HOME/.asdf}/shims/node"; elif [ -x "\${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims/node" ]; then _FOUND="\${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims/node"; elif [ -x "\${VOLTA_HOME:-$HOME/.volta}/bin/node" ]; then _FOUND="\${VOLTA_HOME:-$HOME/.volta}/bin/node"; elif [ -x "\${NODENV_ROOT:-$HOME/.nodenv}/shims/node" ]; then _FOUND="\${NODENV_ROOT:-$HOME/.nodenv}/shims/node"; fi; if [ -z "$_FOUND" ]; then for _n in "\${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin/node "\${FNM_DIR:-$HOME/.local/share/fnm}"/installed-versions/*/installation/bin/node; do if [ -x "$_n" ]; then _FOUND="$_n"; fi; done; fi; if [ -n "$_FOUND" ] && [ -x "$_FOUND" ]; then NODE="$_FOUND"; else echo "${repointMsg}" >&2; exit 1; fi; fi;`;
+  }
+
+  return `NODE="${nodeBin}"
+if [ ! -x "$NODE" ] && ! command -v "$NODE" >/dev/null 2>&1; then
+  _FOUND=""
+  if command -v node >/dev/null 2>&1; then
+    _FOUND="$(command -v node)"
+  elif [ -x "\${FNM_DIR:-$HOME/.local/share/fnm}/current/bin/node" ]; then
+    _FOUND="\${FNM_DIR:-$HOME/.local/share/fnm}/current/bin/node"
+  elif [ -x "\${FNM_DIR:-$HOME/.local/share/fnm}/aliases/default/bin/node" ]; then
+    _FOUND="\${FNM_DIR:-$HOME/.local/share/fnm}/aliases/default/bin/node"
+  elif [ -x "$HOME/.fnm/current/bin/node" ]; then
+    _FOUND="$HOME/.fnm/current/bin/node"
+  elif [ -x "$HOME/.fnm/aliases/default/bin/node" ]; then
+    _FOUND="$HOME/.fnm/aliases/default/bin/node"
+  elif [ -n "$NVM_BIN" ] && [ -x "$NVM_BIN/node" ]; then
+    _FOUND="$NVM_BIN/node"
+  elif [ -x "\${NVM_DIR:-$HOME/.nvm}/current/bin/node" ]; then
+    _FOUND="\${NVM_DIR:-$HOME/.nvm}/current/bin/node"
+  elif [ -s "\${NVM_DIR:-$HOME/.nvm}/alias/default" ] && [ -x "\${NVM_DIR:-$HOME/.nvm}/versions/node/$(cat "\${NVM_DIR:-$HOME/.nvm}/alias/default" 2>/dev/null)/bin/node" ]; then
+    _FOUND="\${NVM_DIR:-$HOME/.nvm}/versions/node/$(cat "\${NVM_DIR:-$HOME/.nvm}/alias/default" 2>/dev/null)/bin/node"
+  elif [ -x "\${ASDF_DATA_DIR:-$HOME/.asdf}/shims/node" ]; then
+    _FOUND="\${ASDF_DATA_DIR:-$HOME/.asdf}/shims/node"
+  elif [ -x "\${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims/node" ]; then
+    _FOUND="\${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims/node"
+  elif [ -x "\${VOLTA_HOME:-$HOME/.volta}/bin/node" ]; then
+    _FOUND="\${VOLTA_HOME:-$HOME/.volta}/bin/node"
+  elif [ -x "\${NODENV_ROOT:-$HOME/.nodenv}/shims/node" ]; then
+    _FOUND="\${NODENV_ROOT:-$HOME/.nodenv}/shims/node"
+  fi
+  if [ -z "$_FOUND" ]; then
+    for _n in "\${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin/node "\${FNM_DIR:-$HOME/.local/share/fnm}"/installed-versions/*/installation/bin/node; do
+      if [ -x "$_n" ]; then _FOUND="$_n"; fi
+    done
+  fi
+  if [ -n "$_FOUND" ] && [ -x "$_FOUND" ]; then
+    NODE="$_FOUND"
+  else
+    echo "${repointMsg}" >&2
+    exit 1
+  fi
+fi`;
+}
+
 export function buildHookCommand(scriptPath, args = '', { nodeBin = resolveNodeBinary() } = {}) {
   const argsSuffix = args ? ` ${args}` : '';
   const quotedScript = scriptPath.startsWith('"') && scriptPath.endsWith('"') ? scriptPath : `"${scriptPath}"`;
-  return `NODE="${nodeBin}"; if [ ! -x "$NODE" ] && ! command -v "$NODE" >/dev/null 2>&1; then echo "agent-rig: Node runtime not found at '$NODE'. Run 'rig update' in your terminal to re-point hooks." >&2; exit 1; fi; exec "$NODE" ${quotedScript}${argsSuffix}`;
+  const fallback = buildNodeFallbackShell(nodeBin, { isHook: true, singleLine: true });
+  return `${fallback} exec "$NODE" ${quotedScript}${argsSuffix}`;
 }
 
 export function buildRigWrapperScript(rigScriptPath, { nodeBin = resolveNodeBinary() } = {}) {
   const quotedScript =
     rigScriptPath.startsWith('"') && rigScriptPath.endsWith('"') ? rigScriptPath : `"${rigScriptPath}"`;
+  const fallback = buildNodeFallbackShell(nodeBin, { isHook: false, singleLine: false });
   return `#!/bin/sh
-NODE="${nodeBin}"
-if [ ! -x "$NODE" ] && ! command -v "$NODE" >/dev/null 2>&1; then
-  echo "agent-rig: Node runtime not found at '$NODE'. Run 'rig update' in your terminal to re-point." >&2
-  exit 1
-fi
+${fallback}
 exec "$NODE" ${quotedScript} "$@"
 `;
 }
@@ -1223,6 +1272,98 @@ function ensureInitWorktree(mainDir) {
   return { path: wtPath, branch: INIT_WORKTREE_BRANCH, reused: false };
 }
 
+export function detectExistingHookManager(dir, mainDir = null) {
+  const dirsToCheck = [dir];
+  if (mainDir && mainDir !== dir) {
+    dirsToCheck.push(mainDir);
+  }
+
+  // 1. Inspect git config core.hooksPath
+  for (const d of dirsToCheck) {
+    if (existsSync(path.join(d, '.git'))) {
+      const res = spawnSync('git', ['-C', d, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+      if (res.status === 0 && res.stdout.trim()) {
+        const hooksPath = res.stdout.trim();
+        if (hooksPath !== 'scripts/git-hooks') {
+          let name = 'Custom core.hooksPath';
+          let type = 'custom';
+          if (hooksPath.includes('husky')) {
+            name = 'Husky';
+            type = 'husky';
+          } else if (hooksPath.includes('lefthook')) {
+            name = 'Lefthook';
+            type = 'lefthook';
+          }
+          return { type, name, path: hooksPath };
+        }
+      }
+    }
+  }
+
+  // 2. Inspect filesystem for known runner artifacts
+  for (const d of dirsToCheck) {
+    if (!existsSync(d)) continue;
+
+    // Husky
+    const huskyDir = path.join(d, '.husky');
+    if (existsSync(huskyDir)) {
+      return { type: 'husky', name: 'Husky', path: '.husky' };
+    }
+
+    // Lefthook
+    for (const lf of ['.lefthook', 'lefthook.yml', 'lefthook.yaml', '.lefthook.yml', '.lefthook.yaml']) {
+      if (existsSync(path.join(d, lf))) {
+        return { type: 'lefthook', name: 'Lefthook', path: lf };
+      }
+    }
+
+    // pre-commit (Python)
+    for (const pc of ['.pre-commit-config.yaml', '.pre-commit-config.yml']) {
+      if (existsSync(path.join(d, pc))) {
+        return { type: 'pre-commit', name: 'pre-commit', path: pc };
+      }
+    }
+  }
+
+  return null;
+}
+
+export function getHookChainingGuidance(manager) {
+  if (!manager) return '';
+  switch (manager.type) {
+    case 'husky':
+      return [
+        'To chain agent-rig with Husky, add the following line to .husky/pre-commit:',
+        '  ./scripts/git-hooks/pre-commit "$@"',
+      ].join('\n');
+    case 'lefthook':
+      return [
+        'To chain agent-rig with Lefthook, add the following to lefthook.yml:',
+        '  pre-commit:',
+        '    commands:',
+        '      agent-rig:',
+        '        run: ./scripts/git-hooks/pre-commit',
+      ].join('\n');
+    case 'pre-commit':
+      return [
+        'To chain agent-rig with pre-commit, add the following to .pre-commit-config.yaml:',
+        '  - repo: local',
+        '    hooks:',
+        '      - id: agent-rig',
+        '        name: agent-rig pre-commit',
+        '        entry: ./scripts/git-hooks/pre-commit',
+        '        language: system',
+        '        always_run: true',
+        '        pass_filenames: false',
+      ].join('\n');
+    default:
+      return [
+        `To chain agent-rig with your existing hooks in '${manager.path}':`,
+        '  Call ./scripts/git-hooks/pre-commit from your existing pre-commit hook script.',
+      ].join('\n');
+  }
+}
+
 export function initRepo(
   targetDir,
   { selfContained = false, worktrees = true, ui = false, force = false, homeDir = null, harness = null, rigRoot = RIG_ROOT } = {},
@@ -1273,6 +1414,10 @@ export function initRepo(
   }
 
   let hooksConfigured = false;
+  let existingHookManager = null;
+  let hookWarning = null;
+  let chainingGuidance = null;
+
   if (worktrees) {
     copyFileSafe(path.join(RIG_ROOT, 'scripts/git-hooks/pre-commit'), path.join(dir, 'scripts/git-hooks/pre-commit'), {
       force,
@@ -1280,9 +1425,18 @@ export function initRepo(
       skipped,
       executable: true,
     });
+
+    existingHookManager = detectExistingHookManager(dir, mainCheckout);
+
     if (existsSync(path.join(dir, '.git'))) {
-      const cfg = spawnSync('git', ['-C', dir, 'config', 'core.hooksPath', 'scripts/git-hooks']);
-      hooksConfigured = cfg.status === 0;
+      if (existingHookManager && !force) {
+        chainingGuidance = getHookChainingGuidance(existingHookManager);
+        hookWarning = `Existing git hook manager detected (${existingHookManager.name} at '${existingHookManager.path}'). Preserving existing hook configuration.\n${chainingGuidance}`;
+        hooksConfigured = false;
+      } else {
+        const cfg = spawnSync('git', ['-C', dir, 'config', 'core.hooksPath', 'scripts/git-hooks']);
+        hooksConfigured = cfg.status === 0;
+      }
     }
 
     const gitignorePath = path.join(dir, '.gitignore');
@@ -1452,6 +1606,9 @@ export function initRepo(
     merged,
     staged,
     hooksConfigured,
+    existingHookManager,
+    hookWarning,
+    chainingGuidance,
     mainCheckoutHead,
     initWorktree,
     hasCommits: where.hasCommits,
@@ -1485,6 +1642,7 @@ export function statusRepo(targetDir = process.cwd()) {
     skillsPresent,
     hooksPresent,
     gitHooksPath,
+    existingHookManager: detectExistingHookManager(dir),
   };
 }
 
@@ -1633,7 +1791,9 @@ async function main() {
     console.log(
       `rig init (${res.dir}): copied ${res.copied.length}, merged ${res.merged.length}, skipped ${res.skipped.length}, staged ${res.staged.length}`,
     );
-    if (worktrees && !res.hooksConfigured) {
+    if (res.hookWarning) {
+      console.warn(`  warning: ${res.hookWarning.split('\n').join('\n  ')}`);
+    } else if (worktrees && !res.hooksConfigured) {
       console.warn('  warning: could not set git config core.hooksPath=scripts/git-hooks; set it by hand.');
     }
     if (res.initWorktree) {

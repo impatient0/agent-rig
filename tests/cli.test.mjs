@@ -35,6 +35,9 @@ import {
   hydrateAntigravityHooksJson,
   mergeClaudeSettings,
   DEFAULT_SYSTEM_PATH,
+  detectExistingHookManager,
+  getHookChainingGuidance,
+  buildNodeFallbackShell,
 } from '../bin/rig.mjs';
 
 function makeRepoWithHistory(prefix) {
@@ -489,7 +492,7 @@ test('buildHookCommand wraps node execution with fail-safe error message', () =>
   assert.match(cmd, /exec "\$NODE" "\.\/hooks\/guard-remote-mutation\.mjs" --harness=antigravity/);
 
   // Executing the built command in shell when node does not exist exits 1 with the error message
-  const failRun = spawnSync('/bin/sh', ['-c', cmd], { encoding: 'utf8' });
+  const failRun = spawnSync('/bin/sh', ['-c', cmd], { encoding: 'utf8', env: { PATH: '/empty', HOME: '/empty' } });
   assert.equal(failRun.status, 1);
   assert.match(failRun.stderr, /agent-rig: Node runtime not found at '\/fake\/node'\. Run 'rig update'/);
 
@@ -574,7 +577,10 @@ test('buildRigWrapperScript generates executable shell wrapper with fail-safe er
   assert.match(wrapper, /exec "\$NODE"/);
 
   // Executing the wrapper in shell when node does not exist exits 1 with diagnostic
-  const failRun = spawnSync('/bin/sh', ['-c', wrapper, '--', 'status', RIG_ROOT], { encoding: 'utf8' });
+  const failRun = spawnSync('/bin/sh', ['-c', wrapper, '--', 'status', RIG_ROOT], {
+    encoding: 'utf8',
+    env: { PATH: '/empty', HOME: '/empty' },
+  });
   assert.equal(failRun.status, 1);
   assert.match(failRun.stderr, /agent-rig: Node runtime not found at '\/mock\/nvm\/node'\. Run 'rig update'/);
 
@@ -688,5 +694,171 @@ test('installRig rewrites relative inter-doc links for Codex and hydrates repo-r
     assert.equal(claudeBacklogSkill.includes('../../docs/backlog.md'), false);
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('detectExistingHookManager and getHookChainingGuidance detect hook runners and provide chaining templates', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'rig-hookmgr-'));
+  try {
+    // Clean directory has no hook manager
+    assert.equal(detectExistingHookManager(root), null);
+
+    // Husky detection
+    const huskyDir = path.join(root, '.husky');
+    mkdirSync(huskyDir);
+    const huskyMgr = detectExistingHookManager(root);
+    assert.deepEqual(huskyMgr, { type: 'husky', name: 'Husky', path: '.husky' });
+    const huskyGuide = getHookChainingGuidance(huskyMgr);
+    assert.match(huskyGuide, /\.husky\/pre-commit/);
+    assert.match(huskyGuide, /\.\/scripts\/git-hooks\/pre-commit "\$@"/);
+    rmSync(huskyDir, { recursive: true, force: true });
+
+    // Lefthook detection
+    const lefthookFile = path.join(root, 'lefthook.yml');
+    writeFileSync(lefthookFile, 'pre-commit:\n  commands:\n');
+    const lfMgr = detectExistingHookManager(root);
+    assert.deepEqual(lfMgr, { type: 'lefthook', name: 'Lefthook', path: 'lefthook.yml' });
+    const lfGuide = getHookChainingGuidance(lfMgr);
+    assert.match(lfGuide, /lefthook\.yml/);
+    assert.match(lfGuide, /run: \.\/scripts\/git-hooks\/pre-commit/);
+    rmSync(lefthookFile, { force: true });
+
+    // Python pre-commit detection
+    const preCommitFile = path.join(root, '.pre-commit-config.yaml');
+    writeFileSync(preCommitFile, 'repos: []\n');
+    const pcMgr = detectExistingHookManager(root);
+    assert.deepEqual(pcMgr, { type: 'pre-commit', name: 'pre-commit', path: '.pre-commit-config.yaml' });
+    const pcGuide = getHookChainingGuidance(pcMgr);
+    assert.match(pcGuide, /\.pre-commit-config\.yaml/);
+    assert.match(pcGuide, /entry: \.\/scripts\/git-hooks\/pre-commit/);
+    rmSync(preCommitFile, { force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('initRepo preserves pre-existing hook runners and avoids destroying git hook configuration unless forced', () => {
+  // Test with .husky
+  const { root: huskyRoot, git: gitHusky, cleanup: cleanupHusky } = makeRepoWithHistory('rig-init-husky-');
+  try {
+    mkdirSync(path.join(huskyRoot, '.husky'));
+    const res = initRepo(huskyRoot, { worktrees: true });
+    assert.equal(res.hooksConfigured, false);
+    assert.equal(res.existingHookManager?.name, 'Husky');
+    assert.match(res.hookWarning, /Existing git hook manager detected \(Husky/);
+    assert.match(res.chainingGuidance, /\.husky\/pre-commit/);
+    // core.hooksPath should NOT be set
+    const hooksPathRes = gitHusky(huskyRoot, 'config', '--get', 'core.hooksPath');
+    assert.notEqual(hooksPathRes.stdout.trim(), 'scripts/git-hooks');
+    // Pre-commit script is still scaffolded so the user can chain it
+    assert.ok(existsSync(path.join(res.dir, 'scripts/git-hooks/pre-commit')));
+
+    // Re-running with force: true overrides
+    const forceRes = initRepo(huskyRoot, { worktrees: true, force: true });
+    assert.equal(forceRes.hooksConfigured, true);
+    assert.equal(gitHusky(huskyRoot, 'config', '--get', 'core.hooksPath').stdout.trim(), 'scripts/git-hooks');
+  } finally {
+    cleanupHusky();
+  }
+
+  // Test with lefthook.yml
+  const { root: lfRoot, git: gitLf, cleanup: cleanupLf } = makeRepoWithHistory('rig-init-lf-');
+  try {
+    writeFileSync(path.join(lfRoot, 'lefthook.yml'), 'pre-commit:\n');
+    const res = initRepo(lfRoot, { worktrees: true });
+    assert.equal(res.hooksConfigured, false);
+    assert.equal(res.existingHookManager?.name, 'Lefthook');
+    assert.match(res.hookWarning, /Lefthook/);
+    assert.match(res.chainingGuidance, /lefthook\.yml/);
+    assert.notEqual(gitLf(lfRoot, 'config', '--get', 'core.hooksPath').stdout.trim(), 'scripts/git-hooks');
+  } finally {
+    cleanupLf();
+  }
+
+  // Test with .pre-commit-config.yaml
+  const { root: pcRoot, git: gitPc, cleanup: cleanupPc } = makeRepoWithHistory('rig-init-pc-');
+  try {
+    writeFileSync(path.join(pcRoot, '.pre-commit-config.yaml'), 'repos: []\n');
+    const res = initRepo(pcRoot, { worktrees: true });
+    assert.equal(res.hooksConfigured, false);
+    assert.equal(res.existingHookManager?.name, 'pre-commit');
+    assert.match(res.hookWarning, /pre-commit/);
+    assert.match(res.chainingGuidance, /\.pre-commit-config\.yaml/);
+    assert.notEqual(gitPc(pcRoot, 'config', '--get', 'core.hooksPath').stdout.trim(), 'scripts/git-hooks');
+  } finally {
+    cleanupPc();
+  }
+
+  // Test with custom core.hooksPath already configured
+  const { root: customRoot, git: gitCustom, cleanup: cleanupCustom } = makeRepoWithHistory('rig-init-custom-');
+  try {
+    gitCustom(customRoot, 'config', 'core.hooksPath', '.custom-hooks');
+    const res = initRepo(customRoot, { worktrees: true });
+    assert.equal(res.hooksConfigured, false);
+    assert.equal(res.existingHookManager?.type, 'custom');
+    assert.equal(gitCustom(customRoot, 'config', '--get', 'core.hooksPath').stdout.trim(), '.custom-hooks');
+  } finally {
+    cleanupCustom();
+  }
+});
+
+test('buildRigWrapperScript and buildHookCommand fall back to PATH node or version manager shims when baked node is missing', () => {
+  const tmpHome = mkdtempSync(path.join(tmpdir(), 'rig-home-shim-'));
+  try {
+    // 1. Fallback to PATH node when baked node is missing
+    const wrapper = buildRigWrapperScript(path.join(RIG_ROOT, 'bin/rig.mjs'), {
+      nodeBin: '/uninstalled/nvm/v99.0.0/bin/node',
+    });
+    // Running with PATH containing the active Node binary falls back and executes successfully
+    const pathFallbackRun = spawnSync('/bin/sh', ['-c', wrapper, '--', 'status', RIG_ROOT], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: path.dirname(process.execPath), HOME: '/empty' },
+    });
+    assert.equal(pathFallbackRun.status, 0, pathFallbackRun.stderr);
+    assert.equal(JSON.parse(pathFallbackRun.stdout).hasAgentsMd, true);
+
+    // 2. Fallback to NVM structure in HOME when PATH does not have node
+    const nvmBinDir = path.join(tmpHome, '.nvm/versions/node/v99.0.0/bin');
+    mkdirSync(nvmBinDir, { recursive: true });
+    const mockNvmNode = path.join(nvmBinDir, 'node');
+    writeFileSync(mockNvmNode, '#!/bin/sh\necho "NVM_SHIM_OK"\n', { mode: 0o755 });
+
+    const nvmFallbackRun = spawnSync('/bin/sh', ['-c', wrapper, '--', 'arg1'], {
+      encoding: 'utf8',
+      env: { PATH: '/empty', HOME: tmpHome },
+    });
+    assert.equal(nvmFallbackRun.status, 0, nvmFallbackRun.stderr);
+    assert.equal(nvmFallbackRun.stdout.trim(), 'NVM_SHIM_OK');
+
+    // 3. Fallback to fnm structure in HOME
+    const emptyFnmHome = mkdtempSync(path.join(tmpdir(), 'rig-home-fnm-'));
+    const fnmHomeCurrent = path.join(emptyFnmHome, '.local/share/fnm/current/bin');
+    mkdirSync(fnmHomeCurrent, { recursive: true });
+    writeFileSync(path.join(fnmHomeCurrent, 'node'), '#!/bin/sh\necho "FNM_SHIM_OK"\n', { mode: 0o755 });
+
+    const fnmFallbackRun = spawnSync('/bin/sh', ['-c', wrapper, '--', 'arg1'], {
+      encoding: 'utf8',
+      env: { PATH: '/empty', HOME: emptyFnmHome },
+    });
+    assert.equal(fnmFallbackRun.status, 0, fnmFallbackRun.stderr);
+    assert.equal(fnmFallbackRun.stdout.trim(), 'FNM_SHIM_OK');
+    rmSync(emptyFnmHome, { recursive: true, force: true });
+
+    // 4. Fallback in buildHookCommand
+    const hookScript = path.join(tmpdir(), `rig-test-hook-fallback-${Date.now()}.mjs`);
+    writeFileSync(hookScript, 'process.stdout.write("HOOK_FALLBACK_OK");');
+    try {
+      const hookCmd = buildHookCommand(hookScript, '', { nodeBin: '/dead/node' });
+      const hookRun = spawnSync('/bin/sh', ['-c', hookCmd], {
+        encoding: 'utf8',
+        env: { PATH: path.dirname(process.execPath), HOME: '/empty' },
+      });
+      assert.equal(hookRun.status, 0, hookRun.stderr);
+      assert.equal(hookRun.stdout, 'HOOK_FALLBACK_OK');
+    } finally {
+      rmSync(hookScript, { force: true });
+    }
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
   }
 });

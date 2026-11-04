@@ -33,6 +33,7 @@ import {
   resolveNodeBinary,
   buildHookCommand,
   hydrateAntigravityHooksJson,
+  linkSafe,
   mergeClaudeSettings,
   DEFAULT_SYSTEM_PATH,
   detectExistingHookManager,
@@ -235,6 +236,8 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     assert.deepEqual(upd.installedHarnesses, ['antigravity', 'claude']);
     assert.deepEqual(upd.pruned, [dangling]);
     assert.equal(existsSync(dangling), false);
+    assert.equal(upd.linked.length, 0);
+    assert.ok(upd.skipped.length >= 1);
 
     const updatedAgyHooks = JSON.parse(readFileSync(path.join(agyPluginDir, 'hooks.json'), 'utf8'));
     assert.match(updatedAgyHooks['remote-mutation-guard'].PreToolUse[0].hooks[0].command, /NODE="\/mock\/node\/updated"/);
@@ -243,6 +246,40 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     assert.match(updatedClaudeSettings.hooks.PreToolUse[0].hooks[0].command, /NODE="\/mock\/node\/updated"/);
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('linkSafe and updateRig are idempotent and do not recreate or re-count existing valid symlinks', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-idempotent-'));
+  const testDir = mkdtempSync(path.join(tmpdir(), 'rig-linksafe-'));
+  try {
+    mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
+    const first = installRig({ homeDir: fakeHome, detectedOnly: true });
+    assert.equal(first.linked.length, 1);
+    assert.equal(first.skipped.length, 0);
+
+    const second = updateRig({ homeDir: fakeHome });
+    assert.equal(second.linked.length, 0);
+    assert.ok(second.skipped.length >= 1);
+
+    // Direct linkSafe verification: already valid symlink is skipped even when force: true
+    const targetFile = path.join(testDir, 'target.txt');
+    const linkFile = path.join(testDir, 'link.txt');
+    writeFileSync(targetFile, 'hello');
+    const linked = [];
+    const skipped = [];
+    assert.equal(linkSafe(targetFile, linkFile, { force: true, linked, skipped }), true);
+    assert.equal(linked.length, 1);
+    assert.equal(skipped.length, 0);
+
+    const linkedAgain = [];
+    const skippedAgain = [];
+    assert.equal(linkSafe(targetFile, linkFile, { force: true, linked: linkedAgain, skipped: skippedAgain }), false);
+    assert.equal(linkedAgain.length, 0);
+    assert.equal(skippedAgain.length, 1);
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(testDir, { recursive: true, force: true });
   }
 });
 

@@ -402,7 +402,20 @@ function pruneMissingRigEntries(installedDir, validNames, { pruned = [] } = {}) 
   return pruned;
 }
 
-function linkSafe(src, dest, { force = false, linked = [], skipped = [] } = {}) {
+export function linkSafe(src, dest, { force = false, linked = [], skipped = [] } = {}) {
+  if (isSymlink(dest)) {
+    try {
+      const rawTarget = readlinkSync(dest);
+      const existingTarget = path.resolve(path.dirname(dest), rawTarget);
+      if (existingTarget === path.resolve(src)) {
+        skipped.push(dest);
+        return false;
+      }
+    } catch {
+      // unreadable or broken symlink; proceed
+    }
+  }
+
   if (existsSync(dest) || isSymlink(dest)) {
     if (!force) {
       skipped.push(dest);

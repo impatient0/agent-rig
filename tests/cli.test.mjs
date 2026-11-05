@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, rmSync, readdirSync, copyFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, rmSync, readdirSync, copyFileSync, chmodSync, readlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -263,7 +263,7 @@ test('linkSafe and updateRig are idempotent and do not recreate or re-count exis
   try {
     mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
     const first = installRig({ homeDir: fakeHome, detectedOnly: true });
-    assert.equal(first.linked.length, 1);
+    assert.ok(first.linked.length >= 1);
     assert.equal(first.skipped.length, 0);
 
     const second = updateRig({ homeDir: fakeHome });
@@ -288,6 +288,104 @@ test('linkSafe and updateRig are idempotent and do not recreate or re-count exis
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
     rmSync(testDir, { recursive: true, force: true });
+  }
+});
+
+test('installRig and updateRig manage ~/.gemini/antigravity/bin rig wrapper and node/npm symlinks', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-agy-bin-home-'));
+  const fakeBinDir = mkdtempSync(path.join(tmpdir(), 'rig-agy-node-bin-'));
+  try {
+    mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
+    const fakeNode = path.join(fakeBinDir, 'node');
+    const fakeNpm = path.join(fakeBinDir, 'npm');
+    writeFileSync(fakeNode, '#!/bin/sh\necho node\n', { mode: 0o755 });
+    writeFileSync(fakeNpm, '#!/bin/sh\necho npm\n', { mode: 0o755 });
+
+    const agyBinDir = path.join(fakeHome, '.gemini/antigravity/bin');
+    const agyRig = path.join(agyBinDir, 'rig');
+    const agyNode = path.join(agyBinDir, 'node');
+    const agyNpm = path.join(agyBinDir, 'npm');
+
+    // 1. Initial install with explicit non-system nodeBin creates executable wrapper and symlinks node and npm
+    const res1 = installRig({ homeDir: fakeHome, harnesses: ['antigravity'], nodeBin: fakeNode });
+    assert.deepEqual(res1.installedHarnesses, ['antigravity']);
+    assert.ok(existsSync(agyRig) && !lstatSync(agyRig).isSymbolicLink());
+    assert.equal(lstatSync(agyRig).mode & 0o111, 0o111);
+    assert.match(readFileSync(agyRig, 'utf8'), /exec /);
+    assert.ok(res1.updated.includes(agyRig));
+
+    assert.ok(lstatSync(agyNode).isSymbolicLink());
+    assert.equal(readlinkSync(agyNode), fakeNode);
+    assert.ok(res1.linked.includes(agyNode));
+
+    assert.ok(lstatSync(agyNpm).isSymbolicLink());
+    assert.equal(readlinkSync(agyNpm), fakeNpm);
+    assert.ok(res1.linked.includes(agyNpm));
+
+    // 2. Subsequent installRig and updateRig calls remain idempotent
+    const res2 = installRig({ homeDir: fakeHome, harnesses: ['antigravity'], nodeBin: fakeNode });
+    assert.ok(!res2.linked.includes(agyNode));
+    assert.ok(!res2.linked.includes(agyNpm));
+    assert.ok(!res2.updated.includes(agyRig));
+    assert.ok(res2.skipped.includes(agyRig));
+    assert.ok(res2.skipped.includes(agyNode));
+    assert.ok(res2.skipped.includes(agyNpm));
+
+    // Plant a dangling rig symlink in antigravity bin
+    const dangling = path.join(agyBinDir, 'dangling-rig');
+    symlinkSync(path.join(RIG_ROOT, 'bin/does-not-exist'), dangling);
+    assert.ok(lstatSync(dangling).isSymbolicLink());
+
+    const res3 = updateRig({ homeDir: fakeHome, nodeBin: fakeNode });
+    assert.ok(!res3.linked.includes(agyNode));
+    assert.ok(!res3.linked.includes(agyNpm));
+    assert.ok(!res3.updated.includes(agyRig));
+    assert.ok(res3.skipped.includes(agyRig));
+    assert.ok(res3.skipped.includes(agyNode));
+    assert.ok(res3.skipped.includes(agyNpm));
+    assert.ok(res3.pruned.includes(dangling));
+    assert.equal(existsSync(dangling), false);
+
+    // 3. installRig with nodeBin: 'node' does not create node or npm symlinks
+    const fakeHomeSystem = mkdtempSync(path.join(tmpdir(), 'rig-agy-sys-home-'));
+    try {
+      mkdirSync(path.join(fakeHomeSystem, '.gemini'), { recursive: true });
+      const resSys = installRig({ homeDir: fakeHomeSystem, harnesses: ['antigravity'], nodeBin: 'node' });
+      const sysAgyBin = path.join(fakeHomeSystem, '.gemini/antigravity/bin');
+      const sysRig = path.join(sysAgyBin, 'rig');
+      const sysNode = path.join(sysAgyBin, 'node');
+      const sysNpm = path.join(sysAgyBin, 'npm');
+
+      assert.ok(existsSync(sysRig) && !lstatSync(sysRig).isSymbolicLink());
+      assert.equal(lstatSync(sysRig).mode & 0o111, 0o111);
+      assert.equal(existsSync(sysNode), false);
+      assert.equal(existsSync(sysNpm), false);
+      assert.ok(!resSys.linked.includes(sysNode));
+      assert.ok(!resSys.linked.includes(sysNpm));
+    } finally {
+      rmSync(fakeHomeSystem, { recursive: true, force: true });
+    }
+
+    // 4. installRig with non-system node without adjacent npm only symlinks node
+    const fakeBinSolo = mkdtempSync(path.join(tmpdir(), 'rig-agy-solo-'));
+    const fakeHomeSolo = mkdtempSync(path.join(tmpdir(), 'rig-agy-solo-home-'));
+    try {
+      mkdirSync(path.join(fakeHomeSolo, '.gemini'), { recursive: true });
+      const soloNode = path.join(fakeBinSolo, 'node');
+      writeFileSync(soloNode, '#!/bin/sh\necho node\n', { mode: 0o755 });
+      const resSolo = installRig({ homeDir: fakeHomeSolo, harnesses: ['antigravity'], nodeBin: soloNode });
+      const soloBin = path.join(fakeHomeSolo, '.gemini/antigravity/bin');
+      assert.ok(lstatSync(path.join(soloBin, 'node')).isSymbolicLink());
+      assert.equal(existsSync(path.join(soloBin, 'npm')), false);
+      assert.ok(resSolo.linked.includes(path.join(soloBin, 'node')));
+      assert.ok(!resSolo.linked.includes(path.join(soloBin, 'npm')));
+    } finally {
+      rmSync(fakeBinSolo, { recursive: true, force: true });
+      rmSync(fakeHomeSolo, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(fakeBinDir, { recursive: true, force: true });
   }
 });
 

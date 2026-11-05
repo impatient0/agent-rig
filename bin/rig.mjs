@@ -393,13 +393,13 @@ function isSymlink(p) {
   }
 }
 
-function pruneDanglingRigSymlinks(dir, pruned = []) {
+function pruneDanglingRigSymlinks(dir, pruned = [], rigRoot = RIG_ROOT) {
   if (!existsSync(dir)) return pruned;
   for (const entry of readdirSync(dir)) {
     const full = path.join(dir, entry);
     if (!isSymlink(full)) continue;
     const target = path.resolve(dir, readlinkSync(full));
-    if (target.startsWith(RIG_ROOT) && !existsSync(target)) {
+    if (target.startsWith(rigRoot) && !existsSync(target)) {
       rmSync(full, { recursive: true, force: true });
       pruned.push(full);
     }
@@ -643,6 +643,41 @@ export function mergeAntigravityPluginsJson(existing, pluginContainerDir) {
 }
 
 function installForAntigravity(homeDir, { force = false, hydrated = [], linked = [], skipped = [], updated = [], pruned = [], rigRoot = RIG_ROOT, nodeBin = resolveNodeBinary() } = {}) {
+  const binDir = path.join(homeDir, '.gemini', 'antigravity', 'bin');
+  mkdirSync(binDir, { recursive: true });
+  pruneDanglingRigSymlinks(binDir, pruned, rigRoot);
+  const rigBinPath = path.join(binDir, 'rig');
+  const rigWrapperContent = buildRigWrapperScript(path.join(rigRoot, 'bin/rig.mjs'), { nodeBin });
+  try {
+    const existing = existsSync(rigBinPath) && !isSymlink(rigBinPath) ? readFileSync(rigBinPath, 'utf8') : null;
+    if (existing !== rigWrapperContent) {
+      if (existsSync(rigBinPath) || isSymlink(rigBinPath)) {
+        rmSync(rigBinPath, { force: true, recursive: true });
+      }
+      writeFileSync(rigBinPath, rigWrapperContent, { encoding: 'utf8', mode: 0o755 });
+      chmodSync(rigBinPath, 0o755);
+      updated.push(rigBinPath);
+    } else {
+      skipped.push(rigBinPath);
+    }
+  } catch {
+    rmSync(rigBinPath, { force: true, recursive: true });
+    writeFileSync(rigBinPath, rigWrapperContent, { encoding: 'utf8', mode: 0o755 });
+    chmodSync(rigBinPath, 0o755);
+    updated.push(rigBinPath);
+  }
+
+  if (nodeBin && nodeBin !== 'node' && path.isAbsolute(nodeBin) && existsSync(nodeBin)) {
+    const nodeDest = path.join(binDir, 'node');
+    linkSafe(nodeBin, nodeDest, { force, linked, skipped });
+
+    const adjacentNpm = path.join(path.dirname(nodeBin), 'npm');
+    if (existsSync(adjacentNpm)) {
+      const npmDest = path.join(binDir, 'npm');
+      linkSafe(adjacentNpm, npmDest, { force, linked, skipped });
+    }
+  }
+
   const configDir = path.join(homeDir, '.gemini', 'config');
   const pluginsDir = path.join(configDir, 'plugins');
   const pluginDir = path.join(pluginsDir, 'agent-rig');
@@ -890,7 +925,7 @@ export function installRig({
 
   const localBinDir = path.join(homeDir, '.local', 'bin');
   mkdirSync(localBinDir, { recursive: true });
-  pruneDanglingRigSymlinks(localBinDir, pruned);
+  pruneDanglingRigSymlinks(localBinDir, pruned, rigRoot);
   const localBinRig = path.join(localBinDir, 'rig');
   const rigWrapperContent = buildRigWrapperScript(path.join(rigRoot, 'bin/rig.mjs'), { nodeBin: resolvedNodeBin });
   try {

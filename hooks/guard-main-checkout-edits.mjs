@@ -54,22 +54,33 @@ export function isDocFile(filePath, repoRoot) {
 export function isRiggedRepo(repoRoot) {
   if (!repoRoot || typeof repoRoot !== 'string') return false;
 
-  // Verify that scripts/git-hooks/pre-commit exists in the repo
-  if (existsSync(path.join(repoRoot, 'scripts/git-hooks/pre-commit'))) {
+  // Verify that .rig/hooks/pre-commit or legacy scripts/git-hooks/pre-commit exists in the repo
+  if (
+    existsSync(path.join(repoRoot, '.rig/hooks/pre-commit')) ||
+    existsSync(path.join(repoRoot, 'scripts/git-hooks/pre-commit'))
+  ) {
     return true;
   }
 
-  // Verify whether git config --get core.hooksPath resolves to scripts/git-hooks (or ends with scripts/git-hooks)
+  // Verify whether git config --get core.hooksPath resolves to .rig/hooks or scripts/git-hooks
   try {
     const res = spawnSync('git', ['-C', repoRoot, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
     if (res.status === 0) {
       const hooksPath = res.stdout.trim();
       if (hooksPath) {
         const normalized = hooksPath.replace(/\\/g, '/').replace(/\/+$/, '');
-        if (normalized === 'scripts/git-hooks' || normalized.endsWith('/scripts/git-hooks')) {
+        if (
+          normalized === '.rig/hooks' ||
+          normalized.endsWith('/.rig/hooks') ||
+          normalized === 'scripts/git-hooks' ||
+          normalized.endsWith('/scripts/git-hooks')
+        ) {
           return true;
         }
-        if (path.resolve(repoRoot, hooksPath) === path.resolve(repoRoot, 'scripts/git-hooks')) {
+        if (
+          path.resolve(repoRoot, hooksPath) === path.resolve(repoRoot, '.rig/hooks') ||
+          path.resolve(repoRoot, hooksPath) === path.resolve(repoRoot, 'scripts/git-hooks')
+        ) {
           return true;
         }
       }

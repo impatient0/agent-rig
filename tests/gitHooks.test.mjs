@@ -4,22 +4,46 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { runPreCommitHook } from '../bin/rig.mjs';
 
-const PRE_COMMIT = path.resolve(import.meta.dirname, '../scripts/git-hooks/pre-commit');
+const PRE_COMMIT = path.resolve(import.meta.dirname, '../.rig/hooks/pre-commit');
+const RIG_BIN = path.resolve(import.meta.dirname, '../bin/rig.mjs');
+const CHECK_DOC_LINKS = path.resolve(import.meta.dirname, '../scripts/check-doc-links.mjs');
+const REFLOW_DOCS = path.resolve(import.meta.dirname, '../scripts/reflow-docs.mjs');
 
 function makeRiggedRepo() {
   const root = mkdtempSync(path.join(tmpdir(), 'rig-githooks-'));
-  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const binDir = path.join(root, 'test-bin');
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(path.join(binDir, 'rig'), `#!/usr/bin/env sh\nexec node "${RIG_BIN}" "$@"\n`, { mode: 0o755 });
+
+  const git = (cwd, ...args) =>
+    spawnSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+    });
   git(root, 'init', '-q', '-b', 'main');
   git(root, 'config', 'user.email', 'test@example.com');
   git(root, 'config', 'user.name', 'Test');
-  mkdirSync(path.join(root, 'scripts/git-hooks'), { recursive: true });
-  copyFileSync(PRE_COMMIT, path.join(root, 'scripts/git-hooks/pre-commit'));
-  chmodSync(path.join(root, 'scripts/git-hooks/pre-commit'), 0o755);
+
+  mkdirSync(path.join(root, '.rig/hooks'), { recursive: true });
+  copyFileSync(PRE_COMMIT, path.join(root, '.rig/hooks/pre-commit'));
+  chmodSync(path.join(root, '.rig/hooks/pre-commit'), 0o755);
+
+  mkdirSync(path.join(root, '.rig/bin'), { recursive: true });
+  copyFileSync(RIG_BIN, path.join(root, '.rig/bin/rig.mjs'));
+  chmodSync(path.join(root, '.rig/bin/rig.mjs'), 0o755);
+
+  mkdirSync(path.join(root, '.rig/scripts'), { recursive: true });
+  copyFileSync(CHECK_DOC_LINKS, path.join(root, '.rig/scripts/check-doc-links.mjs'));
+  copyFileSync(REFLOW_DOCS, path.join(root, '.rig/scripts/reflow-docs.mjs'));
+
   writeFileSync(path.join(root, 'app.js'), 'console.log(1);\n');
   git(root, 'add', '-A');
   git(root, 'commit', '-qm', 'initial');
-  git(root, 'config', 'core.hooksPath', 'scripts/git-hooks');
+  git(root, 'config', 'core.hooksPath', '.rig/hooks');
+
   const wt = path.join(root, '.worktrees/feat-1');
   git(root, 'worktree', 'add', '-q', '-b', 'feature/feat-1', wt, 'main');
   return { root, wt, git, cleanup: () => rmSync(root, { recursive: true, force: true }) };
@@ -96,15 +120,21 @@ test('pre-commit allows doc-only commits on main checkout and rejects mixed comm
 
 test('pre-commit allows initial commit on an unborn repository', () => {
   const unbornDir = mkdtempSync(path.join(tmpdir(), 'rig-unborn-'));
-  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env } });
   try {
     git(unbornDir, 'init', '-q', '-b', 'main');
     git(unbornDir, 'config', 'user.email', 'test@example.com');
     git(unbornDir, 'config', 'user.name', 'Test');
-    mkdirSync(path.join(unbornDir, 'scripts/git-hooks'), { recursive: true });
-    copyFileSync(PRE_COMMIT, path.join(unbornDir, 'scripts/git-hooks/pre-commit'));
-    chmodSync(path.join(unbornDir, 'scripts/git-hooks/pre-commit'), 0o755);
-    git(unbornDir, 'config', 'core.hooksPath', 'scripts/git-hooks');
+
+    mkdirSync(path.join(unbornDir, '.rig/hooks'), { recursive: true });
+    copyFileSync(PRE_COMMIT, path.join(unbornDir, '.rig/hooks/pre-commit'));
+    chmodSync(path.join(unbornDir, '.rig/hooks/pre-commit'), 0o755);
+
+    mkdirSync(path.join(unbornDir, '.rig/bin'), { recursive: true });
+    copyFileSync(RIG_BIN, path.join(unbornDir, '.rig/bin/rig.mjs'));
+    chmodSync(path.join(unbornDir, '.rig/bin/rig.mjs'), 0o755);
+
+    git(unbornDir, 'config', 'core.hooksPath', '.rig/hooks');
 
     writeFileSync(path.join(unbornDir, 'README.md'), '# Unborn\n');
     git(unbornDir, 'add', 'README.md');
@@ -129,5 +159,124 @@ test('pre-commit refuses direct commits on main in a linked worktree', () => {
     assert.match(commitOnMainInWt.stderr, /refusing to commit on 'main' in a linked worktree/);
   } finally {
     cleanup();
+  }
+});
+
+test('rig hook pre-commit executes worktree and main checkout checks', () => {
+  const { root, wt, git, cleanup } = makeRiggedRepo();
+  try {
+    // In root checkout with code changes
+    writeFileSync(path.join(root, 'app.js'), 'console.log(10);\n');
+    git(root, 'add', 'app.js');
+    const directRes = runPreCommitHook(root);
+    assert.equal(directRes.status, 1);
+    assert.match(directRes.stderr, /refusing direct commit in the main checkout/);
+
+    // Invoking via CLI binary
+    const cliRes = spawnSync(process.execPath, [RIG_BIN, 'hook', 'pre-commit', root], { encoding: 'utf8' });
+    assert.equal(cliRes.status, 1);
+    assert.match(cliRes.stderr, /refusing direct commit in the main checkout/);
+
+    // In worktree with code changes
+    writeFileSync(path.join(wt, 'app.js'), 'console.log(20);\n');
+    git(wt, 'add', 'app.js');
+    const wtRes = runPreCommitHook(wt);
+    assert.equal(wtRes.status, 0);
+
+    const wtCliRes = spawnSync(process.execPath, [RIG_BIN, 'hook', 'pre-commit', wt], { encoding: 'utf8' });
+    assert.equal(wtCliRes.status, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('pre-commit shim invokes vendored .rig/bin/rig.mjs when rig is not in PATH', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'rig-shim-vendored-'));
+  const git = (cwd, ...args) =>
+    spawnSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: '/usr/bin:/bin' }, // ensure rig is not in PATH
+    });
+  try {
+    git(root, 'init', '-q', '-b', 'main');
+    git(root, 'config', 'user.email', 'test@example.com');
+    git(root, 'config', 'user.name', 'Test');
+
+    mkdirSync(path.join(root, '.rig/hooks'), { recursive: true });
+    copyFileSync(PRE_COMMIT, path.join(root, '.rig/hooks/pre-commit'));
+    chmodSync(path.join(root, '.rig/hooks/pre-commit'), 0o755);
+
+    mkdirSync(path.join(root, '.rig/bin'), { recursive: true });
+    copyFileSync(RIG_BIN, path.join(root, '.rig/bin/rig.mjs'));
+    chmodSync(path.join(root, '.rig/bin/rig.mjs'), 0o755);
+
+    git(root, 'config', 'core.hooksPath', '.rig/hooks');
+
+    writeFileSync(path.join(root, 'test.js'), 'console.log(1);\n');
+    git(root, 'add', 'test.js');
+    // First commit on unborn repo passes
+    const unbornCommit = git(root, 'commit', '-m', 'chore: initial commit');
+    assert.equal(unbornCommit.status, 0, unbornCommit.stderr);
+
+    // Direct commit on main checkout is refused by vendored rig
+    writeFileSync(path.join(root, 'test.js'), 'console.log(2);\n');
+    git(root, 'add', 'test.js');
+    const mainCommit = git(root, 'commit', '-m', 'direct commit');
+    assert.notEqual(mainCommit.status, 0);
+    assert.match(mainCommit.stderr, /refusing direct commit in the main checkout/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('pre-commit shim non-rig fallback blocks direct commits on main/master while permitting feature branch commits', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'rig-shim-fallback-'));
+  const safeEnv = {
+    ...process.env,
+    PATH: '/usr/bin:/bin',
+    HOME: '/tmp/nonexistent-home',
+  };
+  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: safeEnv });
+  try {
+    git(root, 'init', '-q', '-b', 'main');
+    git(root, 'config', 'user.email', 'test@example.com');
+    git(root, 'config', 'user.name', 'Test');
+
+    // ONLY copy the 5-line pre-commit shim into .rig/hooks/pre-commit (no .rig/bin/rig.mjs)
+    mkdirSync(path.join(root, '.rig/hooks'), { recursive: true });
+    copyFileSync(PRE_COMMIT, path.join(root, '.rig/hooks/pre-commit'));
+    chmodSync(path.join(root, '.rig/hooks/pre-commit'), 0o755);
+    git(root, 'config', 'core.hooksPath', '.rig/hooks');
+
+    // 1. Unborn repo allows initial commit even on main
+    writeFileSync(path.join(root, 'initial.txt'), 'first');
+    git(root, 'add', 'initial.txt');
+    const initRes = git(root, 'commit', '-m', 'initial commit');
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    // 2. Direct commit on main is blocked by non-rig fallback
+    writeFileSync(path.join(root, 'initial.txt'), 'second');
+    git(root, 'add', 'initial.txt');
+    const mainRes = git(root, 'commit', '-m', 'illegal direct commit');
+    assert.notEqual(mainRes.status, 0);
+    assert.match(mainRes.stderr, /pre-commit: refusing direct commit in the main checkout on main\./);
+    git(root, 'reset', '--hard', 'HEAD');
+
+    // 3. Commit on feature branch is PERMITTED by non-rig fallback
+    git(root, 'checkout', '-b', 'feature/isolated-test');
+    writeFileSync(path.join(root, 'feat.txt'), 'hello feature');
+    git(root, 'add', 'feat.txt');
+    const featRes = git(root, 'commit', '-m', 'feature commit');
+    assert.equal(featRes.status, 0, featRes.stderr);
+
+    // 4. Merge commit onto main is PERMITTED by non-rig fallback
+    git(root, 'checkout', 'main');
+    const mergeNoCommit = git(root, 'merge', '--no-commit', '--no-ff', 'feature/isolated-test');
+    assert.equal(mergeNoCommit.status, 0, mergeNoCommit.stderr);
+    const mergeCommit = git(root, 'commit', '-m', "Merge branch 'feature/isolated-test' into main");
+    assert.equal(mergeCommit.status, 0, mergeCommit.stderr);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

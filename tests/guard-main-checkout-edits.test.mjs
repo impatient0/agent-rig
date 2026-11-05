@@ -18,10 +18,17 @@ function makeRepoWithWorktree(options = {}) {
   writeFileSync(path.join(root, 'index.js'), 'export const x = 1;\n');
 
   if (rigged === 'all' || rigged === 'hookFile') {
+    mkdirSync(path.join(root, '.rig/hooks'), { recursive: true });
+    writeFileSync(path.join(root, '.rig/hooks/pre-commit'), '#!/bin/sh\nexit 0\n');
+  }
+  if (rigged === 'legacyHookFile') {
     mkdirSync(path.join(root, 'scripts/git-hooks'), { recursive: true });
     writeFileSync(path.join(root, 'scripts/git-hooks/pre-commit'), '#!/bin/sh\nexit 0\n');
   }
   if (rigged === 'all' || rigged === 'config') {
+    git('config', 'core.hooksPath', '.rig/hooks');
+  }
+  if (rigged === 'legacyConfig') {
     git('config', 'core.hooksPath', 'scripts/git-hooks');
   }
 
@@ -82,6 +89,22 @@ test('refuses edits in main checkout when repo is rigged via hook file or core.h
     assert.ok(checkEditTarget(path.join(repoViaConfig.root, 'index.js'), { harness: 'claude' }));
   } finally {
     repoViaConfig.cleanup();
+  }
+
+  const repoViaLegacyHookFile = makeRepoWithWorktree({ rigged: 'legacyHookFile' });
+  try {
+    assert.equal(isRiggedRepo(repoViaLegacyHookFile.root), true);
+    assert.ok(checkEditTarget(path.join(repoViaLegacyHookFile.root, 'index.js'), { harness: 'antigravity' }));
+  } finally {
+    repoViaLegacyHookFile.cleanup();
+  }
+
+  const repoViaLegacyConfig = makeRepoWithWorktree({ rigged: 'legacyConfig' });
+  try {
+    assert.equal(isRiggedRepo(repoViaLegacyConfig.root), true);
+    assert.ok(checkEditTarget(path.join(repoViaLegacyConfig.root, 'index.js'), { harness: 'claude' }));
+  } finally {
+    repoViaLegacyConfig.cleanup();
   }
 });
 

@@ -7,6 +7,7 @@
 //   rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]
 //   rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
 //   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force] [--harness <id>]
+//   rig hook pre-commit [<target-dir>]
 //   rig check-docs [<target-dir>]
 //   rig reflow-docs [<target-dir>] [--check]
 //   rig status [<target-dir>]
@@ -239,10 +240,22 @@ export function hydrateText(templateText, resolvedProfile) {
   return text;
 }
 
-export function rewriteDocLinks(text, { harness = null, isGlobal = false, destPath = null } = {}) {
+export function rewriteDocLinks(
+  text,
+  { harness = null, isGlobal = false, destPath = null, isDotHarness = false } = {},
+) {
   let result = text;
   if (isGlobal) {
     result = result.replaceAll('../../docs/', 'docs/');
+  }
+  if (isDotHarness) {
+    result = result.replaceAll('../../docs/', '../../../docs/');
+    result = result.replaceAll('`scripts/check-doc-links.mjs`', '`.rig/scripts/check-doc-links.mjs`');
+    result = result.replaceAll('`scripts/reflow-docs.mjs`', '`.rig/scripts/reflow-docs.mjs`');
+    result = result.replaceAll('`hooks/guard-main-checkout-edits.mjs`', '`.rig/hooks/guard-main-checkout-edits.mjs`');
+    result = result.replaceAll('`hooks/guard-symlinked-node-modules.mjs`', '`.rig/hooks/guard-symlinked-node-modules.mjs`');
+    result = result.replaceAll('`hooks/guard-remote-mutation.mjs`', '`.rig/hooks/guard-remote-mutation.mjs`');
+    result = result.replaceAll('`hooks/lib/hook-io.mjs`', '`.rig/hooks/lib/hook-io.mjs`');
   }
   if (harness === 'codex') {
     const isDirectAgentsMd = destPath && path.basename(destPath) === 'AGENTS.md' && !/[\\/]rules[\\/]/.test(destPath);
@@ -260,11 +273,16 @@ export function writeHydratedFile(
   srcPath,
   destPath,
   resolvedProfile,
-  { executable = false, isGlobal = false, harness = null } = {},
+  { executable = false, isGlobal = false, harness = null, isDotHarness = false } = {},
 ) {
   const template = readFileSync(srcPath, 'utf8');
   let hydrated = hydrateText(template, resolvedProfile);
-  hydrated = rewriteDocLinks(hydrated, { harness: harness || resolvedProfile?.harness, isGlobal, destPath });
+  hydrated = rewriteDocLinks(hydrated, {
+    harness: harness || resolvedProfile?.harness,
+    isGlobal,
+    destPath,
+    isDotHarness,
+  });
   mkdirSync(path.dirname(destPath), { recursive: true });
   if (isSymlink(destPath)) rmSync(destPath, { recursive: true, force: true });
   writeFileSync(destPath, hydrated, 'utf8');
@@ -275,7 +293,7 @@ export function copyOrHydrateDir(
   srcDir,
   destDir,
   resolvedProfile,
-  { hydrated = [], isGlobal = false, harness = null } = {},
+  { hydrated = [], isGlobal = false, harness = null, isDotHarness = false } = {},
 ) {
   if (isSymlink(destDir)) rmSync(destDir, { recursive: true, force: true });
   mkdirSync(destDir, { recursive: true });
@@ -284,10 +302,10 @@ export function copyOrHydrateDir(
     const destEntry = path.join(destDir, entry);
     const stat = lstatSync(srcEntry);
     if (stat.isDirectory()) {
-      copyOrHydrateDir(srcEntry, destEntry, resolvedProfile, { hydrated, isGlobal, harness });
+      copyOrHydrateDir(srcEntry, destEntry, resolvedProfile, { hydrated, isGlobal, harness, isDotHarness });
     } else if (stat.isFile()) {
       if (srcEntry.endsWith('.md')) {
-        writeHydratedFile(srcEntry, destEntry, resolvedProfile, { isGlobal, harness });
+        writeHydratedFile(srcEntry, destEntry, resolvedProfile, { isGlobal, harness, isDotHarness });
         hydrated.push(destEntry);
       } else {
         copyFileSafe(srcEntry, destEntry, { force: true, copied: hydrated });
@@ -331,8 +349,13 @@ export function writeRigState(homeDir, patch) {
     nodeBin: patch.nodeBin !== undefined ? patch.nodeBin : current.nodeBin,
   };
   const p = stateFilePath(homeDir);
-  mkdirSync(path.dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(next, null, 2) + '\n', 'utf8');
+  try {
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, JSON.stringify(next, null, 2) + '\n', 'utf8');
+  } catch (err) {
+    if (err && err.code === 'EROFS') return next;
+    throw err;
+  }
   return next;
 }
 
@@ -910,84 +933,263 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT } = {
   const skipped = [];
   const removed = [];
 
+  const legacyPreCommit = path.join(dir, 'scripts/git-hooks/pre-commit');
   const legacyPreMerge = path.join(dir, 'scripts/git-hooks/pre-merge-commit');
+  const hadLegacyHooksDir = existsSync(path.join(dir, 'scripts/git-hooks'));
+  let hadLegacyHooks = false;
+
+  if (existsSync(legacyPreCommit)) {
+    rmSync(legacyPreCommit, { force: true });
+    removed.push(legacyPreCommit);
+    hadLegacyHooks = true;
+  }
   if (existsSync(legacyPreMerge)) {
     rmSync(legacyPreMerge, { force: true });
     removed.push(legacyPreMerge);
+    hadLegacyHooks = true;
+  }
+  const legacyDir = path.join(dir, 'scripts/git-hooks');
+  if (existsSync(legacyDir)) {
+    try {
+      if (readdirSync(legacyDir).length === 0) {
+        rmSync(legacyDir, { recursive: true, force: true });
+        removed.push(legacyDir);
+      }
+    } catch {
+      // ignore
+    }
+  }
+  const scriptsDir = path.join(dir, 'scripts');
+  if (existsSync(scriptsDir)) {
+    try {
+      if (readdirSync(scriptsDir).length === 0) {
+        rmSync(scriptsDir, { recursive: true, force: true });
+        removed.push(scriptsDir);
+      }
+    } catch {
+      // ignore
+    }
   }
 
-  if (existsSync(path.join(dir, 'scripts/git-hooks'))) {
-    copyFileSafe(path.join(rigRoot, 'scripts/git-hooks/pre-commit'), path.join(dir, 'scripts/git-hooks/pre-commit'), {
+  let currentHooksPath = null;
+  if (existsSync(path.join(dir, '.git'))) {
+    const cfg = spawnSync('git', ['-C', dir, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+    if (cfg.status === 0) currentHooksPath = cfg.stdout.trim();
+  }
+
+  const shouldWriteRigHook =
+    existsSync(path.join(dir, '.rig/hooks')) ||
+    hadLegacyHooksDir ||
+    hadLegacyHooks ||
+    currentHooksPath === '.rig/hooks' ||
+    currentHooksPath === 'scripts/git-hooks';
+
+  if (shouldWriteRigHook) {
+    copyFileSafe(path.join(rigRoot, '.rig/hooks/pre-commit'), path.join(dir, '.rig/hooks/pre-commit'), {
       force: true,
       copied,
       skipped,
       executable: true,
     });
+    if (existsSync(path.join(dir, '.git'))) {
+      if (currentHooksPath === 'scripts/git-hooks' || (!currentHooksPath && (hadLegacyHooks || hadLegacyHooksDir))) {
+        spawnSync('git', ['-C', dir, 'config', 'core.hooksPath', '.rig/hooks']);
+      }
+    }
   }
 
   // If the repo was initialized with --self-contained, refresh static rig assets without touching AGENTS.md or docs/
-  if (existsSync(path.join(dir, 'skills')) && existsSync(path.join(dir, 'rules/AGENTS.md'))) {
-    const targetHarness = harness || detectRepoHarness(dir) || 'claude';
-    const resolvedProfile = resolveProfile(targetHarness, { rigRoot });
-    const skillsDir = path.join(rigRoot, 'skills');
-    for (const skill of readdirSync(skillsDir)) {
-      copyOrHydrateDir(path.join(skillsDir, skill), path.join(dir, 'skills', skill), resolvedProfile, {
-        hydrated: copied,
-        isGlobal: false,
-        harness: targetHarness,
+  const isSelfContained =
+    existsSync(path.join(dir, '.rig')) ||
+    existsSync(path.join(dir, 'skills')) ||
+    existsSync(path.join(dir, '.gemini/skills')) ||
+    existsSync(path.join(dir, '.claude/skills')) ||
+    existsSync(path.join(dir, '.codex/skills')) ||
+    existsSync(path.join(dir, '.cursor/skills'));
+
+  if (isSelfContained) {
+    if (existsSync(path.join(dir, '.rig'))) {
+      copyFileSafe(path.join(rigRoot, 'bin/rig.mjs'), path.join(dir, '.rig/bin/rig.mjs'), {
+        force: true,
+        copied,
+        skipped,
+        executable: true,
       });
-    }
-    if (existsSync(path.join(rigRoot, 'agents'))) {
-      for (const agent of readdirSync(path.join(rigRoot, 'agents'))) {
-        const src = path.join(rigRoot, 'agents', agent);
-        const dest = path.join(dir, 'agents', agent);
-        if (agent.endsWith('.md')) {
-          writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: targetHarness });
-          copied.push(dest);
-        } else {
-          copyFileSafe(src, dest, { force: true, copied, skipped });
-        }
-      }
-    }
-    const rulesDir = path.join(rigRoot, 'rules');
-    if (existsSync(rulesDir)) {
-      for (const rule of readdirSync(rulesDir)) {
-        const src = path.join(rulesDir, rule);
-        const dest = path.join(dir, 'rules', rule);
-        if (rule.endsWith('.md')) {
-          writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: targetHarness });
-          copied.push(dest);
-        } else {
-          copyFileSafe(src, dest, { force: true, copied, skipped });
-        }
-      }
-    }
-    copyFileSafe(path.join(rigRoot, 'scripts/check-doc-links.mjs'), path.join(dir, 'scripts/check-doc-links.mjs'), {
-      force: true,
-      copied,
-      skipped,
-      executable: true,
-    });
-    copyFileSafe(path.join(rigRoot, 'scripts/reflow-docs.mjs'), path.join(dir, 'scripts/reflow-docs.mjs'), {
-      force: true,
-      copied,
-      skipped,
-      executable: true,
-    });
-    if (existsSync(path.join(dir, 'hooks'))) {
-      copyFileSafe(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dir, 'hooks/lib/hook-io.mjs'), {
+      copyFileSafe(path.join(rigRoot, 'templates/models.json'), path.join(dir, '.rig/templates/models.json'), {
+        force: true,
+        copied,
+        skipped,
+      });
+      copyFileSafe(path.join(rigRoot, 'templates/rig-config.default.json'), path.join(dir, '.rig/templates/rig-config.default.json'), {
+        force: true,
+        copied,
+        skipped,
+      });
+      copyFileSafe(path.join(rigRoot, 'scripts/check-doc-links.mjs'), path.join(dir, '.rig/scripts/check-doc-links.mjs'), {
+        force: true,
+        copied,
+        skipped,
+        executable: true,
+      });
+      copyFileSafe(path.join(rigRoot, 'scripts/reflow-docs.mjs'), path.join(dir, '.rig/scripts/reflow-docs.mjs'), {
+        force: true,
+        copied,
+        skipped,
+        executable: true,
+      });
+      copyFileSafe(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dir, '.rig/hooks/lib/hook-io.mjs'), {
+        force: true,
+        copied,
+        skipped,
+      });
+      copyFileSafe(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dir, '.rig/hooks/hook-io.mjs'), {
         force: true,
         copied,
         skipped,
       });
       for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
-        if (existsSync(path.join(dir, 'hooks', hf))) {
-          copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dir, 'hooks', hf), {
+        copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dir, '.rig/hooks', hf), {
+          force: true,
+          copied,
+          skipped,
+          executable: true,
+        });
+      }
+    }
+
+    const dotHarnessMap = {
+      '.gemini': 'antigravity',
+      '.claude': 'claude',
+      '.codex': 'codex',
+      '.cursor': 'cursor',
+    };
+    const targetHarnesses = [];
+    if (harness) {
+      targetHarnesses.push(harness);
+    } else {
+      for (const [dotDir, hId] of Object.entries(dotHarnessMap)) {
+        if (existsSync(path.join(dir, dotDir))) {
+          targetHarnesses.push(hId);
+        }
+      }
+    }
+
+    if (targetHarnesses.length > 0) {
+      for (const tHarness of targetHarnesses) {
+        const dotDirName = { antigravity: '.gemini', claude: '.claude', codex: '.codex', cursor: '.cursor' }[tHarness] || ('.' + tHarness);
+        const dotDir = path.join(dir, dotDirName);
+        const resolvedProfile = resolveProfile(tHarness, { rigRoot });
+        const skillsDir = path.join(rigRoot, 'skills');
+        for (const skill of readdirSync(skillsDir)) {
+          copyOrHydrateDir(path.join(skillsDir, skill), path.join(dotDir, 'skills', skill), resolvedProfile, {
+            hydrated: copied,
+            isGlobal: false,
+            harness: tHarness,
+            isDotHarness: true,
+          });
+        }
+        if (existsSync(path.join(rigRoot, 'agents'))) {
+          for (const agent of readdirSync(path.join(rigRoot, 'agents'))) {
+            const src = path.join(rigRoot, 'agents', agent);
+            const dest = path.join(dotDir, 'agents', agent);
+            if (agent.endsWith('.md')) {
+              writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true });
+              copied.push(dest);
+            } else {
+              copyFileSafe(src, dest, { force: true, copied, skipped });
+            }
+          }
+        }
+        if (existsSync(path.join(rigRoot, 'rules'))) {
+          for (const rule of readdirSync(path.join(rigRoot, 'rules'))) {
+            const src = path.join(rigRoot, 'rules', rule);
+            const dest = path.join(dotDir, 'rules', rule);
+            if (rule.endsWith('.md')) {
+              writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true });
+              copied.push(dest);
+            } else {
+              copyFileSafe(src, dest, { force: true, copied, skipped });
+            }
+          }
+        }
+        if (tHarness === 'claude') {
+          copyFileSafe(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dotDir, 'hooks/lib/hook-io.mjs'), {
             force: true,
             copied,
             skipped,
-            executable: true,
           });
+          for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
+            copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dotDir, 'hooks', hf), {
+              force: true,
+              copied,
+              skipped,
+              executable: true,
+            });
+          }
+        }
+      }
+    } else if (existsSync(path.join(dir, 'skills'))) {
+      const tHarness = harness || detectRepoHarness(dir) || 'claude';
+      const resolvedProfile = resolveProfile(tHarness, { rigRoot });
+      const skillsDir = path.join(rigRoot, 'skills');
+      for (const skill of readdirSync(skillsDir)) {
+        copyOrHydrateDir(path.join(skillsDir, skill), path.join(dir, 'skills', skill), resolvedProfile, {
+          hydrated: copied,
+          isGlobal: false,
+          harness: tHarness,
+        });
+      }
+      if (existsSync(path.join(rigRoot, 'agents'))) {
+        for (const agent of readdirSync(path.join(rigRoot, 'agents'))) {
+          const src = path.join(rigRoot, 'agents', agent);
+          const dest = path.join(dir, 'agents', agent);
+          if (agent.endsWith('.md')) {
+            writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness });
+            copied.push(dest);
+          } else {
+            copyFileSafe(src, dest, { force: true, copied, skipped });
+          }
+        }
+      }
+      if (existsSync(path.join(rigRoot, 'rules'))) {
+        for (const rule of readdirSync(path.join(rigRoot, 'rules'))) {
+          const src = path.join(rigRoot, 'rules', rule);
+          const dest = path.join(dir, 'rules', rule);
+          if (rule.endsWith('.md')) {
+            writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness });
+            copied.push(dest);
+          } else {
+            copyFileSafe(src, dest, { force: true, copied, skipped });
+          }
+        }
+      }
+      copyFileSafe(path.join(rigRoot, 'scripts/check-doc-links.mjs'), path.join(dir, 'scripts/check-doc-links.mjs'), {
+        force: true,
+        copied,
+        skipped,
+        executable: true,
+      });
+      copyFileSafe(path.join(rigRoot, 'scripts/reflow-docs.mjs'), path.join(dir, 'scripts/reflow-docs.mjs'), {
+        force: true,
+        copied,
+        skipped,
+        executable: true,
+      });
+      if (existsSync(path.join(dir, 'hooks'))) {
+        copyFileSafe(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dir, 'hooks/lib/hook-io.mjs'), {
+          force: true,
+          copied,
+          skipped,
+        });
+        for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
+          if (existsSync(path.join(dir, 'hooks', hf))) {
+            copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dir, 'hooks', hf), {
+              force: true,
+              copied,
+              skipped,
+              executable: true,
+            });
+          }
         }
       }
     }
@@ -1297,7 +1499,15 @@ export function detectExistingHookManager(dir, mainDir = null) {
       const res = spawnSync('git', ['-C', d, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
       if (res.status === 0 && res.stdout.trim()) {
         const hooksPath = res.stdout.trim();
-        if (hooksPath !== 'scripts/git-hooks') {
+        const normalized = hooksPath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+        const isRigHooks =
+          normalized === '.rig/hooks' ||
+          normalized === 'scripts/git-hooks' ||
+          normalized.endsWith('/.rig/hooks') ||
+          normalized.endsWith('/scripts/git-hooks') ||
+          path.resolve(d, hooksPath) === path.resolve(d, '.rig/hooks') ||
+          path.resolve(d, hooksPath) === path.resolve(d, 'scripts/git-hooks');
+        if (!isRigHooks) {
           let name = 'Custom core.hooksPath';
           let type = 'custom';
           if (hooksPath.includes('husky')) {
@@ -1347,7 +1557,7 @@ export function getHookChainingGuidance(manager) {
     case 'husky':
       return [
         'To chain agent-rig with Husky, add the following line to .husky/pre-commit:',
-        '  ./scripts/git-hooks/pre-commit "$@"',
+        '  ./.rig/hooks/pre-commit "$@"',
       ].join('\n');
     case 'lefthook':
       return [
@@ -1355,7 +1565,7 @@ export function getHookChainingGuidance(manager) {
         '  pre-commit:',
         '    commands:',
         '      agent-rig:',
-        '        run: ./scripts/git-hooks/pre-commit',
+        '        run: ./.rig/hooks/pre-commit',
       ].join('\n');
     case 'pre-commit':
       return [
@@ -1364,7 +1574,7 @@ export function getHookChainingGuidance(manager) {
         '    hooks:',
         '      - id: agent-rig',
         '        name: agent-rig pre-commit',
-        '        entry: ./scripts/git-hooks/pre-commit',
+        '        entry: ./.rig/hooks/pre-commit',
         '        language: system',
         '        always_run: true',
         '        pass_filenames: false',
@@ -1372,7 +1582,7 @@ export function getHookChainingGuidance(manager) {
     default:
       return [
         `To chain agent-rig with your existing hooks in '${manager.path}':`,
-        '  Call ./scripts/git-hooks/pre-commit from your existing pre-commit hook script.',
+        '  Call ./.rig/hooks/pre-commit from your existing pre-commit hook script.',
       ].join('\n');
   }
 }
@@ -1384,7 +1594,11 @@ export function initRepo(
   const requestedDir = path.resolve(targetDir);
   mkdirSync(requestedDir, { recursive: true });
 
-  const where = worktreeInfo(requestedDir);
+  let where = worktreeInfo(requestedDir);
+  if (!where.isRepo) {
+    spawnSync('git', ['-C', requestedDir, 'init', '-q', '-b', 'main'], { encoding: 'utf8' });
+    where = worktreeInfo(requestedDir);
+  }
   let initWorktree = null;
   if (worktrees && where.isRepo && !where.isLinked && where.hasCommits) {
     initWorktree = ensureInitWorktree(requestedDir);
@@ -1432,7 +1646,7 @@ export function initRepo(
   let chainingGuidance = null;
 
   if (worktrees) {
-    copyFileSafe(path.join(RIG_ROOT, 'scripts/git-hooks/pre-commit'), path.join(dir, 'scripts/git-hooks/pre-commit'), {
+    copyFileSafe(path.join(rigRoot, '.rig/hooks/pre-commit'), path.join(dir, '.rig/hooks/pre-commit'), {
       force,
       copied,
       skipped,
@@ -1441,13 +1655,13 @@ export function initRepo(
 
     existingHookManager = detectExistingHookManager(dir, mainCheckout);
 
-    if (existsSync(path.join(dir, '.git'))) {
+    if (existsSync(path.join(dir, '.git')) || existsSync(path.join(mainCheckout, '.git'))) {
       if (existingHookManager && !force) {
         chainingGuidance = getHookChainingGuidance(existingHookManager);
         hookWarning = `Existing git hook manager detected (${existingHookManager.name} at '${existingHookManager.path}'). Preserving existing hook configuration.\n${chainingGuidance}`;
         hooksConfigured = false;
       } else {
-        const cfg = spawnSync('git', ['-C', dir, 'config', 'core.hooksPath', 'scripts/git-hooks']);
+        const cfg = spawnSync('git', ['-C', dir, 'config', 'core.hooksPath', '.rig/hooks']);
         hooksConfigured = cfg.status === 0;
       }
     }
@@ -1462,80 +1676,159 @@ export function initRepo(
   }
 
   if (selfContained) {
-    const targetHarness =
-      harness ||
-      detectRepoHarness(dir) ||
-      (where.isRepo && where.mainCheckout ? detectRepoHarness(where.mainCheckout) : null) ||
-      'claude';
-    const resolvedProfile = resolveProfile(targetHarness, { rigRoot });
-    const skillsDir = path.join(rigRoot, 'skills');
-    for (const skill of readdirSync(skillsDir)) {
-      copyOrHydrateDir(path.join(skillsDir, skill), path.join(dir, 'skills', skill), resolvedProfile, {
-        hydrated: copied,
-        isGlobal: false,
-        harness: targetHarness,
-      });
-    }
-    const agentsDir = path.join(rigRoot, 'agents');
-    if (existsSync(agentsDir)) {
-      for (const agent of readdirSync(agentsDir)) {
-        const src = path.join(agentsDir, agent);
-        const dest = path.join(dir, 'agents', agent);
-        if (agent.endsWith('.md')) {
-          writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: targetHarness });
-          copied.push(dest);
-        } else {
-          copyFileSafe(src, dest, { force: true, copied, skipped });
-        }
+    let targetHarnesses = [];
+    if (harness) {
+      targetHarnesses = harness.split(',').map((s) => s.trim()).filter(Boolean);
+    } else {
+      const checkedDirs = [dir];
+      if (mainCheckout && mainCheckout !== dir) checkedDirs.push(mainCheckout);
+      const repoDetected = new Set();
+      for (const d of checkedDirs) {
+        if (existsSync(path.join(d, '.gemini'))) repoDetected.add('antigravity');
+        if (existsSync(path.join(d, '.claude')) || existsSync(path.join(d, '.claude-plugin'))) repoDetected.add('claude');
+        if (existsSync(path.join(d, '.codex'))) repoDetected.add('codex');
+        if (existsSync(path.join(d, '.cursor'))) repoDetected.add('cursor');
+      }
+      if (repoDetected.size > 0) {
+        targetHarnesses = [...repoDetected];
+      } else if (homeDir) {
+        targetHarnesses = detectHarnesses(homeDir).filter((d) => d.detected).map((d) => d.id);
       }
     }
-    const rulesDir = path.join(rigRoot, 'rules');
-    if (existsSync(rulesDir)) {
-      for (const rule of readdirSync(rulesDir)) {
-        const src = path.join(rulesDir, rule);
-        const dest = path.join(dir, 'rules', rule);
-        if (rule.endsWith('.md')) {
-          writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: targetHarness });
-          copied.push(dest);
-        } else {
-          copyFileSafe(src, dest, { force: true, copied, skipped });
-        }
-      }
+    if (targetHarnesses.length === 0) {
+      throw new Error(
+        'No harness detected or specified for --self-contained mode. Pass --harness <antigravity|claude|codex|cursor> or create a harness dot-directory first.',
+      );
     }
-    copyFileSafe(path.join(RIG_ROOT, 'scripts/check-doc-links.mjs'), path.join(dir, 'scripts/check-doc-links.mjs'), {
-      force,
-      copied,
-      skipped,
-      executable: true,
-    });
-    copyFileSafe(path.join(RIG_ROOT, 'scripts/reflow-docs.mjs'), path.join(dir, 'scripts/reflow-docs.mjs'), {
-      force,
-      copied,
-      skipped,
-      executable: true,
-    });
 
-    copyFileSafe(path.join(RIG_ROOT, 'hooks/lib/hook-io.mjs'), path.join(dir, 'hooks/lib/hook-io.mjs'), {
+    const dotHarnessMap = {
+      antigravity: '.gemini',
+      claude: '.claude',
+      codex: '.codex',
+      cursor: '.cursor',
+    };
+
+    for (const tHarness of targetHarnesses) {
+      const dotDirName = dotHarnessMap[tHarness] || ('.' + tHarness);
+      const dotDir = path.join(dir, dotDirName);
+      const resolvedProfile = resolveProfile(tHarness, { rigRoot });
+      const skillsDir = path.join(rigRoot, 'skills');
+      for (const skill of readdirSync(skillsDir)) {
+        copyOrHydrateDir(path.join(skillsDir, skill), path.join(dotDir, 'skills', skill), resolvedProfile, {
+          hydrated: copied,
+          isGlobal: false,
+          harness: tHarness,
+          isDotHarness: true,
+        });
+      }
+      const agentsDir = path.join(rigRoot, 'agents');
+      if (existsSync(agentsDir)) {
+        for (const agent of readdirSync(agentsDir)) {
+          const src = path.join(agentsDir, agent);
+          const dest = path.join(dotDir, 'agents', agent);
+          if (agent.endsWith('.md')) {
+            writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true });
+            copied.push(dest);
+          } else {
+            copyFileSafe(src, dest, { force: true, copied, skipped });
+          }
+        }
+      }
+      const rulesDir = path.join(rigRoot, 'rules');
+      if (existsSync(rulesDir)) {
+        for (const rule of readdirSync(rulesDir)) {
+          const src = path.join(rulesDir, rule);
+          const dest = path.join(dotDir, 'rules', rule);
+          if (rule.endsWith('.md')) {
+            writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true });
+            copied.push(dest);
+          } else {
+            copyFileSafe(src, dest, { force: true, copied, skipped });
+          }
+        }
+      }
+
+      if (tHarness === 'claude') {
+        copyFileSafe(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dotDir, 'hooks/lib/hook-io.mjs'), {
+          force,
+          copied,
+          skipped,
+        });
+        const hookFiles = worktrees
+          ? ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']
+          : ['guard-remote-mutation.mjs'];
+        for (const hf of hookFiles) {
+          copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dotDir, 'hooks', hf), {
+            force,
+            copied,
+            skipped,
+            executable: true,
+          });
+        }
+
+        const templateSettings = JSON.parse(
+          readFileSync(
+            path.join(rigRoot, worktrees ? 'templates/claude/settings.worktree.json' : 'templates/claude/settings.minimal.json'),
+            'utf8',
+          ),
+        );
+        const settingsDest = path.join(dotDir, 'settings.json');
+        if (existsSync(settingsDest) && !force) {
+          const existing = JSON.parse(readFileSync(settingsDest, 'utf8'));
+          const combined = mergeClaudeSettings(existing, templateSettings);
+          writeFileSync(settingsDest, JSON.stringify(combined, null, 2) + '\n', 'utf8');
+          merged.push(settingsDest);
+        } else {
+          mkdirSync(path.dirname(settingsDest), { recursive: true });
+          writeFileSync(settingsDest, JSON.stringify(templateSettings, null, 2) + '\n', 'utf8');
+          copied.push(settingsDest);
+        }
+      }
+    }
+
+    copyFileSafe(path.join(rigRoot, 'bin/rig.mjs'), path.join(dir, '.rig/bin/rig.mjs'), {
+      force,
+      copied,
+      skipped,
+      executable: true,
+    });
+    copyFileSafe(path.join(rigRoot, 'templates/models.json'), path.join(dir, '.rig/templates/models.json'), {
       force,
       copied,
       skipped,
     });
-    copyFileSafe(path.join(RIG_ROOT, 'hooks/lib/hook-io.mjs'), path.join(dir, '.claude/hooks/lib/hook-io.mjs'), {
+    copyFileSafe(path.join(rigRoot, 'templates/rig-config.default.json'), path.join(dir, '.rig/templates/rig-config.default.json'), {
       force,
       copied,
       skipped,
     });
-    const hookFiles = worktrees
+    copyFileSafe(path.join(rigRoot, 'scripts/check-doc-links.mjs'), path.join(dir, '.rig/scripts/check-doc-links.mjs'), {
+      force,
+      copied,
+      skipped,
+      executable: true,
+    });
+    copyFileSafe(path.join(rigRoot, 'scripts/reflow-docs.mjs'), path.join(dir, '.rig/scripts/reflow-docs.mjs'), {
+      force,
+      copied,
+      skipped,
+      executable: true,
+    });
+    copyFileSafe(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dir, '.rig/hooks/lib/hook-io.mjs'), {
+      force,
+      copied,
+      skipped,
+    });
+    copyFileSafe(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dir, '.rig/hooks/hook-io.mjs'), {
+      force,
+      copied,
+      skipped,
+    });
+    const rigHookFiles = worktrees
       ? ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']
       : ['guard-remote-mutation.mjs'];
-    for (const hf of hookFiles) {
-      copyFileSafe(path.join(RIG_ROOT, 'hooks', hf), path.join(dir, 'hooks', hf), {
-        force,
-        copied,
-        skipped,
-        executable: true,
-      });
-      copyFileSafe(path.join(RIG_ROOT, 'hooks', hf), path.join(dir, '.claude/hooks', hf), {
+    for (const hf of rigHookFiles) {
+      copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dir, '.rig/hooks', hf), {
         force,
         copied,
         skipped,
@@ -1543,56 +1836,21 @@ export function initRepo(
       });
     }
 
-    const templateSettings = JSON.parse(
-      readFileSync(
-        path.join(RIG_ROOT, worktrees ? 'templates/claude/settings.worktree.json' : 'templates/claude/settings.minimal.json'),
-        'utf8',
-      ),
-    );
-    const settingsDest = path.join(dir, '.claude/settings.json');
-    if (existsSync(settingsDest) && !force) {
-      const existing = JSON.parse(readFileSync(settingsDest, 'utf8'));
-      const combined = mergeClaudeSettings(existing, templateSettings);
-      writeFileSync(settingsDest, JSON.stringify(combined, null, 2) + '\n', 'utf8');
-      merged.push(settingsDest);
-    } else {
-      mkdirSync(path.dirname(settingsDest), { recursive: true });
-      writeFileSync(settingsDest, JSON.stringify(templateSettings, null, 2) + '\n', 'utf8');
-      copied.push(settingsDest);
-    }
-
-    const selfAgentsMd = [
-      '# Project Context',
-      '',
-      "Describe the project's purpose, primary stack, and architecture here.",
-      '',
-      '- **Test and verification gate** — npm test',
-      '- **Architecture decisions** — [ADR 0001](docs/adr/0001-record-architecture-decisions.md)',
-      '- **Active backlog** — [docs/backlog.md](docs/backlog.md)',
-      '- **Universal Engineering Rules** — [rules/AGENTS.md](rules/AGENTS.md)',
-      '- **Human-in-the-Loop UI Gate** — [rules/ui-change-gate.md](rules/ui-change-gate.md)',
-      '- **Human-in-the-Loop Contract Gate** — [rules/contract-change-gate.md](rules/contract-change-gate.md)',
-      '- **Worker Subagent** — [agents/worker.md](agents/worker.md)',
-      '- **Cold Verifier Subagent** — [agents/verifier.md](agents/verifier.md)',
-      '',
-    ].join('\n');
-    const agentsDest = path.join(dir, 'AGENTS.md');
-    if (!existsSync(agentsDest) || force) {
-      writeFileSync(agentsDest, selfAgentsMd, 'utf8');
-      copied.push(agentsDest);
-    } else {
-      skipped.push(agentsDest);
-    }
+    copyFileSafe(path.join(rigRoot, 'templates/AGENTS.md'), path.join(dir, 'AGENTS.md'), {
+      force,
+      copied,
+      skipped,
+    });
   } else {
-    copyFileSafe(path.join(RIG_ROOT, 'templates/AGENTS.md'), path.join(dir, 'AGENTS.md'), {
+    copyFileSafe(path.join(rigRoot, 'templates/AGENTS.md'), path.join(dir, 'AGENTS.md'), {
       force,
       copied,
       skipped,
     });
   }
 
-  if (homeDir) {
-    writeRigState(homeDir, { initializedRepos: [mainCheckout] });
+  if (homeDir !== false) {
+    writeRigState(homeDir || homedir(), { initializedRepos: [mainCheckout] });
   }
 
   // Stage what rig init wrote, so `rig check-docs` (which only trusts tracked files) passes at once
@@ -1630,17 +1888,46 @@ export function initRepo(
 
 export function statusRepo(targetDir = process.cwd()) {
   const dir = path.resolve(targetDir);
-  const skillsDir = existsSync(path.join(dir, 'skills'))
-    ? path.join(dir, 'skills')
-    : path.join(dir, '.claude/skills');
-  const skillsPresent = existsSync(skillsDir) ? readdirSync(skillsDir) : [];
+  const skillDirs = [
+    path.join(dir, 'skills'),
+    path.join(dir, '.gemini/skills'),
+    path.join(dir, '.claude/skills'),
+    path.join(dir, '.codex/skills'),
+    path.join(dir, '.cursor/skills'),
+  ];
+  const skillSet = new Set();
+  for (const sd of skillDirs) {
+    if (existsSync(sd)) {
+      try {
+        for (const s of readdirSync(sd)) skillSet.add(s);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  const skillsPresent = [...skillSet];
 
-  const hooksDir = existsSync(path.join(dir, 'hooks'))
-    ? path.join(dir, 'hooks')
-    : path.join(dir, '.claude/hooks');
-  const hooksPresent = existsSync(hooksDir)
-    ? readdirSync(hooksDir).filter((f) => f.startsWith('guard-'))
-    : [];
+  const hookDirs = [
+    path.join(dir, '.rig/hooks'),
+    path.join(dir, 'hooks'),
+    path.join(dir, '.claude/hooks'),
+    path.join(dir, '.gemini/hooks'),
+    path.join(dir, '.codex/hooks'),
+    path.join(dir, '.cursor/hooks'),
+  ];
+  const hookSet = new Set();
+  for (const hd of hookDirs) {
+    if (existsSync(hd)) {
+      try {
+        for (const h of readdirSync(hd)) {
+          if (h.startsWith('guard-')) hookSet.add(h);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+  const hooksPresent = [...hookSet];
 
   let gitHooksPath = null;
   if (existsSync(path.join(dir, '.git'))) {
@@ -1659,16 +1946,119 @@ export function statusRepo(targetDir = process.cwd()) {
   };
 }
 
+function resolveDocScript(scriptName, targetDir = process.cwd()) {
+  const candidates = [
+    path.join(RIG_ROOT, 'scripts', scriptName),
+    path.join(RIG_ROOT, '../scripts', scriptName),
+    path.join(targetDir, '.rig/scripts', scriptName),
+    path.join(targetDir, 'scripts', scriptName),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  return path.join(RIG_ROOT, 'scripts', scriptName);
+}
+
 export function runCheckDocs(targetDir = process.cwd()) {
-  const script = path.join(RIG_ROOT, 'scripts/check-doc-links.mjs');
+  const script = resolveDocScript('check-doc-links.mjs', targetDir);
   return spawnSync(process.execPath, [script, path.resolve(targetDir)], { encoding: 'utf8' });
 }
 
 export function runReflowDocs(targetDir = process.cwd(), { check = false } = {}) {
-  const script = path.join(RIG_ROOT, 'scripts/reflow-docs.mjs');
+  const script = resolveDocScript('reflow-docs.mjs', targetDir);
   const args = [script, path.resolve(targetDir)];
   if (check) args.push('--check');
   return spawnSync(process.execPath, args, { encoding: 'utf8' });
+}
+
+export function runPreCommitHook(targetDir = process.cwd()) {
+  const dir = path.resolve(targetDir);
+  const git = (...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+
+  const revRes = git('rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir', '--show-toplevel');
+  if (revRes.status !== 0) {
+    return { status: 0, stdout: '', stderr: '' };
+  }
+  const lines = revRes.stdout.trim().split('\n');
+  const gitDir = lines[0];
+  const commonDir = lines[1];
+  const repoRoot = lines[2] || dir;
+
+  // Initial commit on an unborn repository is always allowed in the main checkout
+  const headRes = git('rev-parse', '--verify', '-q', 'HEAD');
+  if (headRes.status !== 0) {
+    return { status: 0, stdout: '', stderr: '' };
+  }
+
+  const branchRes = git('symbolic-ref', '--short', '-q', 'HEAD');
+  const branch = branchRes.status === 0 ? branchRes.stdout.trim() : '';
+
+  if (gitDir === commonDir) {
+    // In the main checkout, only merge commits onto main/master are allowed,
+    // except for documentation-only commits verified by doc linters.
+    if ((branch === 'main' || branch === 'master') && existsSync(path.join(gitDir, 'MERGE_HEAD'))) {
+      return { status: 0, stdout: '', stderr: '' };
+    }
+
+    const diffRes = git('diff', '--cached', '--name-only');
+    const rawStaged = diffRes.stdout.trim();
+    const stagedFiles = rawStaged ? rawStaged.split('\n').filter(Boolean) : [];
+    const hasFiles = stagedFiles.length > 0;
+    const isDocOnly =
+      hasFiles &&
+      stagedFiles.every((f) => {
+        const norm = f.replace(/\\/g, '/');
+        return norm === 'README.md' || norm.startsWith('docs/');
+      });
+
+    if (isDocOnly) {
+      const checkRes = runCheckDocs(repoRoot);
+      if (checkRes.status !== 0) {
+        return {
+          status: checkRes.status ?? 1,
+          stdout: checkRes.stdout || '',
+          stderr: checkRes.stderr || '',
+        };
+      }
+      const reflowRes = runReflowDocs(repoRoot, { check: true });
+      if (reflowRes.status !== 0) {
+        return {
+          status: reflowRes.status ?? 1,
+          stdout: reflowRes.stdout || '',
+          stderr: reflowRes.stderr || '',
+        };
+      }
+      return {
+        status: 0,
+        stdout: '',
+        stderr: 'pre-commit: verifying doc links and formatting on main checkout...\n',
+      };
+    }
+
+    return {
+      status: 1,
+      stdout: '',
+      stderr:
+        'pre-commit: refusing direct commit in the main checkout.\n' +
+        'The main checkout only accepts merge commits or doc-only commits on main/master.\n' +
+        'Create or enter a linked git worktree first (e.g. git worktree add .worktrees/<slug> -b <type>/<slug>).\n',
+    };
+  }
+
+  // In a linked worktree, main/master should never receive direct commits.
+  if (branch === 'main' || branch === 'master') {
+    return {
+      status: 1,
+      stdout: '',
+      stderr:
+        "pre-commit: refusing to commit on '" +
+        branch +
+        "' in a linked worktree.\n" +
+        'main remains attached in the main checkout; merge feature branches from there via merge-to-main.\n',
+    };
+  }
+
+  return { status: 0, stdout: '', stderr: '' };
 }
 
 async function main() {
@@ -1807,7 +2197,7 @@ async function main() {
     if (res.hookWarning) {
       console.warn(`  warning: ${res.hookWarning.split('\n').join('\n  ')}`);
     } else if (worktrees && !res.hooksConfigured) {
-      console.warn('  warning: could not set git config core.hooksPath=scripts/git-hooks; set it by hand.');
+      console.warn('  warning: could not set git config core.hooksPath=.rig/hooks; set it by hand.');
     }
     if (res.initWorktree) {
       console.log(
@@ -1819,6 +2209,19 @@ async function main() {
       console.log('  next: git commit -m "chore: initial commit" (allowed on an unborn repo), then work in linked worktrees.');
     }
     return;
+  }
+
+  if (cmd === 'hook') {
+    const sub = args[1];
+    if (sub === 'pre-commit') {
+      const pos = args.slice(2).find((a) => !a.startsWith('-')) ?? process.cwd();
+      const res = runPreCommitHook(pos);
+      if (res.stdout) process.stdout.write(res.stdout);
+      if (res.stderr) process.stderr.write(res.stderr);
+      process.exit(res.status ?? 0);
+    }
+    console.error(`Unknown hook subcommand: ${sub}. Usage: rig hook pre-commit [<target-dir>]`);
+    process.exit(1);
   }
 
   if (cmd === 'check-docs') {
@@ -1852,6 +2255,7 @@ async function main() {
   rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]
   rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force] [--harness <id>]
+  rig hook pre-commit [<target-dir>]
   rig check-docs [<target-dir>]
   rig reflow-docs [<target-dir>] [--check]
   rig status [<target-dir>]`);

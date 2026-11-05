@@ -24,7 +24,7 @@ Where a default convention is too heavy for a small project, the CLI provides op
    Running `rig update` or `rig profile use` re-hydrates your harnesses immediately with any changes.
 2. **Per-Project Layer (`rig init`):**
    Touches a project repository as lightly as possible:
-   sets up git worktree commit hooks (`scripts/git-hooks/`), leaves the root checkout attached to `main` as a merge-only trunk, and creates a minimal 7-line `AGENTS.md` project-context stub alongside [`docs/backlog.md`](docs/backlog.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
+   sets up git worktree commit hooks (`.rig/hooks/`), leaves the root checkout attached to `main` as a merge-only trunk, and creates a minimal 7-line `AGENTS.md` project-context stub alongside [`docs/backlog.md`](docs/backlog.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
 
 ---
 
@@ -148,7 +148,7 @@ rig init /path/to/your-project
 ```
 
 What `rig init` does by default:
-1. Copies `scripts/git-hooks/pre-commit` and configures `git config core.hooksPath scripts/git-hooks`.
+1. Copies `.rig/hooks/pre-commit` and configures `git config core.hooksPath .rig/hooks`.
 2. Creates a minimal project-context `AGENTS.md` (`templates/AGENTS.md`), [`docs/backlog.md`](docs/backlog.md), and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) if they do not exist yet.
 3. Leaves the root checkout attached to `main` as a merge-only trunk.
 
@@ -206,7 +206,7 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 
 1. **Root checkout stays attached to `main` as a merge-only trunk** and is never edited directly.
 2. **Every session or Worker subagent operates in a linked git worktree** on a `<type>/<slug>` branch.
-   `hooks/guard-main-checkout-edits.mjs` blocks direct file edits in the root checkout, and `scripts/git-hooks/pre-commit` blocks root-checkout commits made via shell commands.
+   `hooks/guard-main-checkout-edits.mjs` blocks direct file edits in the root checkout, and `.rig/hooks/pre-commit` blocks root-checkout commits made via shell commands.
 3. **Shared dependency caching via symlinked `node_modules`:**
    If the repository has a `node_modules` directory at the root, symlink it into the worktree (`ln -s ../../node_modules node_modules`) unless the branch modifies dependencies (`hooks/guard-symlinked-node-modules.mjs` blocks package installs against a symlinked directory).
 4. **Merging happens directly in the root checkout** via [`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md):
@@ -233,12 +233,12 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 - [`merge-to-main`](skills/merge-to-main/SKILL.md) — Safe worktree-to-`main` merge procedure.
 - [`secure-credential-handoff`](skills/secure-credential-handoff/SKILL.md) — Mode-`0600` env-file pattern so secrets never enter the chat transcript.
 
-### Multi-Protocol Mechanical Guards (`hooks/` & `scripts/git-hooks/`)
+### Multi-Protocol Mechanical Guards (`hooks/` & `.rig/hooks/`)
 - `hooks/lib/hook-io.mjs` — Documented `PreToolUse` JSON schema adapter supporting Antigravity (`toolCall.args` → `{ decision, reason }`), Claude Code (`tool_input` → `{ hookSpecificOutput }`), generic JSON runners, and explicit `--harness=<name>` flags.
 - `hooks/guard-remote-mutation.mjs` — Prompts (`ask`) before commands that mutate remote or shared state (`ssh`, `scp`, `rsync`, `crontab`, `docker -H`, `git push` to `main`, mutating `gh` calls).
 - `hooks/guard-main-checkout-edits.mjs` — Refuses (`deny`) file edits in the root checkout.
 - `hooks/guard-symlinked-node-modules.mjs` — Refuses (`deny`) `npm`, `pnpm`, `yarn`, and `bun` installs when `node_modules` is a shared symlink (including `cd .worktrees/<slug> && npm install` chains).
-- `scripts/git-hooks/pre-commit` — Refuses direct non-merge commits in the root checkout and direct commits on `main`.
+- `.rig/hooks/pre-commit` — Refuses direct non-merge commits in the root checkout and direct commits on `main`.
 
 ### Documentation Graph Linters (`scripts/`)
 - `scripts/check-doc-links.mjs` — Enforces resolved relative links and `#fragment` headings, bans wiki-style refs/globs/bare backticked doc paths, verifies reachability from entry points, checks cited repo paths on disk, and enforces ADR byte budgets.

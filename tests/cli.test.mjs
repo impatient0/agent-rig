@@ -101,8 +101,8 @@ test('initRepo on a main checkout with history scaffolds into a linked worktree 
 
     // Scaffolding lands in the worktree, never in the main checkout.
     assert.ok(existsSync(path.join(wt, 'AGENTS.md')));
-    assert.ok(existsSync(path.join(wt, 'scripts/git-hooks/pre-commit')));
-    assert.equal(existsSync(path.join(wt, 'scripts/git-hooks/pre-merge-commit')), false);
+    assert.ok(existsSync(path.join(wt, '.rig/hooks/pre-commit')));
+    assert.equal(existsSync(path.join(wt, '.rig/hooks/pre-merge-commit')), false);
     assert.equal(existsSync(path.join(root, 'AGENTS.md')), false);
 
     // The worktree shares node_modules through a symlink, and .gitignore covers both it and .worktrees/.
@@ -321,6 +321,7 @@ test('updateRig refreshes repo git hooks without overwriting user-edited AGENTS.
     writeFileSync(path.join(repo, 'AGENTS.md'), '# Custom Project Rules\n');
     writeFileSync(path.join(repo, 'docs/backlog.md'), '# Custom Backlog\n');
     // Simulate an outdated pre-commit hook and legacy pre-merge-commit
+    mkdirSync(path.join(repo, 'scripts/git-hooks'), { recursive: true });
     writeFileSync(path.join(repo, 'scripts/git-hooks/pre-commit'), '#!/bin/sh\n# old\n');
     writeFileSync(path.join(repo, 'scripts/git-hooks/pre-merge-commit'), '#!/bin/sh\n# legacy\n');
 
@@ -328,8 +329,12 @@ test('updateRig refreshes repo git hooks without overwriting user-edited AGENTS.
     assert.equal(upd.updatedRepos.length, 1);
     assert.equal(readFileSync(path.join(repo, 'AGENTS.md'), 'utf8'), '# Custom Project Rules\n');
     assert.equal(readFileSync(path.join(repo, 'docs/backlog.md'), 'utf8'), '# Custom Backlog\n');
-    assert.match(readFileSync(path.join(repo, 'scripts/git-hooks/pre-commit'), 'utf8'), /The main checkout only accepts merge commits/);
+    assert.ok(existsSync(path.join(repo, '.rig/hooks/pre-commit')));
+    assert.equal(existsSync(path.join(repo, 'scripts/git-hooks/pre-commit')), false);
     assert.equal(existsSync(path.join(repo, 'scripts/git-hooks/pre-merge-commit')), false);
+    assert.equal(existsSync(path.join(repo, 'scripts/git-hooks')), false);
+    const hooksPath = spawnSync('git', ['-C', repo, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(hooksPath, '.rig/hooks');
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
@@ -362,14 +367,29 @@ test('self-contained initRepo bundles skills, subagents, rules, hooks, and linte
   const dir = mkdtempSync(path.join(tmpdir(), 'rig-init-self-'));
   try {
     spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
-    initRepo(dir, { selfContained: true, worktrees: true });
+
+    // Fail-fast when no harness is detected or specified
+    const failDir = mkdtempSync(path.join(tmpdir(), 'rig-fail-fast-'));
+    try {
+      spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: failDir });
+      assert.throws(
+        () => initRepo(failDir, { selfContained: true, worktrees: true, homeDir: false }),
+        /No harness detected or specified for --self-contained mode\. Pass --harness <antigravity\|claude\|codex\|cursor> or create a harness dot-directory first\./,
+      );
+    } finally {
+      rmSync(failDir, { recursive: true, force: true });
+    }
+
+    initRepo(dir, { selfContained: true, worktrees: true, harness: 'claude', homeDir: false });
     const st = statusRepo(dir);
     assert.equal(st.skillsPresent.length, readdirSync(path.join(RIG_ROOT, 'skills')).length);
     assert.ok(st.skillsPresent.includes('rig-onboard'));
     assert.equal(st.hooksPresent.length, 3);
-    assert.ok(existsSync(path.join(dir, 'agents/verifier.md')));
-    assert.ok(existsSync(path.join(dir, 'agents/worker.md')));
-    assert.ok(existsSync(path.join(dir, 'rules/contract-change-gate.md')));
+    assert.ok(existsSync(path.join(dir, '.claude/agents/verifier.md')));
+    assert.ok(existsSync(path.join(dir, '.claude/agents/worker.md')));
+    assert.ok(existsSync(path.join(dir, '.claude/rules/contract-change-gate.md')));
+    assert.ok(existsSync(path.join(dir, '.rig/bin/rig.mjs')));
+    assert.ok(existsSync(path.join(dir, '.rig/hooks/pre-commit')));
 
     const checkLinks = runCheckDocs(dir);
     assert.equal(checkLinks.status, 0, `${checkLinks.stdout}${checkLinks.stderr}`);
@@ -377,6 +397,25 @@ test('self-contained initRepo bundles skills, subagents, rules, hooks, and linte
     assert.equal(checkFormat.status, 0, `${checkFormat.stdout}${checkFormat.stderr}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('initRepo on a non-git directory automatically initializes git and registers in state.initializedRepos', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rig-init-nongit-'));
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-nongit-home-'));
+  try {
+    const res = initRepo(dir, { worktrees: true, homeDir: fakeHome });
+    assert.ok(existsSync(path.join(dir, '.git')));
+    assert.equal(res.hooksConfigured, true);
+    assert.ok(existsSync(path.join(dir, '.rig/hooks/pre-commit')));
+    const hooksPath = spawnSync('git', ['-C', dir, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(hooksPath, '.rig/hooks');
+
+    const state = readRigState(fakeHome);
+    assert.ok(state.initializedRepos.includes(dir));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
   }
 });
 
@@ -635,16 +674,16 @@ test('initRepo and updateRepo accept --harness and probe target repo harness', (
 
     // 1. Explicit --harness antigravity on initRepo
     initRepo(dir, { selfContained: true, worktrees: true, harness: 'antigravity' });
-    const workerContent = readFileSync(path.join(dir, 'agents/worker.md'), 'utf8');
+    const workerContent = readFileSync(path.join(dir, '.gemini/agents/worker.md'), 'utf8');
     assert.match(workerContent, /model: flash/);
     assert.match(workerContent, /gemini-3-8-flash/);
     assert.equal(workerContent.includes('claude-sonnet-5-5'), false);
 
-    const verifierContent = readFileSync(path.join(dir, 'agents/verifier.md'), 'utf8');
+    const verifierContent = readFileSync(path.join(dir, '.gemini/agents/verifier.md'), 'utf8');
     assert.match(verifierContent, /model: flash/);
     assert.match(verifierContent, /gemini-3-8-flash/);
 
-    const dispatchContent = readFileSync(path.join(dir, 'skills/dispatch/SKILL.md'), 'utf8');
+    const dispatchContent = readFileSync(path.join(dir, '.gemini/skills/dispatch/SKILL.md'), 'utf8');
     assert.match(dispatchContent, /subagent model `flash`, target `gemini-3-8-flash`/);
 
     // Links inside self-contained repo retain relative repo structure and pass check-doc-links
@@ -653,7 +692,7 @@ test('initRepo and updateRepo accept --harness and probe target repo harness', (
 
     // 2. updateRepo with explicit harness overrides
     updateRepo(dir, { harness: 'claude' });
-    const updatedWorker = readFileSync(path.join(dir, 'agents/worker.md'), 'utf8');
+    const updatedWorker = readFileSync(path.join(dir, '.claude/agents/worker.md'), 'utf8');
     assert.match(updatedWorker, /model: sonnet/);
     assert.match(updatedWorker, /claude-sonnet-5-5/);
 
@@ -662,7 +701,7 @@ test('initRepo and updateRepo accept --harness and probe target repo harness', (
     assert.equal(detectRepoHarness(dir), 'antigravity');
 
     updateRepo(dir); // probes .gemini -> antigravity
-    const probedWorker = readFileSync(path.join(dir, 'agents/worker.md'), 'utf8');
+    const probedWorker = readFileSync(path.join(dir, '.gemini/agents/worker.md'), 'utf8');
     assert.match(probedWorker, /model: flash/);
     assert.match(probedWorker, /gemini-3-8-flash/);
 
@@ -683,7 +722,7 @@ test('initRepo and updateRepo accept --harness and probe target repo harness', (
         env: { ...process.env, HOME: fakeCliHome },
       });
       assert.equal(cliRes.status, 0, cliRes.stderr);
-      const cliWorker = readFileSync(path.join(cliDir, 'agents/worker.md'), 'utf8');
+      const cliWorker = readFileSync(path.join(cliDir, '.gemini/agents/worker.md'), 'utf8');
       assert.match(cliWorker, /model: flash/);
       assert.match(cliWorker, /gemini-3-8-flash/);
     } finally {
@@ -747,7 +786,7 @@ test('detectExistingHookManager and getHookChainingGuidance detect hook runners 
     assert.deepEqual(huskyMgr, { type: 'husky', name: 'Husky', path: '.husky' });
     const huskyGuide = getHookChainingGuidance(huskyMgr);
     assert.match(huskyGuide, /\.husky\/pre-commit/);
-    assert.match(huskyGuide, /\.\/scripts\/git-hooks\/pre-commit "\$@"/);
+    assert.match(huskyGuide, /\.\/\.rig\/hooks\/pre-commit "\$@"/);
     rmSync(huskyDir, { recursive: true, force: true });
 
     // Lefthook detection
@@ -757,7 +796,7 @@ test('detectExistingHookManager and getHookChainingGuidance detect hook runners 
     assert.deepEqual(lfMgr, { type: 'lefthook', name: 'Lefthook', path: 'lefthook.yml' });
     const lfGuide = getHookChainingGuidance(lfMgr);
     assert.match(lfGuide, /lefthook\.yml/);
-    assert.match(lfGuide, /run: \.\/scripts\/git-hooks\/pre-commit/);
+    assert.match(lfGuide, /run: \.\/\.rig\/hooks\/pre-commit/);
     rmSync(lefthookFile, { force: true });
 
     // Python pre-commit detection
@@ -767,7 +806,7 @@ test('detectExistingHookManager and getHookChainingGuidance detect hook runners 
     assert.deepEqual(pcMgr, { type: 'pre-commit', name: 'pre-commit', path: '.pre-commit-config.yaml' });
     const pcGuide = getHookChainingGuidance(pcMgr);
     assert.match(pcGuide, /\.pre-commit-config\.yaml/);
-    assert.match(pcGuide, /entry: \.\/scripts\/git-hooks\/pre-commit/);
+    assert.match(pcGuide, /entry: \.\/\.rig\/hooks\/pre-commit/);
     rmSync(preCommitFile, { force: true });
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -786,14 +825,14 @@ test('initRepo preserves pre-existing hook runners and avoids destroying git hoo
     assert.match(res.chainingGuidance, /\.husky\/pre-commit/);
     // core.hooksPath should NOT be set
     const hooksPathRes = gitHusky(huskyRoot, 'config', '--get', 'core.hooksPath');
-    assert.notEqual(hooksPathRes.stdout.trim(), 'scripts/git-hooks');
+    assert.notEqual(hooksPathRes.stdout.trim(), '.rig/hooks');
     // Pre-commit script is still scaffolded so the user can chain it
-    assert.ok(existsSync(path.join(res.dir, 'scripts/git-hooks/pre-commit')));
+    assert.ok(existsSync(path.join(res.dir, '.rig/hooks/pre-commit')));
 
     // Re-running with force: true overrides
     const forceRes = initRepo(huskyRoot, { worktrees: true, force: true });
     assert.equal(forceRes.hooksConfigured, true);
-    assert.equal(gitHusky(huskyRoot, 'config', '--get', 'core.hooksPath').stdout.trim(), 'scripts/git-hooks');
+    assert.equal(gitHusky(huskyRoot, 'config', '--get', 'core.hooksPath').stdout.trim(), '.rig/hooks');
   } finally {
     cleanupHusky();
   }
@@ -807,7 +846,7 @@ test('initRepo preserves pre-existing hook runners and avoids destroying git hoo
     assert.equal(res.existingHookManager?.name, 'Lefthook');
     assert.match(res.hookWarning, /Lefthook/);
     assert.match(res.chainingGuidance, /lefthook\.yml/);
-    assert.notEqual(gitLf(lfRoot, 'config', '--get', 'core.hooksPath').stdout.trim(), 'scripts/git-hooks');
+    assert.notEqual(gitLf(lfRoot, 'config', '--get', 'core.hooksPath').stdout.trim(), '.rig/hooks');
   } finally {
     cleanupLf();
   }
@@ -821,7 +860,7 @@ test('initRepo preserves pre-existing hook runners and avoids destroying git hoo
     assert.equal(res.existingHookManager?.name, 'pre-commit');
     assert.match(res.hookWarning, /pre-commit/);
     assert.match(res.chainingGuidance, /\.pre-commit-config\.yaml/);
-    assert.notEqual(gitPc(pcRoot, 'config', '--get', 'core.hooksPath').stdout.trim(), 'scripts/git-hooks');
+    assert.notEqual(gitPc(pcRoot, 'config', '--get', 'core.hooksPath').stdout.trim(), '.rig/hooks');
   } finally {
     cleanupPc();
   }
@@ -836,6 +875,17 @@ test('initRepo preserves pre-existing hook runners and avoids destroying git hoo
     assert.equal(gitCustom(customRoot, 'config', '--get', 'core.hooksPath').stdout.trim(), '.custom-hooks');
   } finally {
     cleanupCustom();
+  }
+
+  // Test that core.hooksPath set to .rig/hooks or scripts/git-hooks is recognized as agent-rig (not custom)
+  const { root: rigHooksRoot, git: gitRigHooks, cleanup: cleanupRigHooks } = makeRepoWithHistory('rig-init-righooks-');
+  try {
+    gitRigHooks(rigHooksRoot, 'config', 'core.hooksPath', '.rig/hooks');
+    assert.equal(detectExistingHookManager(rigHooksRoot), null);
+    gitRigHooks(rigHooksRoot, 'config', 'core.hooksPath', 'scripts/git-hooks');
+    assert.equal(detectExistingHookManager(rigHooksRoot), null);
+  } finally {
+    cleanupRigHooks();
   }
 });
 

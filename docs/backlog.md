@@ -4,22 +4,12 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Do next
 
-- **Encapsulate repository mechanics in `.rig/` with invariant hook shim and `rig hook pre-commit`:**
-  Relocate git hooks from `scripts/git-hooks/` to `.rig/hooks/` and point `core.hooksPath` to `.rig/hooks`.
-  Replace the tracked hook script with an invariant 5-line delegation wrapper calling `rig hook pre-commit`.
-  Implement `rig hook pre-commit` inside `bin/rig.mjs` to execute worktree checks, doc-only commit gates, and doc linters centrally.
-  Provide fallback in the hook wrapper for environments without `rig`, permitting standard feature branch commits in the root checkout while protecting `main` and `master`.
-  In `--self-contained` mode, route vendored skills, agents, and rules into detected harness dot-directories across all four supported harnesses (Antigravity `.gemini/`, Claude Code `.claude/`, Codex `.codex/`, Cursor `.cursor/`), failing fast if no harness is detected or specified.
-  In self-contained mode without global `rig` on `PATH`, allow the pre-commit shim to invoke a local vendored `.rig/bin/rig.mjs` runner before falling back to non-rig behavior.
-  Ensure `rig init` automatically runs `git init -b main` on non-git directories, configures `core.hooksPath`, and registers the repo in `state.initializedRepos`.
-  Automatically migrate legacy repositories from `scripts/git-hooks/` to `.rig/hooks/` during update.
-
-## Ready, unblocked
-
 - **Idempotent `rig attach`, cloned repo onboarding, and hook auto-attach:**
   Introduce a dedicated `rig attach [<dir>]` command that configures `core.hooksPath .rig/hooks`, attaches `main` in the root checkout, and registers the repo in `state.initializedRepos` without spawning scaffolding worktrees.
   Update `rig init` to detect already-rigged repositories (presence of `.rig/` or `AGENTS.md`) and automatically delegate to `rig attach`.
   Add zero-prompt auto-attach in `hooks/guard-main-checkout-edits.mjs` across all supported harnesses so the first agent tool execution in a fresh clone configures hooks silently.
+
+## Ready, unblocked
 
 - **Dedicated `rig eject` subcommand for clean un-rigging:**
   Introduce `rig eject [<target-dir>]` to completely remove `agent-rig` mechanical infrastructure from a repository in one command.

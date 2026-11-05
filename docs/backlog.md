@@ -4,27 +4,32 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Do next
 
-- None currently queued.
+- **Encapsulate repository mechanics in `.rig/` with invariant hook shim and `rig hook pre-commit`:**
+  Relocate git hooks from `scripts/git-hooks/` to `.rig/hooks/` and point `core.hooksPath` to `.rig/hooks`.
+  Replace the tracked hook script with an invariant 5-line delegation wrapper calling `rig hook pre-commit`.
+  Implement `rig hook pre-commit` inside `bin/rig.mjs` to execute worktree checks, doc-only commit gates, and doc linters centrally.
+  Provide fallback in the hook wrapper for environments without `rig`, permitting standard feature branch commits in the root checkout while protecting `main` and `master`.
+  In `--self-contained` mode, route vendored skills, agents, and rules into detected harness dot-directories (`.claude/`, `.gemini/`), failing fast if no harness is detected or specified.
+  Automatically migrate legacy repositories from `scripts/git-hooks/` to `.rig/hooks/` during update.
 
 ## Ready, unblocked
 
-- **Thin static hook delegation shim and `rig hook pre-commit` subcommand:**
-  Replace the 70-line shell script in `scripts/git-hooks/pre-commit` with an invariant delegation wrapper that calls `rig hook pre-commit`.
-  Move git worktree commit guards, doc-only commit detection, and doc-linter verification inside `bin/rig.mjs`.
-  Ensures that updating `agent-rig` centrally does not produce uncommitted modifications in tracked repository hook files.
-
-- **Graceful pre-commit fallback for non-rig contributors and branch-targeted main protection:**
-  Update the fallback behavior of `scripts/git-hooks/pre-commit` when `rig` is not installed on the host system.
-  Only enforce direct commit rejection on `main` and `master`, allowing external human contributors to commit normally on feature branches in the root checkout without requiring git worktrees.
-  Enforces session-per-worktree invariants when `rig` or agent harness guards are active while eliminating friction for non-rig contributors.
+- **Idempotent `rig attach`, cloned repo onboarding, and hook auto-attach:**
+  Introduce a dedicated `rig attach [<dir>]` command that configures `core.hooksPath .rig/hooks`, attaches `main` in the root checkout, and registers the repo in `state.initializedRepos` without spawning scaffolding worktrees.
+  Update `rig init` to detect already-rigged repositories (presence of `.rig/` or `AGENTS.md`) and automatically delegate to `rig attach`.
+  Add zero-prompt auto-attach in `hooks/guard-main-checkout-edits.mjs` so the first agent tool execution in a fresh clone configures hooks silently.
 
 - **Selective `rig update` repo management (`--all`, `--repo`, and dirty-tree safety guards):**
-  Decouple global harness plugin updates from repository file updates.
+  Decouple global harness plugin updates from repository file updates in `bin/rig.mjs`.
   `rig update` by default checks initialized repositories and reports pending updates as a notice rather than silently mutating disk.
   Introduce `rig update --all` and `rig update --repo <path>` with pre-update git cleanliness validation (`git status --porcelain`), skipping and warning on dirty working trees or non-main branches.
 
+- **Hands-free agent tooling: CLI awareness in [`rules/AGENTS.md`](../rules/AGENTS.md) and `rig-update` skill:**
+  Update [`rules/AGENTS.md`](../rules/AGENTS.md) to catalog `rig` CLI entry points (`rig status`, `rig check-docs`, `rig reflow-docs`, `rig attach`, `rig update`) so agents discover and run them natively.
+  Create a dedicated `rig-update` skill specifying an autonomous worktree-isolated update procedure (`chore/rig-update`), running test and doc gates, and merging via [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md).
+
 - **Multi-environment integration tests for repository updates and non-rig simulation:**
-  Add comprehensive integration tests in `tests/cli.test.mjs` simulating clean updates, dirty updates, and external contributor machines.
+  Add comprehensive integration tests in `tests/cli.test.mjs` validating `.rig/` layout, `rig attach`, clean/dirty updates, and non-rig machine behavior.
   Simulate non-rig machines by spawning git and hook processes with sanitized `PATH` (excluding rig binaries) and an isolated empty `HOME`.
   Verify that clean repositories update shims cleanly, dirty repositories reject updates with warnings, and non-rig environments permit feature branch commits while protecting `main`.
 

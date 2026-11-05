@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // CLI for agent-rig:
 //   rig install [--harnesses antigravity,claude,...] [--detected] [--home <dir>] [--force]
-//   rig update [--home <dir>] [--repo <dir>] [--harness <id>]
+//   rig update [--all] [--repo <target-dir>] [--home <dir>] [--harness <id>]
 //   rig profile [list] [--json]
 //   rig profile use <profile-name>
 //   rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]
@@ -271,11 +271,11 @@ export function rewriteDocLinks(
   return result;
 }
 
-export function writeHydratedFile(
+export function getHydratedFileContent(
   srcPath,
   destPath,
   resolvedProfile,
-  { executable = false, isGlobal = false, harness = null, isDotHarness = false } = {},
+  { isGlobal = false, harness = null, isDotHarness = false } = {},
 ) {
   const template = readFileSync(srcPath, 'utf8');
   let hydrated = hydrateText(template, resolvedProfile);
@@ -285,6 +285,16 @@ export function writeHydratedFile(
     destPath,
     isDotHarness,
   });
+  return hydrated;
+}
+
+export function writeHydratedFile(
+  srcPath,
+  destPath,
+  resolvedProfile,
+  { executable = false, isGlobal = false, harness = null, isDotHarness = false } = {},
+) {
+  const hydrated = getHydratedFileContent(srcPath, destPath, resolvedProfile, { isGlobal, harness, isDotHarness });
   mkdirSync(path.dirname(destPath), { recursive: true });
   if (isSymlink(destPath)) rmSync(destPath, { recursive: true, force: true });
   writeFileSync(destPath, hydrated, 'utf8');
@@ -930,6 +940,287 @@ export function installRig({
 
 export const installGlobal = installRig;
 
+export const VENDORED_RIG_FILES = [
+  { src: 'bin/rig.mjs', dest: '.rig/bin/rig.mjs' },
+  { src: 'templates/models.json', dest: '.rig/templates/models.json' },
+  { src: 'templates/rig-config.default.json', dest: '.rig/templates/rig-config.default.json' },
+  { src: 'scripts/check-doc-links.mjs', dest: '.rig/scripts/check-doc-links.mjs' },
+  { src: 'scripts/reflow-docs.mjs', dest: '.rig/scripts/reflow-docs.mjs' },
+  { src: 'hooks/lib/hook-io.mjs', dest: '.rig/hooks/lib/hook-io.mjs' },
+  { src: 'hooks/lib/hook-io.mjs', dest: '.rig/hooks/hook-io.mjs' },
+  { src: 'hooks/guard-remote-mutation.mjs', dest: '.rig/hooks/guard-remote-mutation.mjs' },
+  { src: 'hooks/guard-main-checkout-edits.mjs', dest: '.rig/hooks/guard-main-checkout-edits.mjs' },
+  { src: 'hooks/guard-symlinked-node-modules.mjs', dest: '.rig/hooks/guard-symlinked-node-modules.mjs' },
+];
+
+export function isSelfContainedRepo(targetDir) {
+  if (!targetDir) return false;
+  const dir = path.resolve(targetDir);
+  return (
+    existsSync(path.join(dir, '.rig/bin/rig.mjs')) ||
+    existsSync(path.join(dir, 'skills')) ||
+    existsSync(path.join(dir, '.gemini/skills')) ||
+    existsSync(path.join(dir, '.claude/skills')) ||
+    existsSync(path.join(dir, '.codex/skills')) ||
+    existsSync(path.join(dir, '.cursor/skills'))
+  );
+}
+
+function checkFilePending(srcPath, destPath, resolvedProfile = null, options = {}) {
+  if (!existsSync(srcPath)) return false;
+  if (!existsSync(destPath) || isSymlink(destPath)) return true;
+  if (srcPath.endsWith('.md') && resolvedProfile) {
+    const expected = getHydratedFileContent(srcPath, destPath, resolvedProfile, options);
+    try {
+      const actual = readFileSync(destPath, 'utf8');
+      return actual !== expected;
+    } catch {
+      return true;
+    }
+  } else {
+    try {
+      const srcBuf = readFileSync(srcPath);
+      const destBuf = readFileSync(destPath);
+      return !srcBuf.equals(destBuf);
+    } catch {
+      return true;
+    }
+  }
+}
+
+function checkDirPending(srcDir, destDir, resolvedProfile, options, pendingFiles) {
+  if (!existsSync(srcDir)) return;
+  for (const entry of readdirSync(srcDir)) {
+    const srcEntry = path.join(srcDir, entry);
+    const destEntry = path.join(destDir, entry);
+    const stat = lstatSync(srcEntry);
+    if (stat.isDirectory()) {
+      checkDirPending(srcEntry, destEntry, resolvedProfile, options, pendingFiles);
+    } else if (stat.isFile()) {
+      if (checkFilePending(srcEntry, destEntry, resolvedProfile, options)) {
+        pendingFiles.push(destEntry);
+      }
+    }
+  }
+}
+
+export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = RIG_ROOT } = {}) {
+  const dir = path.resolve(targetDir);
+  if (!existsSync(dir)) {
+    return { dir, hasPendingUpdates: false, pendingFiles: [] };
+  }
+
+  const pendingFiles = [];
+
+  const legacyPreCommit = path.join(dir, 'scripts/git-hooks/pre-commit');
+  const legacyPreMerge = path.join(dir, 'scripts/git-hooks/pre-merge-commit');
+  if (existsSync(legacyPreCommit)) pendingFiles.push(legacyPreCommit);
+  if (existsSync(legacyPreMerge)) pendingFiles.push(legacyPreMerge);
+
+  let currentHooksPath = null;
+  if (existsSync(path.join(dir, '.git'))) {
+    const cfg = spawnSync('git', ['-C', dir, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+    if (cfg.status === 0) currentHooksPath = cfg.stdout.trim();
+  }
+
+  const hadLegacyHooksDir = existsSync(path.join(dir, 'scripts/git-hooks'));
+  const hadLegacyHooks = existsSync(legacyPreCommit) || existsSync(legacyPreMerge);
+  const shouldWriteRigHook =
+    existsSync(path.join(dir, '.rig/hooks')) ||
+    hadLegacyHooksDir ||
+    hadLegacyHooks ||
+    currentHooksPath === '.rig/hooks' ||
+    currentHooksPath === 'scripts/git-hooks' ||
+    existsSync(path.join(dir, '.rig'));
+
+  if (shouldWriteRigHook || existsSync(path.join(dir, '.rig/hooks/pre-commit'))) {
+    const targetPreCommit = path.join(dir, '.rig/hooks/pre-commit');
+    const srcPreCommit = path.join(rigRoot, '.rig/hooks/pre-commit');
+    if (checkFilePending(srcPreCommit, targetPreCommit)) {
+      pendingFiles.push(targetPreCommit);
+    }
+  }
+
+  const isSelfContained = isSelfContainedRepo(dir);
+
+  if (isSelfContained) {
+    if (existsSync(path.join(dir, '.rig/bin/rig.mjs')) || existsSync(path.join(dir, '.rig'))) {
+      for (const f of VENDORED_RIG_FILES) {
+        const destPath = path.join(dir, f.dest);
+        const srcPath = path.join(rigRoot, f.src);
+        if (checkFilePending(srcPath, destPath)) {
+          pendingFiles.push(destPath);
+        }
+      }
+    }
+
+    const dotHarnessMap = {
+      '.gemini': 'antigravity',
+      '.claude': 'claude',
+      '.codex': 'codex',
+      '.cursor': 'cursor',
+    };
+    const targetHarnesses = [];
+    if (harness) {
+      targetHarnesses.push(harness);
+    } else {
+      for (const [dotDir, hId] of Object.entries(dotHarnessMap)) {
+        if (existsSync(path.join(dir, dotDir))) {
+          targetHarnesses.push(hId);
+        }
+      }
+    }
+
+    if (targetHarnesses.length > 0) {
+      for (const tHarness of targetHarnesses) {
+        const dotDirName = { antigravity: '.gemini', claude: '.claude', codex: '.codex', cursor: '.cursor' }[tHarness] || ('.' + tHarness);
+        const dotDir = path.join(dir, dotDirName);
+        const resolvedProfile = resolveProfile(tHarness, { rigRoot });
+        const skillsDir = path.join(rigRoot, 'skills');
+        if (existsSync(skillsDir)) {
+          for (const skill of readdirSync(skillsDir)) {
+            checkDirPending(
+              path.join(skillsDir, skill),
+              path.join(dotDir, 'skills', skill),
+              resolvedProfile,
+              { isGlobal: false, harness: tHarness, isDotHarness: true },
+              pendingFiles,
+            );
+          }
+        }
+        const agentsDir = path.join(rigRoot, 'agents');
+        if (existsSync(agentsDir)) {
+          for (const agent of readdirSync(agentsDir)) {
+            const src = path.join(rigRoot, 'agents', agent);
+            const dest = path.join(dotDir, 'agents', agent);
+            if (checkFilePending(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true })) {
+              pendingFiles.push(dest);
+            }
+          }
+        }
+        const rulesDir = path.join(rigRoot, 'rules');
+        if (existsSync(rulesDir)) {
+          for (const rule of readdirSync(rulesDir)) {
+            const src = path.join(rulesDir, rule);
+            const dest = path.join(dotDir, 'rules', rule);
+            if (checkFilePending(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true })) {
+              pendingFiles.push(dest);
+            }
+          }
+        }
+        if (tHarness === 'claude') {
+          const claudeHookFiles = [
+            { src: 'hooks/lib/hook-io.mjs', dest: path.join(dotDir, 'hooks/lib/hook-io.mjs') },
+            { src: 'hooks/guard-remote-mutation.mjs', dest: path.join(dotDir, 'hooks/guard-remote-mutation.mjs') },
+            { src: 'hooks/guard-main-checkout-edits.mjs', dest: path.join(dotDir, 'hooks/guard-main-checkout-edits.mjs') },
+            { src: 'hooks/guard-symlinked-node-modules.mjs', dest: path.join(dotDir, 'hooks/guard-symlinked-node-modules.mjs') },
+          ];
+          for (const cf of claudeHookFiles) {
+            if (checkFilePending(path.join(rigRoot, cf.src), cf.dest)) {
+              pendingFiles.push(cf.dest);
+            }
+          }
+        }
+      }
+    } else if (existsSync(path.join(dir, 'skills'))) {
+      const tHarness = harness || detectRepoHarness(dir) || 'claude';
+      const resolvedProfile = resolveProfile(tHarness, { rigRoot });
+      const skillsDir = path.join(rigRoot, 'skills');
+      if (existsSync(skillsDir)) {
+        for (const skill of readdirSync(skillsDir)) {
+          checkDirPending(
+            path.join(skillsDir, skill),
+            path.join(dir, 'skills', skill),
+            resolvedProfile,
+            { isGlobal: false, harness: tHarness },
+            pendingFiles,
+          );
+        }
+      }
+      const agentsDir = path.join(rigRoot, 'agents');
+      if (existsSync(agentsDir)) {
+        for (const agent of readdirSync(agentsDir)) {
+          const src = path.join(rigRoot, 'agents', agent);
+          const dest = path.join(dir, 'agents', agent);
+          if (checkFilePending(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness })) {
+            pendingFiles.push(dest);
+          }
+        }
+      }
+      const rulesDir = path.join(rigRoot, 'rules');
+      if (existsSync(rulesDir)) {
+        for (const rule of readdirSync(rulesDir)) {
+          const src = path.join(rigRoot, 'rules', rule);
+          const dest = path.join(dir, 'rules', rule);
+          if (checkFilePending(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness })) {
+            pendingFiles.push(dest);
+          }
+        }
+      }
+      for (const sc of ['scripts/check-doc-links.mjs', 'scripts/reflow-docs.mjs']) {
+        const src = path.join(rigRoot, sc);
+        const dest = path.join(dir, sc);
+        if (checkFilePending(src, dest)) {
+          pendingFiles.push(dest);
+        }
+      }
+      if (existsSync(path.join(dir, 'hooks'))) {
+        if (checkFilePending(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dir, 'hooks/lib/hook-io.mjs'))) {
+          pendingFiles.push(path.join(dir, 'hooks/lib/hook-io.mjs'));
+        }
+        for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
+          if (existsSync(path.join(dir, 'hooks', hf))) {
+            if (checkFilePending(path.join(rigRoot, 'hooks', hf), path.join(dir, 'hooks', hf))) {
+              pendingFiles.push(path.join(dir, 'hooks', hf));
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const uniqueFiles = [...new Set(pendingFiles)];
+  return {
+    dir,
+    hasPendingUpdates: uniqueFiles.length > 0,
+    pendingFiles: uniqueFiles,
+  };
+}
+
+export function validateRepoCleanForUpdate(targetDir) {
+  const dir = path.resolve(targetDir);
+  if (!existsSync(path.join(dir, '.git'))) {
+    return { ok: true, reason: null, branch: 'main', message: null };
+  }
+
+  const headRev = spawnSync('git', ['-C', dir, 'rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' });
+  const hasCommits = headRev.status === 0;
+
+  const symRef = spawnSync('git', ['-C', dir, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8' });
+  const branch = symRef.status === 0 && symRef.stdout ? symRef.stdout.trim() : null;
+
+  if (hasCommits && branch !== 'main' && branch !== 'master') {
+    return {
+      ok: false,
+      reason: 'non-main-branch',
+      branch: branch || 'HEAD',
+      message: `Skipping repository '${dir}': active branch is '${branch || 'detached HEAD'}' (must be on main or master to update).`,
+    };
+  }
+
+  const status = spawnSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' });
+  if (status.status === 0 && status.stdout.trim().length > 0) {
+    return {
+      ok: false,
+      reason: 'dirty',
+      branch: branch || 'main',
+      message: `Skipping repository '${dir}': working tree has uncommitted changes.`,
+    };
+  }
+
+  return { ok: true, reason: null, branch: branch || 'main', message: null };
+}
+
 export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT } = {}) {
   const dir = path.resolve(targetDir);
   const copied = [];
@@ -1002,16 +1293,10 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT } = {
   }
 
   // If the repo was initialized with --self-contained, refresh static rig assets without touching AGENTS.md or docs/
-  const isSelfContained =
-    existsSync(path.join(dir, '.rig')) ||
-    existsSync(path.join(dir, 'skills')) ||
-    existsSync(path.join(dir, '.gemini/skills')) ||
-    existsSync(path.join(dir, '.claude/skills')) ||
-    existsSync(path.join(dir, '.codex/skills')) ||
-    existsSync(path.join(dir, '.cursor/skills'));
+  const isSelfContained = isSelfContainedRepo(dir);
 
   if (isSelfContained) {
-    if (existsSync(path.join(dir, '.rig'))) {
+    if (existsSync(path.join(dir, '.rig/bin/rig.mjs')) || existsSync(path.join(dir, '.rig'))) {
       copyFileSafe(path.join(rigRoot, 'bin/rig.mjs'), path.join(dir, '.rig/bin/rig.mjs'), {
         force: true,
         copied,
@@ -1202,7 +1487,14 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT } = {
   return { dir, copied, removed, attachRes };
 }
 
-export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_ROOT, nodeBin = null, harness = null } = {}) {
+export function updateRig({
+  homeDir = homedir(),
+  repoDir = null,
+  allRepos = false,
+  rigRoot = RIG_ROOT,
+  nodeBin = null,
+  harness = null,
+} = {}) {
   const state = readRigState(homeDir);
   const resolvedNodeBin = nodeBin || resolveNodeBinary();
   const harnesses =
@@ -1214,16 +1506,39 @@ export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_R
 
   const globalRes = installRig({ homeDir, harnesses, force: false, rigRoot, nodeBin: resolvedNodeBin });
 
-  const reposToUpdate = [];
-  if (repoDir) {
-    reposToUpdate.push(path.resolve(repoDir));
+  let updatedRepos = [];
+  let skippedRepos = [];
+  let pendingRepos = [];
+  let warnings = [];
+  let notice = null;
+
+  if (!repoDir && !allRepos) {
+    for (const r of (state.initializedRepos || []).filter((p) => existsSync(p))) {
+      const pending = checkRepoPendingUpdates(r, { harness, rigRoot });
+      if (pending.hasPendingUpdates) {
+        pendingRepos.push(pending);
+      }
+    }
+    notice =
+      pendingRepos.length > 0
+        ? `Notice: ${pendingRepos.length} initialized repository(ies) have pending agent-rig updates (${pendingRepos.map((p) => p.dir).join(', ')}). Run 'rig update --all' or 'rig update --repo <dir>' to update them.`
+        : null;
   } else {
-    for (const r of state.initializedRepos) {
-      if (existsSync(r)) reposToUpdate.push(r);
+    const targetRepos = repoDir
+      ? [path.resolve(repoDir)]
+      : (state.initializedRepos || []).filter((r) => existsSync(r));
+
+    for (const r of targetRepos) {
+      const check = validateRepoCleanForUpdate(r);
+      if (!check.ok) {
+        skippedRepos.push({ dir: r, reason: check.reason, warning: check.message });
+        warnings.push(check.message);
+      } else {
+        const res = updateRepo(r, { harness, rigRoot });
+        updatedRepos.push(res);
+      }
     }
   }
-
-  const updatedRepos = reposToUpdate.map((r) => updateRepo(r, { harness, rigRoot }));
 
   if (existsSync(path.join(rigRoot, '.git'))) {
     attachMainCheckout(rigRoot);
@@ -1232,6 +1547,10 @@ export function updateRig({ homeDir = homedir(), repoDir = null, rigRoot = RIG_R
   return {
     ...globalRes,
     updatedRepos,
+    skippedRepos,
+    pendingRepos,
+    warnings,
+    notice,
   };
 }
 
@@ -2241,11 +2560,18 @@ async function main() {
     const homeDir = homeIdx !== -1 && args[homeIdx + 1] ? path.resolve(args[homeIdx + 1]) : homedir();
     const repoIdx = args.indexOf('--repo');
     const repoDir = repoIdx !== -1 && args[repoIdx + 1] ? path.resolve(args[repoIdx + 1]) : null;
+    const allRepos = args.includes('--all');
     const hIdx = args.findIndex((a) => a === '--harness' || a.startsWith('--harness='));
     const harness = hIdx !== -1 ? (args[hIdx].includes('=') ? args[hIdx].split('=')[1] : args[hIdx + 1]) : null;
-    const res = updateRig({ homeDir, repoDir, harness });
+    const res = updateRig({ homeDir, repoDir, allRepos, harness });
     console.log(`rig update: synced [${res.installedHarnesses.join(', ')}]`);
     console.log(`  new links: ${res.linked.length}, pruned dangling: ${res.pruned.length}, repos refreshed: ${res.updatedRepos.length}`);
+    for (const w of res.warnings) {
+      console.warn(w);
+    }
+    if (res.notice) {
+      console.log(res.notice);
+    }
     return;
   }
 
@@ -2434,7 +2760,7 @@ async function main() {
 
   console.log(`Usage:
   rig install [--harnesses antigravity,claude,codex,cursor] [--detected] [--force]
-  rig update [--repo <target-dir>] [--harness <id>]
+  rig update [--all] [--repo <target-dir>] [--home <dir>] [--harness <id>]
   rig profile [list] [--json]
   rig profile use <profile-name>
   rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]

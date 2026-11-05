@@ -8,11 +8,6 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Ready, unblocked
 
-- **Selective `rig update` repo management (`--all`, `--repo`, and dirty-tree safety guards):**
-  Decouple global harness plugin updates from repository file updates in `bin/rig.mjs`.
-  `rig update` by default checks initialized repositories across all four harnesses and reports pending updates as a notice rather than silently mutating disk.
-  Introduce `rig update --all` and `rig update --repo <path>` with pre-update git cleanliness validation (`git status --porcelain`), skipping and warning on dirty working trees or non-main branches.
-
 - **Hands-free agent tooling: CLI awareness in [`rules/AGENTS.md`](../rules/AGENTS.md) and `rig-update` skill:**
   Update [`rules/AGENTS.md`](../rules/AGENTS.md) to catalog `rig` CLI entry points (`rig status`, `rig check-docs`, `rig reflow-docs`, `rig attach`, `rig update`, `rig eject`) so agents discover and run them natively.
   Create a dedicated `rig-update` skill specifying an autonomous worktree-isolated update procedure (`chore/rig-update`), running test and doc gates, and merging via [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md).

@@ -42,6 +42,9 @@ import {
   attachRepo,
   ejectRepo,
   writeRigState,
+  isSelfContainedRepo,
+  validateRepoCleanForUpdate,
+  checkRepoPendingUpdates,
 } from '../bin/rig.mjs';
 import { isRiggedRepo } from '../hooks/guard-main-checkout-edits.mjs';
 
@@ -319,6 +322,8 @@ test('updateRig refreshes repo git hooks without overwriting user-edited AGENTS.
     installRig({ homeDir: fakeHome, harnesses: ['antigravity'] });
 
     spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    spawnSync('git', ['-C', repo, 'config', 'user.email', 'test@example.com']);
+    spawnSync('git', ['-C', repo, 'config', 'user.name', 'Test']);
     initRepo(repo, { selfContained: false, worktrees: true, homeDir: fakeHome });
 
     // User customizes AGENTS.md and docs/backlog.md
@@ -329,7 +334,27 @@ test('updateRig refreshes repo git hooks without overwriting user-edited AGENTS.
     writeFileSync(path.join(repo, 'scripts/git-hooks/pre-commit'), '#!/bin/sh\n# old\n');
     writeFileSync(path.join(repo, 'scripts/git-hooks/pre-merge-commit'), '#!/bin/sh\n# legacy\n');
 
-    const upd = updateRig({ homeDir: fakeHome });
+    // 1. Default updateRig only inspects and reports notice without mutating disk
+    const defaultUpd = updateRig({ homeDir: fakeHome });
+    assert.equal(defaultUpd.updatedRepos.length, 0);
+    assert.equal(defaultUpd.pendingRepos.length, 1);
+    assert.match(defaultUpd.notice, /Notice: 1 initialized repository\(ies\) have pending agent-rig updates/);
+    assert.equal(existsSync(path.join(repo, 'scripts/git-hooks/pre-commit')), true);
+
+    // 2. updateRig with allRepos skips on dirty working tree
+    const dirtyUpd = updateRig({ homeDir: fakeHome, allRepos: true });
+    assert.equal(dirtyUpd.updatedRepos.length, 0);
+    assert.equal(dirtyUpd.skippedRepos.length, 1);
+    assert.equal(dirtyUpd.skippedRepos[0].reason, 'dirty');
+    assert.match(dirtyUpd.warnings[0], /working tree has uncommitted changes/);
+    assert.equal(existsSync(path.join(repo, 'scripts/git-hooks/pre-commit')), true);
+
+    // 3. Clean and commit working tree on main
+    spawnSync('git', ['-C', repo, 'add', '-A']);
+    spawnSync('git', ['-C', repo, 'commit', '-m', 'chore: initial']);
+
+    // 4. Explicit update with clean working tree updates hooks and cleans legacy files
+    const upd = updateRig({ homeDir: fakeHome, allRepos: true });
     assert.equal(upd.updatedRepos.length, 1);
     assert.equal(readFileSync(path.join(repo, 'AGENTS.md'), 'utf8'), '# Custom Project Rules\n');
     assert.equal(readFileSync(path.join(repo, 'docs/backlog.md'), 'utf8'), '# Custom Backlog\n');
@@ -1147,6 +1172,196 @@ test('ejectRepo and CLI rig eject work from linked worktree and clean legacy scr
   } finally {
     cleanup();
     rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('validateRepoCleanForUpdate and isSelfContainedRepo validate safety invariants', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rig-clean-test-'));
+  try {
+    // 1. isSelfContainedRepo detection
+    assert.equal(isSelfContainedRepo(dir), false);
+    mkdirSync(path.join(dir, '.rig/hooks'), { recursive: true });
+    writeFileSync(path.join(dir, '.rig/hooks/pre-commit'), '#!/bin/sh\n');
+    // Lightweight repo has .rig/hooks/pre-commit but is NOT self-contained
+    assert.equal(isSelfContainedRepo(dir), false);
+    mkdirSync(path.join(dir, '.rig/bin'), { recursive: true });
+    writeFileSync(path.join(dir, '.rig/bin/rig.mjs'), '#!/usr/bin/env node\n');
+    assert.equal(isSelfContainedRepo(dir), true);
+
+    // 2. validateRepoCleanForUpdate on non-git dir
+    const nonGit = mkdtempSync(path.join(tmpdir(), 'rig-nongit-'));
+    try {
+      const res = validateRepoCleanForUpdate(nonGit);
+      assert.equal(res.ok, true);
+    } finally {
+      rmSync(nonGit, { recursive: true, force: true });
+    }
+
+    // 3. validateRepoCleanForUpdate on clean repo on main
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+    spawnSync('git', ['-C', dir, 'config', 'user.email', 'test@example.com']);
+    spawnSync('git', ['-C', dir, 'config', 'user.name', 'Test']);
+    spawnSync('git', ['-C', dir, 'add', '-A']);
+    spawnSync('git', ['-C', dir, 'commit', '-m', 'chore: initial']);
+
+    const cleanMain = validateRepoCleanForUpdate(dir);
+    assert.equal(cleanMain.ok, true);
+    assert.equal(cleanMain.branch, 'main');
+
+    // 4. Dirty working tree
+    writeFileSync(path.join(dir, 'uncommitted.txt'), 'dirty\n');
+    const dirtyRes = validateRepoCleanForUpdate(dir);
+    assert.equal(dirtyRes.ok, false);
+    assert.equal(dirtyRes.reason, 'dirty');
+    assert.match(dirtyRes.message, /working tree has uncommitted changes/);
+
+    // Commit file so it's clean again
+    spawnSync('git', ['-C', dir, 'add', '-A']);
+    spawnSync('git', ['-C', dir, 'commit', '-m', 'chore: add uncommitted']);
+
+    // 5. Non-main branch
+    spawnSync('git', ['-C', dir, 'checkout', '-b', 'feature/test']);
+    const branchRes = validateRepoCleanForUpdate(dir);
+    assert.equal(branchRes.ok, false);
+    assert.equal(branchRes.reason, 'non-main-branch');
+    assert.equal(branchRes.branch, 'feature/test');
+    assert.match(branchRes.message, /active branch is 'feature\/test'/);
+
+    // 6. Detached HEAD
+    spawnSync('git', ['-C', dir, 'checkout', '--detach', 'HEAD']);
+    const detachedRes = validateRepoCleanForUpdate(dir);
+    assert.equal(detachedRes.ok, false);
+    assert.equal(detachedRes.reason, 'non-main-branch');
+    assert.equal(detachedRes.branch, 'HEAD');
+    assert.match(detachedRes.message, /active branch is 'detached HEAD'/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkRepoPendingUpdates detects pending updates across lightweight and self-contained repos', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-chk-home-'));
+  const lightRepo = mkdtempSync(path.join(tmpdir(), 'rig-chk-light-'));
+  const selfRepo = mkdtempSync(path.join(tmpdir(), 'rig-chk-self-'));
+  try {
+    mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
+    installRig({ homeDir: fakeHome, harnesses: ['antigravity'] });
+
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: lightRepo });
+    initRepo(lightRepo, { selfContained: false, worktrees: true, homeDir: fakeHome });
+
+    // Up-to-date lightweight repo has no pending updates
+    const lightCheck = checkRepoPendingUpdates(lightRepo);
+    assert.equal(lightCheck.hasPendingUpdates, false);
+    assert.equal(lightCheck.pendingFiles.length, 0);
+
+    // Modify .rig/hooks/pre-commit in lightweight repo -> detected as pending
+    writeFileSync(path.join(lightRepo, '.rig/hooks/pre-commit'), '#!/bin/sh\n# outdated hook\n');
+    const lightPending = checkRepoPendingUpdates(lightRepo);
+    assert.equal(lightPending.hasPendingUpdates, true);
+    assert.ok(lightPending.pendingFiles.some((f) => f.endsWith('.rig/hooks/pre-commit')));
+
+    // Setup self-contained repo
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: selfRepo });
+    initRepo(selfRepo, { selfContained: true, worktrees: true, homeDir: fakeHome, harness: 'antigravity' });
+
+    // Fresh self-contained repo has no pending updates
+    const selfCheck = checkRepoPendingUpdates(selfRepo);
+    assert.equal(selfCheck.hasPendingUpdates, false);
+
+    // Tamper with vendored .rig/bin/rig.mjs
+    writeFileSync(path.join(selfRepo, '.rig/bin/rig.mjs'), '#!/usr/bin/env node\n// outdated\n');
+    const selfPending = checkRepoPendingUpdates(selfRepo);
+    assert.equal(selfPending.hasPendingUpdates, true);
+    assert.ok(selfPending.pendingFiles.some((f) => f.endsWith('.rig/bin/rig.mjs')));
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(lightRepo, { recursive: true, force: true });
+    rmSync(selfRepo, { recursive: true, force: true });
+  }
+});
+
+test('updateRig selective execution: allRepos and repoDir update clean repos and skip non-main/dirty repos with warnings', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-sel-home-'));
+  const cleanRepo = mkdtempSync(path.join(tmpdir(), 'rig-sel-clean-'));
+  const branchRepo = mkdtempSync(path.join(tmpdir(), 'rig-sel-branch-'));
+  const dirtyRepo = mkdtempSync(path.join(tmpdir(), 'rig-sel-dirty-'));
+  try {
+    mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
+    installRig({ homeDir: fakeHome, harnesses: ['antigravity'] });
+
+    // Initialize all 3 repos
+    for (const r of [cleanRepo, branchRepo, dirtyRepo]) {
+      spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: r });
+      spawnSync('git', ['-C', r, 'config', 'user.email', 'test@example.com']);
+      spawnSync('git', ['-C', r, 'config', 'user.name', 'Test']);
+      initRepo(r, { selfContained: false, worktrees: true, homeDir: fakeHome });
+      spawnSync('git', ['-C', r, 'add', '-A']);
+      spawnSync('git', ['-C', r, 'commit', '-m', 'chore: initial']);
+    }
+
+    // Put branchRepo on a feature branch
+    spawnSync('git', ['-C', branchRepo, 'checkout', '-b', 'feature/test']);
+
+    // Make dirtyRepo dirty
+    writeFileSync(path.join(dirtyRepo, 'dirty.txt'), 'dirty content\n');
+
+    // Introduce an outdated hook in cleanRepo to trigger pending
+    writeFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), '#!/bin/sh\n# outdated\n');
+    spawnSync('git', ['-C', cleanRepo, 'add', '-A']);
+    spawnSync('git', ['-C', cleanRepo, 'commit', '-m', 'chore: outdated hook']);
+
+    // 1. Default updateRig: inspects all 3, mutates none, returns notice
+    const defRes = updateRig({ homeDir: fakeHome });
+    assert.equal(defRes.updatedRepos.length, 0);
+    assert.equal(defRes.skippedRepos.length, 0);
+    assert.equal(defRes.pendingRepos.length, 1);
+    assert.equal(defRes.pendingRepos[0].dir, cleanRepo);
+    assert.match(defRes.notice, /have pending agent-rig updates/);
+    assert.match(readFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated/);
+
+    // 2. updateRig with repoDir targeting dirtyRepo -> skipped with warning
+    const targetDirtyRes = updateRig({ homeDir: fakeHome, repoDir: dirtyRepo });
+    assert.equal(targetDirtyRes.updatedRepos.length, 0);
+    assert.equal(targetDirtyRes.skippedRepos.length, 1);
+    assert.equal(targetDirtyRes.skippedRepos[0].reason, 'dirty');
+    assert.equal(targetDirtyRes.warnings.length, 1);
+    assert.match(targetDirtyRes.warnings[0], /working tree has uncommitted changes/);
+
+    // 3. updateRig with repoDir targeting branchRepo -> skipped with warning
+    const targetBranchRes = updateRig({ homeDir: fakeHome, repoDir: branchRepo });
+    assert.equal(targetBranchRes.updatedRepos.length, 0);
+    assert.equal(targetBranchRes.skippedRepos.length, 1);
+    assert.equal(targetBranchRes.skippedRepos[0].reason, 'non-main-branch');
+    assert.equal(targetBranchRes.warnings.length, 1);
+    assert.match(targetBranchRes.warnings[0], /active branch is 'feature\/test'/);
+
+    // 4. updateRig with repoDir targeting cleanRepo -> updated
+    const targetCleanRes = updateRig({ homeDir: fakeHome, repoDir: cleanRepo });
+    assert.equal(targetCleanRes.updatedRepos.length, 1);
+    assert.equal(targetCleanRes.skippedRepos.length, 0);
+    assert.equal(targetCleanRes.warnings.length, 0);
+    assert.doesNotMatch(readFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated/);
+
+    // 5. updateRig with allRepos: true -> cleanRepo updated, branchRepo and dirtyRepo skipped
+    // Outdate cleanRepo again to re-test allRepos
+    writeFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), '#!/bin/sh\n# outdated again\n');
+    spawnSync('git', ['-C', cleanRepo, 'add', '-A']);
+    spawnSync('git', ['-C', cleanRepo, 'commit', '-m', 'chore: outdated hook again']);
+
+    const allRes = updateRig({ homeDir: fakeHome, allRepos: true });
+    assert.equal(allRes.updatedRepos.length, 1);
+    assert.equal(allRes.updatedRepos[0].dir, cleanRepo);
+    assert.equal(allRes.skippedRepos.length, 2);
+    assert.ok(allRes.skippedRepos.some((s) => s.dir === branchRepo && s.reason === 'non-main-branch'));
+    assert.ok(allRes.skippedRepos.some((s) => s.dir === dirtyRepo && s.reason === 'dirty'));
+    assert.equal(allRes.warnings.length, 2);
+    assert.doesNotMatch(readFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated/);
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(cleanRepo, { recursive: true, force: true });
+    rmSync(branchRepo, { recursive: true, force: true });
+    rmSync(dirtyRepo, { recursive: true, force: true });
   }
 });
 

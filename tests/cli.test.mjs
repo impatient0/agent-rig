@@ -40,7 +40,10 @@ import {
   getHookChainingGuidance,
   buildNodeFallbackShell,
   attachRepo,
+  ejectRepo,
+  writeRigState,
 } from '../bin/rig.mjs';
+import { isRiggedRepo } from '../hooks/guard-main-checkout-edits.mjs';
 
 function makeRepoWithHistory(prefix) {
   const root = mkdtempSync(path.join(tmpdir(), prefix));
@@ -1050,3 +1053,100 @@ test('initRepo on already-rigged repository delegates to attachRepo without spaw
     rmSync(fakeHome, { recursive: true, force: true });
   }
 });
+
+test('ejectRepo unsets core.hooksPath, deletes .rig/, prunes state, preserves AGENTS.md and docs, and leaves repo un-rigged', () => {
+  const { root, git, cleanup } = makeRepoWithHistory('rig-eject-');
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-fake-home-'));
+  try {
+    // 1. Rig the repo via attachRepo
+    writeFileSync(path.join(root, 'AGENTS.md'), '# test project\n');
+    mkdirSync(path.join(root, 'docs'), { recursive: true });
+    writeFileSync(path.join(root, 'docs/backlog.md'), '# Backlog\n');
+    const attachRes = attachRepo(root, { homeDir: fakeHome });
+    assert.equal(attachRes.hooksConfigured, true);
+    assert.equal(isRiggedRepo(root), true);
+    assert.equal(existsSync(path.join(root, '.rig/hooks/pre-commit')), true);
+    assert.ok(readRigState(fakeHome).initializedRepos.includes(root));
+
+    // 2. Call ejectRepo on main checkout
+    const ejectRes = ejectRepo(root, { homeDir: fakeHome });
+    assert.equal(ejectRes.dir, root);
+    assert.equal(ejectRes.hooksUnset, true);
+    assert.ok(ejectRes.removedPaths.includes(path.join(root, '.rig')));
+    assert.equal(ejectRes.stateRemoved, true);
+
+    // Verify git config core.hooksPath is unset
+    const hooksCfg = git(root, 'config', '--get', 'core.hooksPath');
+    assert.equal(hooksCfg.stdout.trim(), '');
+
+    // Verify .rig/ is removed
+    assert.equal(existsSync(path.join(root, '.rig')), false);
+
+    // Verify removed from state.initializedRepos
+    assert.equal(readRigState(fakeHome).initializedRepos.includes(root), false);
+
+    // Verify durable documentation is preserved
+    assert.equal(existsSync(path.join(root, 'AGENTS.md')), true);
+    assert.equal(existsSync(path.join(root, 'docs/backlog.md')), true);
+
+    // Verify repo is un-rigged
+    assert.equal(isRiggedRepo(root), false);
+
+    // 3. Calling ejectRepo again is idempotent
+    const secondRes = ejectRepo(root, { homeDir: fakeHome });
+    assert.equal(secondRes.dir, root);
+    assert.equal(secondRes.hooksUnset, false);
+    assert.equal(secondRes.removedPaths.length, 0);
+    assert.equal(secondRes.stateRemoved, false);
+  } finally {
+    cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('ejectRepo and CLI rig eject work from linked worktree and clean legacy scripts/git-hooks', () => {
+  const { root, git, cleanup } = makeRepoWithHistory('rig-eject-wt-');
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-fake-home-'));
+  try {
+    // Set up legacy scripts/git-hooks and register in state
+    const legacyHooks = path.join(root, 'scripts/git-hooks');
+    mkdirSync(legacyHooks, { recursive: true });
+    writeFileSync(path.join(legacyHooks, 'pre-commit'), '#!/bin/sh\nexit 0\n');
+    git(root, 'config', 'core.hooksPath', 'scripts/git-hooks');
+    writeRigState(fakeHome, { initializedRepos: [root] });
+
+    assert.equal(isRiggedRepo(root), true);
+
+    // Add a linked worktree
+    const wt = path.join(root, '.worktrees', 'feat-eject');
+    git(root, 'worktree', 'add', '-q', '-b', 'feature/feat-eject', wt, 'main');
+
+    // Eject from inside the worktree
+    const res = ejectRepo(wt, { homeDir: fakeHome });
+    assert.equal(res.dir, root);
+    assert.equal(res.hooksUnset, true);
+    assert.ok(res.removedPaths.includes(legacyHooks));
+    assert.equal(res.stateRemoved, true);
+    assert.equal(existsSync(legacyHooks), false);
+    assert.equal(isRiggedRepo(root), false);
+    assert.equal(isRiggedRepo(wt), false);
+    assert.equal(readRigState(fakeHome).initializedRepos.includes(root), false);
+
+    // Re-rig and test CLI end-to-end: rig eject <root> --home <fakeHome>
+    attachRepo(root, { homeDir: fakeHome });
+    assert.equal(isRiggedRepo(root), true);
+    assert.ok(readRigState(fakeHome).initializedRepos.includes(root));
+
+    const cliRes = spawnSync(process.execPath, [path.join(RIG_ROOT, 'bin/rig.mjs'), 'eject', root, '--home', fakeHome], {
+      encoding: 'utf8',
+    });
+    assert.equal(cliRes.status, 0, cliRes.stderr);
+    assert.match(cliRes.stdout, /rig eject/);
+    assert.equal(isRiggedRepo(root), false);
+    assert.equal(readRigState(fakeHome).initializedRepos.includes(root), false);
+  } finally {
+    cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+

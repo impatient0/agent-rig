@@ -41,7 +41,11 @@ Evaluate the diff against each check in order:
 2. **`Unmandated-call:` Trailer Honesty:**
    - Every commit in `<base>..HEAD` carries either `Unmandated-call: none` or one `Unmandated-call: <choice> — <rationale> (<file>:<line>)` trailer per judgment call not explicitly specified in the brief.
    - Cross-check the diff hunks against the brief:
-     if the executor made an unmandated local fallback, error-handling choice, or fixture design without declaring it in an `Unmandated-call:` trailer, flag it as a blocker.
+     if the executor made an unmandated meaningful behavioral, fallback, or edge-case judgment call without declaring it in an `Unmandated-call:` trailer, flag it as a blocker.
+   - **Scope for trailers:**
+     trailers are required only for meaningful behavioral, fallback, or edge-case judgment calls (positive examples: silent fallback vs. throwing on an I/O error, default timeout/retry limits, or input precedence).
+   - **Routine coding mechanics are exempt:**
+     never flag private helper extraction, local identifier naming, or unit test fixture and assertion structure as undeclared unmandated calls (negative examples).
    - Contractual, architectural, public interface, schema, or user-visible behavioral changes cannot be declared as unmandated calls;
      they require prior authorization or halting under Stop Trigger #2.
      Flag any attempt to smuggle architectural or contract forks into trailers as a blocker.

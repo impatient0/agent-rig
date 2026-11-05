@@ -87,6 +87,13 @@ Agents can discover and run core `rig` CLI commands directly across sessions and
 - Use Conventional Commits (`feat(scope): ...`, `fix(scope): ...`, `docs: ...`, `test: ...`, `chore: ...`).
 - Keep commits atomic: one logical slice per commit, with tests passing before commit.
 - On delegated or autonomous slices, every commit message must carry one `Unmandated-call: <choice> — <rationale> (<file>:<line>)` trailer per judgment call not explicitly specified in the brief, or `Unmandated-call: none` if zero unmandated choices were made.
+- `Unmandated-call:` trailers are required only for meaningful behavioral, fallback, or edge-case judgment calls rather than routine coding mechanics:
+  - **Positive examples (require trailers):**
+    silent fallback vs. throwing on an I/O error or parse failure, picking a default timeout or retry limit, or choosing input precedence when configuration sources collide.
+  - **Negative examples (never require trailers):**
+    extracting private helper functions, naming local identifiers or variables, or structuring unit test fixtures and assertions.
+- Architectural forks, data schema shifts, public interface changes, and user-visible behavioral alterations are never unmandated calls;
+  they require human authorization or halting under Stop Trigger #2.
 
 ---
 

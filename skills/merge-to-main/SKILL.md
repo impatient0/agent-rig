@@ -46,7 +46,13 @@ Because the repository's root checkout stays attached to `main` as a merge-only 
 
 ## Step 3 — Commit and Clean Up
 
-Execute these steps in order, preferably as separate command calls rather than a single compound `&&` chain so file locks settle cleanly:
+Execute these steps in order, either individually or chained as a single compound command:
+
+```bash
+git -C <root> commit -m "Merge branch '$BRANCH' into main" && \
+git -C <root> worktree remove <worktree-path> && \
+git -C <root> branch -d "$BRANCH"
+```
 
 1. **Commit the verified merge in the root checkout:**
    ```bash
@@ -65,9 +71,26 @@ Execute these steps in order, preferably as separate command calls rather than a
 
 ---
 
-## Sandbox & Read-Only Environment Boundary
+## Single-Pass Tip Merging for Linear Stacks
 
-In environments where the root repository checkout is mounted read-only or containerized under a sandbox (such as Antigravity Standard Sandbox Mode):
-- Mechanical git plumbing commands that lock refs or update indexes in the root checkout (`git merge`, `git commit`, `git worktree remove`, `git branch -d`) must be executed with elevated filesystem access (`BypassSandbox: true`).
-- Verification commands (`npm test`, `rig check-docs`, `rig reflow-docs --check`) continue running sandboxed (`BypassSandbox: false`).
-- In non-sandboxed environments (Claude Code, Codex CLI, local shell), standard command execution applies without modification.
+When multiple verified worktree branches form a linear ancestry chain or stack, merging the tip branch into `main` in a single pass lands the entire verified stack.
+Merging intermediate branches individually is unnecessary because the tip branch already contains all ancestor commits.
+
+1. **Verify stack ancestry:**
+   Confirm each branch in the stack is verified and forms a direct ancestry chain (`git merge-base --is-ancestor <ancestor-branch> <tip-branch>`).
+2. **Merge the tip branch without committing:**
+   ```bash
+   git -C <root> merge --no-commit --no-ff "$TIP_BRANCH"
+   ```
+3. **Verify the merged stack:**
+   Run the project's full test and documentation verification suite in `<root>` (`npm test`, `rig check-docs`, `rig reflow-docs --check`) on the uncommitted merge state.
+4. **Commit and remove all stack worktrees and branches:**
+   Commit the verified merge and clean up all constituent worktrees and branches across the stack in a single compound command:
+   ```bash
+   git -C <root> commit -m "Merge branch '$TIP_BRANCH' into main" && \
+   git -C <root> worktree remove <worktree-path-1> && \
+   git -C <root> worktree remove <worktree-path-2> && \
+   git -C <root> branch -d "$BRANCH_1" && \
+   git -C <root> branch -d "$BRANCH_2"
+   ```
+   *(Intermediate branch deletions succeed immediately because all commits in the stack are reachable from the new merge commit on `main`).*

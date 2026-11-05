@@ -58,8 +58,20 @@ Work is structured across four canonical execution tiers governed by the active 
 - **`verifier`** (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`):
   Cold audit subagent governed by [`agents/verifier.md`](../agents/verifier.md).
 - **`utility`** (subagent model `{{SUBAGENT_MODEL_UTILITY}}`, target `{{MODEL_UTILITY}}`, effort `{{EFFORT_UTILITY}}`):
-  Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](../skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
+  Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md), [`skills/rig-update/SKILL.md`](../skills/rig-update/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](../skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
   Whenever launching a subagent, explicitly pass the tier's resolved subagent model argument (`{{SUBAGENT_MODEL_WORKER}}` for Workers, `{{SUBAGENT_MODEL_VERIFIER}}` for Verifiers, `{{SUBAGENT_MODEL_UTILITY}}` for Utility tasks) rather than defaulting to `inherit`.
+
+---
+
+## CLI Entry Points (`rig`)
+
+Agents can discover and run core `rig` CLI commands directly across sessions and worktrees:
+- `rig status [<target-dir>]` — inspect repository rig configuration, active hooks, and installed skills.
+- `rig check-docs [<target-dir>]` — verify internal Markdown link resolution, heading anchors, and doc reachability.
+- `rig reflow-docs [<target-dir>] [--check]` — enforce or verify one-sentence-per-line Markdown formatting.
+- `rig attach [<target-dir>]` — configure `core.hooksPath .rig/hooks`, attach `main` in the root checkout, and register a cloned repository without creating scaffolding worktrees.
+- `rig update [--all] [--repo <target-dir>]` — refresh global harness plugins, check initialized repositories for pending updates, or selectively update clean repositories ([`skills/rig-update/SKILL.md`](../skills/rig-update/SKILL.md)).
+- `rig eject [<target-dir>]` — cleanly remove `.rig/` and unset `core.hooksPath` while preserving `AGENTS.md` and `docs/`.
 
 ---
 

@@ -280,3 +280,66 @@ test('pre-commit shim non-rig fallback blocks direct commits on main/master whil
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('pre-commit allows .rig/ and legacy scripts/git-hooks deletion commits on main checkout and rejects unauthorized paths', () => {
+  const { root, wt, git, cleanup } = makeRiggedRepo();
+  try {
+    // 1. Direct commit on main updating .rig/ file succeeds
+    writeFileSync(path.join(root, '.rig/test-asset.txt'), 'asset content\n');
+    git(root, 'add', '.rig/test-asset.txt');
+    const rigCommit = git(root, 'commit', '-m', 'chore(rig): add rig asset');
+    assert.equal(rigCommit.status, 0, rigCommit.stderr);
+
+    // 2. Add a legacy hook via feature branch merge so it exists in main history
+    mkdirSync(path.join(wt, 'scripts/git-hooks'), { recursive: true });
+    writeFileSync(path.join(wt, 'scripts/git-hooks/pre-commit'), '#!/bin/sh\n# legacy\n');
+    git(wt, 'add', 'scripts/git-hooks/pre-commit');
+    assert.equal(git(wt, 'commit', '-m', 'chore: add legacy hook in branch').status, 0);
+
+    const mergeRes = git(root, 'merge', '--no-commit', '--no-ff', 'feature/feat-1');
+    assert.equal(mergeRes.status, 0, mergeRes.stderr);
+    assert.equal(git(root, 'commit', '-m', 'Merge legacy hook').status, 0);
+
+    // 3. Deleting legacy scripts/git-hooks/pre-commit directly on main succeeds
+    git(root, 'rm', 'scripts/git-hooks/pre-commit');
+    const delCommit = git(root, 'commit', '-m', 'chore: remove legacy hook');
+    assert.equal(delCommit.status, 0, delCommit.stderr);
+
+    // 4. Combined commit: updating .rig/ and documentation file on main succeeds when docs are valid
+    mkdirSync(path.join(root, 'docs'), { recursive: true });
+    writeFileSync(path.join(root, 'docs/backlog.md'), '# Backlog\n\n- Task 1.\n');
+    writeFileSync(path.join(root, 'README.md'), '# App\n\nSee [docs/backlog.md](docs/backlog.md).\n');
+    writeFileSync(path.join(root, '.rig/test-asset.txt'), 'asset v2\n');
+    git(root, 'add', 'README.md', 'docs/backlog.md', '.rig/test-asset.txt');
+    const comboCommit = git(root, 'commit', '-m', 'docs: update docs and rig asset');
+    assert.equal(comboCommit.status, 0, comboCommit.stderr);
+
+    // 5. Combined commit with broken doc link fails doc linter
+    writeFileSync(path.join(root, 'README.md'), '# App\n\nSee [docs/missing.md](docs/missing.md).\n'); // check-doc-links:ignore
+    writeFileSync(path.join(root, '.rig/test-asset.txt'), 'asset v3\n');
+    git(root, 'add', 'README.md', '.rig/test-asset.txt');
+    const brokenDocCommit = git(root, 'commit', '-m', 'docs: broken doc link');
+    assert.notEqual(brokenDocCommit.status, 0);
+    assert.match(brokenDocCommit.stderr + brokenDocCommit.stdout, /broken/i);
+    git(root, 'reset', '--hard', 'HEAD');
+
+    // 6. Adding a file to scripts/git-hooks/ is NOT a deletion and is rejected on main
+    mkdirSync(path.join(root, 'scripts/git-hooks'), { recursive: true });
+    writeFileSync(path.join(root, 'scripts/git-hooks/new-hook'), '#!/bin/sh\n');
+    git(root, 'add', 'scripts/git-hooks/new-hook');
+    const addHookCommit = git(root, 'commit', '-m', 'chore: add new hook illegally');
+    assert.notEqual(addHookCommit.status, 0);
+    assert.match(addHookCommit.stderr, /refusing direct commit in the main checkout/);
+    git(root, 'reset', '--hard', 'HEAD');
+
+    // 7. Modifying unauthorized path (app.js) alongside .rig/ is rejected on main
+    writeFileSync(path.join(root, 'app.js'), 'console.log("unauthorized");\n');
+    writeFileSync(path.join(root, '.rig/test-asset.txt'), 'asset v4\n');
+    git(root, 'add', 'app.js', '.rig/test-asset.txt');
+    const mixedCommit = git(root, 'commit', '-m', 'chore: mixed app and rig');
+    assert.notEqual(mixedCommit.status, 0);
+    assert.match(mixedCommit.stderr, /refusing direct commit in the main checkout/);
+  } finally {
+    cleanup();
+  }
+});

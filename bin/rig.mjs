@@ -1221,7 +1221,7 @@ export function validateRepoCleanForUpdate(targetDir) {
   return { ok: true, reason: null, branch: branch || 'main', message: null };
 }
 
-export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT } = {}) {
+export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, autoCommit = false, homeDir = null } = {}) {
   const dir = path.resolve(targetDir);
   const copied = [];
   const skipped = [];
@@ -1484,7 +1484,59 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT } = {
   }
 
   const attachRes = attachMainCheckout(dir);
-  return { dir, copied, removed, attachRes };
+
+  if (autoCommit && existsSync(path.join(dir, '.git'))) {
+    const headRev = spawnSync('git', ['-C', dir, 'rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' });
+    const hasHead = headRev.status === 0;
+    const symRef = spawnSync('git', ['-C', dir, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8' });
+    const branch = symRef.status === 0 && symRef.stdout ? symRef.stdout.trim() : null;
+    const isOnMain = branch === 'main' || branch === 'master';
+
+    if (hasHead && isOnMain) {
+      const filesToStage = [
+        ...new Set(
+          [...copied, ...removed]
+            .map((f) => path.relative(dir, f).replace(/\\/g, '/'))
+            .filter((rel) => rel && !rel.startsWith('..')),
+        ),
+      ];
+
+      if (filesToStage.length > 0) {
+        spawnSync('git', ['-C', dir, 'add', '-A', '--', ...filesToStage], { encoding: 'utf8' });
+        const diffRes = spawnSync('git', ['-C', dir, 'diff', '--cached', '--name-only'], { encoding: 'utf8' });
+        if (diffRes.status === 0 && diffRes.stdout.trim().length > 0) {
+          const localBin = homeDir ? path.join(homeDir, '.local', 'bin') : path.join(homedir(), '.local', 'bin');
+          const nodeDir = path.dirname(process.execPath);
+          const envPath = [localBin, nodeDir, process.env.PATH].filter(Boolean).join(':');
+          const gitEnv = {
+            ...process.env,
+            ...(homeDir ? { HOME: homeDir } : {}),
+            PATH: envPath,
+          };
+          const commitRes = spawnSync(
+            'git',
+            [
+              '-C',
+              dir,
+              'commit',
+              '-m',
+              'chore(rig): update agent-rig repository assets',
+              '-m',
+              'Unmandated-call: none',
+            ],
+            { encoding: 'utf8', env: gitEnv },
+          );
+          if (commitRes.status === 0) {
+            const headSha = spawnSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+            return { dir, copied, removed, attachRes, committed: true, commitSha: headSha };
+          }
+          return { dir, copied, removed, attachRes, committed: false, commitSha: null, commitError: commitRes.stderr };
+        }
+      }
+    }
+  }
+
+  return { dir, copied, removed, attachRes, committed: false, commitSha: null };
 }
 
 export function updateRig({
@@ -1534,8 +1586,11 @@ export function updateRig({
         skippedRepos.push({ dir: r, reason: check.reason, warning: check.message });
         warnings.push(check.message);
       } else {
-        const res = updateRepo(r, { harness, rigRoot });
+        const res = updateRepo(r, { harness, rigRoot, homeDir, autoCommit: true });
         updatedRepos.push(res);
+        if (res.commitError) {
+          warnings.push(`Warning: failed to auto-commit repository updates in '${r}': ${res.commitError.trim()}`);
+        }
       }
     }
   }
@@ -2463,44 +2518,66 @@ export function runPreCommitHook(targetDir = process.cwd()) {
 
   if (gitDir === commonDir) {
     // In the main checkout, only merge commits onto main/master are allowed,
-    // except for documentation-only commits verified by doc linters.
+    // except for documentation, .rig/ assets, and legacy hook deletion commits.
     if ((branch === 'main' || branch === 'master') && existsSync(path.join(gitDir, 'MERGE_HEAD'))) {
       return { status: 0, stdout: '', stderr: '' };
     }
 
-    const diffRes = git('diff', '--cached', '--name-only');
-    const rawStaged = diffRes.stdout.trim();
-    const stagedFiles = rawStaged ? rawStaged.split('\n').filter(Boolean) : [];
-    const hasFiles = stagedFiles.length > 0;
-    const isDocOnly =
-      hasFiles &&
-      stagedFiles.every((f) => {
-        const norm = f.replace(/\\/g, '/');
-        return norm === 'README.md' || norm.startsWith('docs/');
-      });
+    if (branch === 'main' || branch === 'master') {
+      const diffRes = git('diff', '--cached', '--name-status', '--no-renames');
+      const rawStaged = diffRes.stdout.trim();
+      const stagedLines = rawStaged ? rawStaged.split('\n').filter(Boolean) : [];
+      const hasFiles = stagedLines.length > 0;
 
-    if (isDocOnly) {
-      const checkRes = runCheckDocs(repoRoot);
-      if (checkRes.status !== 0) {
-        return {
-          status: checkRes.status ?? 1,
-          stdout: checkRes.stdout || '',
-          stderr: checkRes.stderr || '',
-        };
+      let hasDocFiles = false;
+      const isAllowedDirectCommit =
+        hasFiles &&
+        stagedLines.every((line) => {
+          const tabIdx = line.indexOf('\t');
+          if (tabIdx === -1) return false;
+          const status = line.slice(0, tabIdx).trim();
+          const filePath = line.slice(tabIdx + 1).trim();
+          const norm = filePath.replace(/\\/g, '/');
+
+          if (norm === 'README.md' || norm.startsWith('docs/')) {
+            hasDocFiles = true;
+            return true;
+          }
+          if (norm.startsWith('.rig/')) {
+            return true;
+          }
+          if (status === 'D' && norm.startsWith('scripts/git-hooks/')) {
+            return true;
+          }
+          return false;
+        });
+
+      if (isAllowedDirectCommit) {
+        if (hasDocFiles) {
+          const checkRes = runCheckDocs(repoRoot);
+          if (checkRes.status !== 0) {
+            return {
+              status: checkRes.status ?? 1,
+              stdout: checkRes.stdout || '',
+              stderr: checkRes.stderr || '',
+            };
+          }
+          const reflowRes = runReflowDocs(repoRoot, { check: true });
+          if (reflowRes.status !== 0) {
+            return {
+              status: reflowRes.status ?? 1,
+              stdout: reflowRes.stdout || '',
+              stderr: reflowRes.stderr || '',
+            };
+          }
+          return {
+            status: 0,
+            stdout: '',
+            stderr: 'pre-commit: verifying doc links and formatting on main checkout...\n',
+          };
+        }
+        return { status: 0, stdout: '', stderr: '' };
       }
-      const reflowRes = runReflowDocs(repoRoot, { check: true });
-      if (reflowRes.status !== 0) {
-        return {
-          status: reflowRes.status ?? 1,
-          stdout: reflowRes.stdout || '',
-          stderr: reflowRes.stderr || '',
-        };
-      }
-      return {
-        status: 0,
-        stdout: '',
-        stderr: 'pre-commit: verifying doc links and formatting on main checkout...\n',
-      };
     }
 
     return {
@@ -2508,7 +2585,7 @@ export function runPreCommitHook(targetDir = process.cwd()) {
       stdout: '',
       stderr:
         'pre-commit: refusing direct commit in the main checkout.\n' +
-        'The main checkout only accepts merge commits or doc-only commits on main/master.\n' +
+        'The main checkout only accepts merge commits, doc-only commits, or .rig/ asset commits on main/master.\n' +
         'Create or enter a linked git worktree first (e.g. git worktree add .worktrees/<slug> -b <type>/<slug>).\n',
     };
   }

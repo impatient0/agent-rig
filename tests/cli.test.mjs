@@ -1337,14 +1337,28 @@ test('updateRig selective execution: allRepos and repoDir update clean repos and
     assert.equal(targetBranchRes.warnings.length, 1);
     assert.match(targetBranchRes.warnings[0], /active branch is 'feature\/test'/);
 
-    // 4. updateRig with repoDir targeting cleanRepo -> updated
+    // 4. updateRig with repoDir targeting cleanRepo -> updated and auto-committed
     const targetCleanRes = updateRig({ homeDir: fakeHome, repoDir: cleanRepo });
     assert.equal(targetCleanRes.updatedRepos.length, 1);
     assert.equal(targetCleanRes.skippedRepos.length, 0);
     assert.equal(targetCleanRes.warnings.length, 0);
     assert.doesNotMatch(readFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated/);
+    assert.equal(targetCleanRes.updatedRepos[0].committed, true);
+    assert.ok(targetCleanRes.updatedRepos[0].commitSha);
+    const cleanStatus = spawnSync('git', ['-C', cleanRepo, 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(cleanStatus, '');
+    const lastCommitMsg = spawnSync('git', ['-C', cleanRepo, 'log', '-1', '--pretty=%B'], { encoding: 'utf8' }).stdout.trim();
+    assert.match(lastCommitMsg, /chore\(rig\): update agent-rig repository assets/);
+    assert.match(lastCommitMsg, /Unmandated-call: none/);
 
-    // 5. updateRig with allRepos: true -> cleanRepo updated, branchRepo and dirtyRepo skipped
+    // Calling updateRig again when repo has no changes does not create an empty commit
+    const noopRes = updateRig({ homeDir: fakeHome, repoDir: cleanRepo });
+    assert.equal(noopRes.updatedRepos.length, 1);
+    assert.equal(noopRes.updatedRepos[0].committed, false);
+    const noopCommitMsg = spawnSync('git', ['-C', cleanRepo, 'log', '-1', '--pretty=%B'], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(noopCommitMsg, lastCommitMsg);
+
+    // 5. updateRig with allRepos: true -> cleanRepo updated and auto-committed, branchRepo and dirtyRepo skipped
     // Outdate cleanRepo again to re-test allRepos
     writeFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), '#!/bin/sh\n# outdated again\n');
     spawnSync('git', ['-C', cleanRepo, 'add', '-A']);
@@ -1353,6 +1367,10 @@ test('updateRig selective execution: allRepos and repoDir update clean repos and
     const allRes = updateRig({ homeDir: fakeHome, allRepos: true });
     assert.equal(allRes.updatedRepos.length, 1);
     assert.equal(allRes.updatedRepos[0].dir, cleanRepo);
+    assert.equal(allRes.updatedRepos[0].committed, true);
+    assert.ok(allRes.updatedRepos[0].commitSha);
+    const allCleanStatus = spawnSync('git', ['-C', cleanRepo, 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(allCleanStatus, '');
     assert.equal(allRes.skippedRepos.length, 2);
     assert.ok(allRes.skippedRepos.some((s) => s.dir === branchRepo && s.reason === 'non-main-branch'));
     assert.ok(allRes.skippedRepos.some((s) => s.dir === dirtyRepo && s.reason === 'dirty'));
@@ -1643,6 +1661,10 @@ test('CLI rig update --all and rig update --repo update clean repos on main and 
     const cleanRes = runRig('update', '--repo', cleanRepo, '--home', fakeHome);
     assert.match(cleanRes.stdout, /rig update: synced/);
     assert.doesNotMatch(readFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated shim/);
+    assert.equal(git(cleanRepo, 'status', '--porcelain').stdout.trim(), '');
+    const cleanCommitMsg = git(cleanRepo, 'log', '-1', '--pretty=%B').stdout.trim();
+    assert.match(cleanCommitMsg, /chore\(rig\): update agent-rig repository assets/);
+    assert.match(cleanCommitMsg, /Unmandated-call: none/);
 
     // 4. CLI rig update --all
     // Make cleanRepo outdated again so we can test --all
@@ -1655,8 +1677,11 @@ test('CLI rig update --all and rig update --repo update clean repos on main and 
     assert.match(allRes.stderr + allRes.stdout, /working tree has uncommitted changes/);
     assert.match(allRes.stderr + allRes.stdout, /active branch is 'feature\/isolated-branch'/);
 
-    // cleanRepo updated, dirtyRepo and branchRepo still untouched
+    // cleanRepo updated and auto-committed, dirtyRepo and branchRepo still untouched
     assert.doesNotMatch(readFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated again/);
+    assert.equal(git(cleanRepo, 'status', '--porcelain').stdout.trim(), '');
+    const allCommitMsg = git(cleanRepo, 'log', '-1', '--pretty=%B').stdout.trim();
+    assert.match(allCommitMsg, /chore\(rig\): update agent-rig repository assets/);
     assert.match(readFileSync(path.join(dirtyRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated shim/);
     assert.match(readFileSync(path.join(branchRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated shim/);
   } finally {

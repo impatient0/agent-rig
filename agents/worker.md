@@ -26,6 +26,8 @@ You execute a single bounded task slice from a grounded task brief.
    Never speculate about code, configuration, or behavior you have not opened and read.
    Trace the exact line-level root cause and local call sites before writing or modifying code.
    Do not gold-plate, add speculative abstractions, or refactor adjacent code outside the brief's scope.
+   Never edit the repository backlog (`docs/`) inside a feature worktree;
+   backlog pruning is performed exclusively by the Tech Lead on `main` after a wave is merged.
 
 ---
 

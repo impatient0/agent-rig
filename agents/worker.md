@@ -53,9 +53,18 @@ Stop work immediately, leave the worktree in a clean or WIP-committed state, and
 ## 3. Boundary: Stop Trigger #2 vs. `Unmandated-call:` Commit Trailers
 
 - **Halt under Stop Trigger #2** if a choice changes public interfaces, data schemas, state-machine semantics, persistence, or user-visible behavior.
-- **Proceed and record an `Unmandated-call:` trailer** only for bounded, local implementation choices (e.g., choosing a fallback default for an internal helper, picking an error-handling guard clause, or structuring a test fixture) that satisfy all acceptance criteria without altering contracts:
+  Do not resolve contractual, schema, or behavioral forks yourself via an `Unmandated-call:` trailer.
+- **Proceed and record an `Unmandated-call:` trailer** only for meaningful behavioral, fallback, or edge-case judgment calls that satisfy all acceptance criteria without altering contracts:
   - `Unmandated-call: <choice> — <1-line rationale> (<file>:<line>)`
   - Or `Unmandated-call: none` if zero unmandated judgment calls were needed.
+- **Positive examples (require an `Unmandated-call:` trailer):**
+  - Silent fallback vs. throwing on an unhandled I/O error or parse failure.
+  - Picking a default timeout, retry limit, or polling interval not specified in the brief.
+  - Choosing input precedence when multiple configuration sources or flags conflict.
+- **Negative examples (routine coding mechanics; never record as unmandated calls):**
+  - Extracting private helper functions or internal subroutines.
+  - Naming local variables, parameters, or private symbols.
+  - Structuring unit test fixtures, mock setups, or test assertion ordering.
 
 ---
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, rmSync, readdirSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, rmSync, readdirSync, copyFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -45,6 +45,7 @@ import {
   isSelfContainedRepo,
   validateRepoCleanForUpdate,
   checkRepoPendingUpdates,
+  VENDORED_RIG_FILES,
 } from '../bin/rig.mjs';
 import { isRiggedRepo } from '../hooks/guard-main-checkout-edits.mjs';
 
@@ -1375,4 +1376,295 @@ test('templates/ci/rig-verify.yml exists and defines GitHub Actions PR/push veri
   assert.match(content, /check-doc-links/);
   assert.match(content, /reflow-docs --check/);
 });
+
+test('multi-environment self-contained repository lifecycle across all 4 harnesses: layout, update, attach, and eject', () => {
+  const HARNESSES = [
+    { id: 'antigravity', dotDir: '.gemini' },
+    { id: 'claude', dotDir: '.claude' },
+    { id: 'codex', dotDir: '.codex' },
+    { id: 'cursor', dotDir: '.cursor' },
+  ];
+
+  for (const h of HARNESSES) {
+    const repo = mkdtempSync(path.join(tmpdir(), `rig-self-${h.id}-`));
+    const fakeHome = mkdtempSync(path.join(tmpdir(), `rig-home-${h.id}-`));
+    try {
+      const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+      git(repo, 'init', '-q', '-b', 'main');
+      git(repo, 'config', 'user.email', 'test@example.com');
+      git(repo, 'config', 'user.name', 'Test');
+
+      // 1. Initialize self-contained repo for this harness
+      const res = initRepo(repo, { selfContained: true, worktrees: true, harness: h.id, homeDir: fakeHome });
+      assert.equal(res.hooksConfigured, true);
+      assert.equal(isSelfContainedRepo(repo), true);
+
+      // Verify .rig/ layout
+      for (const f of VENDORED_RIG_FILES) {
+        assert.ok(existsSync(path.join(repo, f.dest)), `expected ${f.dest} to exist in self-contained repo for ${h.id}`);
+      }
+      assert.ok(existsSync(path.join(repo, '.rig/hooks/pre-commit')));
+
+      // Verify harness dotDir layout
+      const dotPath = path.join(repo, h.dotDir);
+      assert.ok(existsSync(path.join(dotPath, 'skills/dispatch/SKILL.md')));
+      assert.ok(existsSync(path.join(dotPath, 'agents/worker.md')));
+      assert.ok(existsSync(path.join(dotPath, 'agents/verifier.md')));
+      assert.ok(existsSync(path.join(dotPath, 'rules/contract-change-gate.md')));
+      if (h.id === 'claude') {
+        assert.ok(existsSync(path.join(dotPath, 'settings.json')));
+        assert.ok(existsSync(path.join(dotPath, 'hooks/guard-remote-mutation.mjs')));
+      }
+
+      // Verify doc linters pass
+      const checkDocs = runCheckDocs(repo);
+      assert.equal(checkDocs.status, 0, `${h.id} checkDocs failed: ${checkDocs.stdout}${checkDocs.stderr}`);
+      const reflowDocs = runReflowDocs(repo, { check: true });
+      assert.equal(reflowDocs.status, 0, `${h.id} reflowDocs failed: ${reflowDocs.stdout}${reflowDocs.stderr}`);
+
+      // Commit initial files so working tree is clean on main
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-qm', 'chore: initial self-contained setup');
+
+      // 2. Tamper with a vendored file, commit it, and verify update restores it
+      writeFileSync(path.join(repo, '.rig/bin/rig.mjs'), '#!/usr/bin/env node\n// outdated vendored rig\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-qm', 'chore: tamper vendored file');
+
+      const pending = checkRepoPendingUpdates(repo, { harness: h.id });
+      assert.equal(pending.hasPendingUpdates, true);
+      assert.ok(pending.pendingFiles.some((f) => f.endsWith('.rig/bin/rig.mjs')));
+
+      const upd = updateRepo(repo, { harness: h.id });
+      assert.ok(upd.copied.some((f) => f.endsWith('.rig/bin/rig.mjs')));
+      assert.doesNotMatch(readFileSync(path.join(repo, '.rig/bin/rig.mjs'), 'utf8'), /\/\/ outdated vendored rig/);
+      assert.equal(checkRepoPendingUpdates(repo, { harness: h.id }).hasPendingUpdates, false);
+
+      // Commit restored files so working tree is clean again before testing attach
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-qm', 'chore: commit restored vendored file');
+
+      // 3. Test rig attach: detach HEAD and unset hooksPath, then attach restores them
+      git(repo, 'checkout', '--detach', 'HEAD');
+      git(repo, 'config', '--unset', 'core.hooksPath');
+      const attachRes = attachRepo(repo, { homeDir: fakeHome });
+      assert.equal(attachRes.hooksConfigured, true);
+      assert.equal(attachRes.mainCheckoutHead.status, 'attached');
+      assert.equal(git(repo, 'config', '--get', 'core.hooksPath').stdout.trim(), '.rig/hooks');
+      assert.equal(git(repo, 'symbolic-ref', '--short', 'HEAD').stdout.trim(), 'main');
+      assert.ok(readRigState(fakeHome).initializedRepos.includes(repo));
+
+      // 4. Test rig eject: unsets hooksPath, deletes .rig, prunes state, preserves AGENTS.md and docs
+      const ejectRes = ejectRepo(repo, { homeDir: fakeHome });
+      assert.equal(ejectRes.hooksUnset, true);
+      assert.equal(existsSync(path.join(repo, '.rig')), false);
+      assert.equal(git(repo, 'config', '--get', 'core.hooksPath').stdout.trim(), '');
+      assert.equal(readRigState(fakeHome).initializedRepos.includes(repo), false);
+      assert.equal(isRiggedRepo(repo), false);
+      assert.ok(existsSync(path.join(repo, 'AGENTS.md')));
+      assert.ok(existsSync(path.join(repo, 'docs/backlog.md')));
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  }
+});
+
+test('non-rig machine simulation with sanitized PATH and isolated empty HOME protects main/master while allowing feature and merge commits', () => {
+  const PRE_COMMIT = path.resolve(RIG_ROOT, '.rig/hooks/pre-commit');
+
+  // Subcase A: Pure shell fallback (no rig, no node on PATH) across both main and master
+  for (const branchName of ['main', 'master']) {
+    const root = mkdtempSync(path.join(tmpdir(), `rig-nonrig-${branchName}-`));
+    const emptyHome = mkdtempSync(path.join(tmpdir(), 'rig-empty-home-'));
+    const safeEnv = {
+      PATH: '/usr/bin:/bin',
+      HOME: emptyHome,
+      GIT_AUTHOR_NAME: 'Test',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'Test',
+      GIT_COMMITTER_EMAIL: 'test@example.com',
+    };
+    const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: safeEnv });
+    try {
+      git(root, 'init', '-q', '-b', branchName);
+      git(root, 'config', 'user.email', 'test@example.com');
+      git(root, 'config', 'user.name', 'Test');
+
+      // Standard lightweight rigged repo: pre-commit shim only, NO .rig/bin/rig.mjs
+      mkdirSync(path.join(root, '.rig/hooks'), { recursive: true });
+      copyFileSync(PRE_COMMIT, path.join(root, '.rig/hooks/pre-commit'));
+      chmodSync(path.join(root, '.rig/hooks/pre-commit'), 0o755);
+      git(root, 'config', 'core.hooksPath', '.rig/hooks');
+
+      // 1. Initial commit on unborn repo succeeds on main/master
+      writeFileSync(path.join(root, 'init.txt'), 'initial');
+      git(root, 'add', 'init.txt');
+      const initRes = git(root, 'commit', '-m', 'chore: initial commit');
+      assert.equal(initRes.status, 0, initRes.stderr);
+
+      // 2. Direct non-merge commit on main/master is refused
+      writeFileSync(path.join(root, 'init.txt'), 'illegal change');
+      git(root, 'add', 'init.txt');
+      const directRes = git(root, 'commit', '-m', 'illegal direct commit');
+      assert.notEqual(directRes.status, 0);
+      assert.match(directRes.stderr, new RegExp(`pre-commit: refusing direct commit in the main checkout on ${branchName}\\.`));
+      git(root, 'reset', '--hard', 'HEAD');
+
+      // 3. Commit on feature branch is permitted
+      git(root, 'checkout', '-b', `feature/test-${branchName}`);
+      writeFileSync(path.join(root, 'feat.txt'), 'feature content');
+      git(root, 'add', 'feat.txt');
+      const featRes = git(root, 'commit', '-m', 'feat: feature branch commit');
+      assert.equal(featRes.status, 0, featRes.stderr);
+
+      // 4. Merge commit onto main/master is permitted
+      git(root, 'checkout', branchName);
+      const mergeNoCommit = git(root, 'merge', '--no-commit', '--no-ff', `feature/test-${branchName}`);
+      assert.equal(mergeNoCommit.status, 0, mergeNoCommit.stderr);
+      const mergeRes = git(root, 'commit', '-m', `Merge branch 'feature/test-${branchName}' into ${branchName}`);
+      assert.equal(mergeRes.status, 0, mergeRes.stderr);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(emptyHome, { recursive: true, force: true });
+    }
+  }
+
+  // Subcase B: Non-rig machine with self-contained repo fallback (node is available, but NO rig CLI on PATH, empty HOME)
+  const selfRepo = mkdtempSync(path.join(tmpdir(), 'rig-sim-self-'));
+  const selfEmptyHome = mkdtempSync(path.join(tmpdir(), 'rig-sim-home-'));
+  const isolatedNodeBin = mkdtempSync(path.join(tmpdir(), 'rig-sim-node-'));
+  symlinkSync(process.execPath, path.join(isolatedNodeBin, 'node'));
+
+  const nodeEnv = {
+    PATH: `${isolatedNodeBin}:/usr/bin:/bin`,
+    HOME: selfEmptyHome,
+    GIT_AUTHOR_NAME: 'Test',
+    GIT_AUTHOR_EMAIL: 'test@example.com',
+    GIT_COMMITTER_NAME: 'Test',
+    GIT_COMMITTER_EMAIL: 'test@example.com',
+  };
+  const gitNode = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: nodeEnv });
+  try {
+    gitNode(selfRepo, 'init', '-q', '-b', 'main');
+    gitNode(selfRepo, 'config', 'user.email', 'test@example.com');
+    gitNode(selfRepo, 'config', 'user.name', 'Test');
+    initRepo(selfRepo, { selfContained: true, worktrees: true, harness: 'antigravity', homeDir: false });
+
+    // Initial commit
+    gitNode(selfRepo, 'add', '-A');
+    const initCommit = gitNode(selfRepo, 'commit', '-m', 'chore: initial self-contained setup');
+    assert.equal(initCommit.status, 0, initCommit.stderr);
+
+    // 1. Direct code commit on main in root checkout is refused by runPreCommitHook via vendored rig.mjs
+    writeFileSync(path.join(selfRepo, 'app.js'), 'console.log("direct root edit");\n');
+    gitNode(selfRepo, 'add', 'app.js');
+    const directRes = gitNode(selfRepo, 'commit', '-m', 'feat: direct root commit');
+    assert.notEqual(directRes.status, 0);
+    assert.match(directRes.stderr, /refusing direct commit in the main checkout/);
+    gitNode(selfRepo, 'reset', '--hard', 'HEAD');
+
+    // 2. Doc-only commit on main in root checkout passes doc linters and succeeds
+    writeFileSync(path.join(selfRepo, 'docs/backlog.md'), '# Backlog\n\n- Task 1.\n');
+    gitNode(selfRepo, 'add', 'docs/backlog.md');
+    const docCommit = gitNode(selfRepo, 'commit', '-m', 'docs: update backlog');
+    assert.equal(docCommit.status, 0, docCommit.stderr);
+
+    // 3. Feature branch in linked worktree: feature commit succeeds, merge commit onto main succeeds
+    const wt = path.join(selfRepo, '.worktrees/sim-wt');
+    gitNode(selfRepo, 'worktree', 'add', '-q', '-b', 'feature/sim-feature', wt, 'main');
+    writeFileSync(path.join(wt, 'feature.js'), 'export const feat = true;\n');
+    const gitWt = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: nodeEnv });
+    gitWt(wt, 'add', 'feature.js');
+    const featCommit = gitWt(wt, 'commit', '-m', 'feat: feature commit');
+    assert.equal(featCommit.status, 0, featCommit.stderr);
+
+    const mergeNoCommit = gitNode(selfRepo, 'merge', '--no-commit', '--no-ff', 'feature/sim-feature');
+    assert.equal(mergeNoCommit.status, 0, mergeNoCommit.stderr);
+    const mergeCommit = gitNode(selfRepo, 'commit', '-m', "Merge branch 'feature/sim-feature' into main");
+    assert.equal(mergeCommit.status, 0, mergeCommit.stderr);
+  } finally {
+    rmSync(selfRepo, { recursive: true, force: true });
+    rmSync(selfEmptyHome, { recursive: true, force: true });
+    rmSync(isolatedNodeBin, { recursive: true, force: true });
+  }
+});
+
+test('CLI rig update --all and rig update --repo update clean repos on main and reject dirty or feature branch repos with warnings without mutating files', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-cli-upd-home-'));
+  const cleanRepo = mkdtempSync(path.join(tmpdir(), 'rig-cli-clean-'));
+  const dirtyRepo = mkdtempSync(path.join(tmpdir(), 'rig-cli-dirty-'));
+  const branchRepo = mkdtempSync(path.join(tmpdir(), 'rig-cli-branch-'));
+
+  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const runRig = (...args) =>
+    spawnSync(process.execPath, [path.join(RIG_ROOT, 'bin/rig.mjs'), ...args], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: fakeHome },
+    });
+
+  try {
+    mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
+    installRig({ homeDir: fakeHome, harnesses: ['antigravity'] });
+
+    for (const r of [cleanRepo, dirtyRepo, branchRepo]) {
+      git(r, 'init', '-q', '-b', 'main');
+      git(r, 'config', 'user.email', 'test@example.com');
+      git(r, 'config', 'user.name', 'Test');
+      initRepo(r, { selfContained: false, worktrees: true, homeDir: fakeHome });
+      git(r, 'add', '-A');
+      git(r, 'commit', '-qm', 'chore: initial');
+
+      // Make .rig/hooks/pre-commit outdated in all 3 repos and commit so working trees start clean
+      writeFileSync(path.join(r, '.rig/hooks/pre-commit'), '#!/bin/sh\n# outdated shim\n');
+      git(r, 'add', '-A');
+      git(r, 'commit', '-qm', 'chore: outdated shim');
+    }
+
+    // Put branchRepo on feature branch
+    git(branchRepo, 'checkout', '-b', 'feature/isolated-branch');
+
+    // Make dirtyRepo dirty with uncommitted changes
+    writeFileSync(path.join(dirtyRepo, 'uncommitted.txt'), 'dirty uncommitted work\n');
+
+    // 1. CLI rig update --repo targeting dirtyRepo
+    const dirtyRes = runRig('update', '--repo', dirtyRepo, '--home', fakeHome);
+    assert.match(dirtyRes.stderr + dirtyRes.stdout, /working tree has uncommitted changes/);
+    // Crucial: file must NOT have been mutated
+    assert.match(readFileSync(path.join(dirtyRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated shim/);
+
+    // 2. CLI rig update --repo targeting branchRepo
+    const branchRes = runRig('update', '--repo', branchRepo, '--home', fakeHome);
+    assert.match(branchRes.stderr + branchRes.stdout, /active branch is 'feature\/isolated-branch'/);
+    // Crucial: file must NOT have been mutated
+    assert.match(readFileSync(path.join(branchRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated shim/);
+
+    // 3. CLI rig update --repo targeting cleanRepo
+    const cleanRes = runRig('update', '--repo', cleanRepo, '--home', fakeHome);
+    assert.match(cleanRes.stdout, /rig update: synced/);
+    assert.doesNotMatch(readFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated shim/);
+
+    // 4. CLI rig update --all
+    // Make cleanRepo outdated again so we can test --all
+    writeFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), '#!/bin/sh\n# outdated again\n');
+    git(cleanRepo, 'add', '-A');
+    git(cleanRepo, 'commit', '-qm', 'chore: outdated again');
+
+    const allRes = runRig('update', '--all', '--home', fakeHome);
+    assert.match(allRes.stdout, /rig update: synced/);
+    assert.match(allRes.stderr + allRes.stdout, /working tree has uncommitted changes/);
+    assert.match(allRes.stderr + allRes.stdout, /active branch is 'feature\/isolated-branch'/);
+
+    // cleanRepo updated, dirtyRepo and branchRepo still untouched
+    assert.doesNotMatch(readFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated again/);
+    assert.match(readFileSync(path.join(dirtyRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated shim/);
+    assert.match(readFileSync(path.join(branchRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated shim/);
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(cleanRepo, { recursive: true, force: true });
+    rmSync(dirtyRepo, { recursive: true, force: true });
+    rmSync(branchRepo, { recursive: true, force: true });
+  }
+});
+
 

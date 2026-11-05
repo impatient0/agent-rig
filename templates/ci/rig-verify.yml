@@ -1,0 +1,43 @@
+name: rig-verify
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          fi
+
+      - name: Run test gate
+        run: npm test
+
+      - name: Run documentation verification
+        run: |
+          if [ -f .rig/bin/rig.mjs ]; then
+            node .rig/bin/rig.mjs check-docs && node .rig/bin/rig.mjs reflow-docs --check
+          elif [ -f scripts/check-doc-links.mjs ]; then
+            node scripts/check-doc-links.mjs && node scripts/reflow-docs.mjs --check
+          fi

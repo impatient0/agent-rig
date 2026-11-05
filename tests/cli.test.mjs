@@ -1365,3 +1365,14 @@ test('updateRig selective execution: allRepos and repoDir update clean repos and
   }
 });
 
+test('templates/ci/rig-verify.yml exists and defines GitHub Actions PR/push verification steps', () => {
+  const templatePath = path.join(RIG_ROOT, 'templates/ci/rig-verify.yml');
+  assert.ok(existsSync(templatePath), 'templates/ci/rig-verify.yml must exist');
+  const content = readFileSync(templatePath, 'utf8');
+  assert.match(content, /name:\s*rig-verify/);
+  assert.match(content, /pull_request:/);
+  assert.match(content, /npm test/);
+  assert.match(content, /check-doc-links/);
+  assert.match(content, /reflow-docs --check/);
+});
+

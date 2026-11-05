@@ -8,10 +8,7 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Ready, unblocked
 
-- **Multi-environment integration tests for repository updates and non-rig simulation:**
-  Add comprehensive integration tests in `tests/cli.test.mjs` validating `.rig/` layout, `rig attach`, `rig eject`, clean/dirty updates, and non-rig machine behavior across all four harnesses.
-  Simulate non-rig machines by spawning git and hook processes with sanitized `PATH` (excluding rig binaries) and an isolated empty `HOME`.
-  Verify that clean repositories update shims cleanly, dirty repositories reject updates with warnings, and non-rig environments permit feature branch commits while protecting `main`.
+- None currently queued.
 
 ## Gated on an in-flight milestone
 

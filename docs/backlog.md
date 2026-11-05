@@ -9,7 +9,9 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
   Replace the tracked hook script with an invariant 5-line delegation wrapper calling `rig hook pre-commit`.
   Implement `rig hook pre-commit` inside `bin/rig.mjs` to execute worktree checks, doc-only commit gates, and doc linters centrally.
   Provide fallback in the hook wrapper for environments without `rig`, permitting standard feature branch commits in the root checkout while protecting `main` and `master`.
-  In `--self-contained` mode, route vendored skills, agents, and rules into detected harness dot-directories (`.claude/`, `.gemini/`), failing fast if no harness is detected or specified.
+  In `--self-contained` mode, route vendored skills, agents, and rules into detected harness dot-directories across all four supported harnesses (Antigravity `.gemini/`, Claude Code `.claude/`, Codex `.codex/`, Cursor `.cursor/`), failing fast if no harness is detected or specified.
+  In self-contained mode without global `rig` on `PATH`, allow the pre-commit shim to invoke a local vendored `.rig/bin/rig.mjs` runner before falling back to non-rig behavior.
+  Ensure `rig init` automatically runs `git init -b main` on non-git directories, configures `core.hooksPath`, and registers the repo in `state.initializedRepos`.
   Automatically migrate legacy repositories from `scripts/git-hooks/` to `.rig/hooks/` during update.
 
 ## Ready, unblocked
@@ -17,19 +19,28 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 - **Idempotent `rig attach`, cloned repo onboarding, and hook auto-attach:**
   Introduce a dedicated `rig attach [<dir>]` command that configures `core.hooksPath .rig/hooks`, attaches `main` in the root checkout, and registers the repo in `state.initializedRepos` without spawning scaffolding worktrees.
   Update `rig init` to detect already-rigged repositories (presence of `.rig/` or `AGENTS.md`) and automatically delegate to `rig attach`.
-  Add zero-prompt auto-attach in `hooks/guard-main-checkout-edits.mjs` so the first agent tool execution in a fresh clone configures hooks silently.
+  Add zero-prompt auto-attach in `hooks/guard-main-checkout-edits.mjs` across all supported harnesses so the first agent tool execution in a fresh clone configures hooks silently.
+
+- **Dedicated `rig eject` subcommand for clean un-rigging:**
+  Introduce `rig eject [<target-dir>]` to completely remove `agent-rig` mechanical infrastructure from a repository in one command.
+  Unsets `git config core.hooksPath`, deletes `.rig/`, and removes the repository from `state.initializedRepos`.
+  Preserves `AGENTS.md` and `docs/` as durable documentation while leaving the git repository in a standard un-rigged state.
 
 - **Selective `rig update` repo management (`--all`, `--repo`, and dirty-tree safety guards):**
   Decouple global harness plugin updates from repository file updates in `bin/rig.mjs`.
-  `rig update` by default checks initialized repositories and reports pending updates as a notice rather than silently mutating disk.
+  `rig update` by default checks initialized repositories across all four harnesses and reports pending updates as a notice rather than silently mutating disk.
   Introduce `rig update --all` and `rig update --repo <path>` with pre-update git cleanliness validation (`git status --porcelain`), skipping and warning on dirty working trees or non-main branches.
 
 - **Hands-free agent tooling: CLI awareness in [`rules/AGENTS.md`](../rules/AGENTS.md) and `rig-update` skill:**
-  Update [`rules/AGENTS.md`](../rules/AGENTS.md) to catalog `rig` CLI entry points (`rig status`, `rig check-docs`, `rig reflow-docs`, `rig attach`, `rig update`) so agents discover and run them natively.
+  Update [`rules/AGENTS.md`](../rules/AGENTS.md) to catalog `rig` CLI entry points (`rig status`, `rig check-docs`, `rig reflow-docs`, `rig attach`, `rig update`, `rig eject`) so agents discover and run them natively.
   Create a dedicated `rig-update` skill specifying an autonomous worktree-isolated update procedure (`chore/rig-update`), running test and doc gates, and merging via [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md).
 
+- **CI verification template and Pull Request collaboration workflow:**
+  Provide a standardized CI workflow template (such as a GitHub Actions `rig-verify.yml` workflow) and platform-agnostic CI documentation for validating test gates, doc link graphs, and formatting on PRs.
+  Document the Pull Request collaboration model in [`rules/AGENTS.md`](../rules/AGENTS.md) as the multi-developer counterpart to local `merge-to-main`, where feature branches created in worktrees are pushed to remotes and verified by CI before merge.
+
 - **Multi-environment integration tests for repository updates and non-rig simulation:**
-  Add comprehensive integration tests in `tests/cli.test.mjs` validating `.rig/` layout, `rig attach`, clean/dirty updates, and non-rig machine behavior.
+  Add comprehensive integration tests in `tests/cli.test.mjs` validating `.rig/` layout, `rig attach`, `rig eject`, clean/dirty updates, and non-rig machine behavior across all four harnesses.
   Simulate non-rig machines by spawning git and hook processes with sanitized `PATH` (excluding rig binaries) and an isolated empty `HOME`.
   Verify that clean repositories update shims cleanly, dirty repositories reject updates with warnings, and non-rig environments permit feature branch commits while protecting `main`.
 

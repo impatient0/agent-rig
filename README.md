@@ -19,7 +19,7 @@ Where a default convention is too heavy for a small project, the CLI provides op
 `agent-rig` separates **how you work across every project** from **what a specific project is about**:
 
 1. **Global Layer (`rig install`):**
-   Installs your universal engineering rules ([`rules/AGENTS.md`](rules/AGENTS.md), [`rules/ui-change-gate.md`](rules/ui-change-gate.md), [`rules/contract-change-gate.md`](rules/contract-change-gate.md)), all 7 skills (`skills/`), the Worker and Verifier subagent definitions ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and the multi-protocol `PreToolUse` guards (`hooks/`) into your harnesses' global configuration directories (`~/.gemini/config/`, `~/.claude/`, `~/.codex/`, `~/.cursor/`).
+   Installs your universal engineering rules ([`rules/AGENTS.md`](rules/AGENTS.md), [`rules/ui-change-gate.md`](rules/ui-change-gate.md), [`rules/contract-change-gate.md`](rules/contract-change-gate.md)), all 8 skills (`skills/`), the Worker and Verifier subagent definitions ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and the multi-protocol `PreToolUse` guards (`hooks/`) into your harnesses' global configuration directories (`~/.gemini/config/`, `~/.claude/`, `~/.codex/`, `~/.cursor/`).
    Prompts, skills, and agent definitions are statically hydrated with your active model profile from `.rig.local.json` (seeded from [`templates/rig-config.default.json`](templates/rig-config.default.json) and validated by [`templates/rig-config.schema.json`](templates/rig-config.schema.json) using the model catalog [`templates/models.json`](templates/models.json)).
    Running `rig update` or `rig profile use` re-hydrates your harnesses immediately with any changes.
 2. **Per-Project Layer (`rig init`):**
@@ -54,7 +54,7 @@ What `rig install` configures:
 - **CLI Binary (`~/.local/bin/rig`):**
   Installs an executable shell wrapper at `~/.local/bin/rig` with resolved Node runtime execution and fail-safe diagnostics advising `rig update` if Node is relocated.
 - **Antigravity (`~/.gemini/config/`):**
-  Registers `agent-rig` in `~/.gemini/config/plugins.json` and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 7 skills under `skills/`, and `hooks.json` with dynamic Node runtime resolution across every workspace with symlinked `hooks/`.
+  Registers `agent-rig` in `~/.gemini/config/plugins.json` and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 8 skills under `skills/`, and `hooks.json` with dynamic Node runtime resolution across every workspace with symlinked `hooks/`.
 - **Claude Code (`~/.claude/`):**
   Installs hydrated `skills/` into `~/.claude/skills/`, subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)) into `~/.claude/agents/`, and `rules/` into `~/.claude/rules/`, symlinks `hooks/` into `~/.claude/hooks/`, and non-destructively merges dynamically resolved `PreToolUse` hooks into `~/.claude/settings.json`.
   (Alternatively, inside Claude Code you can run `/plugin marketplace add impatient0/agent-rig` and `/plugin install agent-rig@agent-rig`.)
@@ -86,7 +86,7 @@ rig update --all
 - **`architect`** — Main session / Tech Lead (triage, backlog/doc auditing, repo onboarding, session wrap-up, ADR authoring, and handling Worker stop triggers).
 - **`worker`** — Isolated implementation subagents in [`agents/worker.md`](agents/worker.md) under [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md).
 - **`verifier`** — Cold audit subagent in [`agents/verifier.md`](agents/verifier.md).
-- **`utility`** — Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
+- **`utility`** — Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md), [`skills/rig-update/SKILL.md`](skills/rig-update/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
 
 View configured profiles and active assignments:
 
@@ -266,6 +266,7 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 - [`backlog-audit`](skills/backlog-audit/SKILL.md) — Sorts `Unranked` items in [`docs/backlog.md`](docs/backlog.md) into six actionability tiers after checking existing ADRs for prior rejections.
 - [`doc-audit`](skills/doc-audit/SKILL.md) — Audits documentation for mixed lifecycles (stable decisions vs. chronological slice logs), duplicate prose, and stale code claims.
 - [`rig-onboard`](skills/rig-onboard/SKILL.md) — Onboards an existing repository with legacy agent files (CLAUDE.md), decision logs, or backlog into agent-rig conventions without dual-convention state.
+- [`rig-update`](skills/rig-update/SKILL.md) — Autonomous worktree-isolated repository asset update and verification procedure.
 - [`merge-to-main`](skills/merge-to-main/SKILL.md) — Safe worktree-to-`main` merge procedure.
 - [`secure-credential-handoff`](skills/secure-credential-handoff/SKILL.md) — Mode-`0600` env-file pattern so secrets never enter the chat transcript.
 

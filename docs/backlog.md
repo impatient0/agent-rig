@@ -8,10 +8,6 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Ready, unblocked
 
-- **Hands-free agent tooling: CLI awareness in [`rules/AGENTS.md`](../rules/AGENTS.md) and `rig-update` skill:**
-  Update [`rules/AGENTS.md`](../rules/AGENTS.md) to catalog `rig` CLI entry points (`rig status`, `rig check-docs`, `rig reflow-docs`, `rig attach`, `rig update`, `rig eject`) so agents discover and run them natively.
-  Create a dedicated `rig-update` skill specifying an autonomous worktree-isolated update procedure (`chore/rig-update`), running test and doc gates, and merging via [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md).
-
 - **CI verification template and Pull Request collaboration workflow:**
   Provide a standardized CI workflow template (such as a GitHub Actions `rig-verify.yml` workflow) and platform-agnostic CI documentation for validating test gates, doc link graphs, and formatting on PRs.
   Document the Pull Request collaboration model in [`rules/AGENTS.md`](../rules/AGENTS.md) as the multi-developer counterpart to local `merge-to-main`, where feature branches created in worktrees are pushed to remotes and verified by CI before merge.

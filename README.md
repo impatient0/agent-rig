@@ -69,10 +69,15 @@ git pull
 rig update
 ```
 
-To refresh git hooks and scaffolded linters in an initialized project repository after pulling updates:
+By default, `rig update` updates global harness files and checks initialized repositories, reporting pending repository updates as a notice rather than mutating disk.
+To update repositories explicitly with pre-update git cleanliness validation:
 
 ```bash
+# Update a specific initialized repository:
 rig update --repo /path/to/your-project
+
+# Or update all initialized repositories:
+rig update --all
 ```
 
 ### 2. Configure Execution Tiers & Model Profiles (`rig profile`)

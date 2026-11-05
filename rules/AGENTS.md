@@ -23,7 +23,13 @@ By default, parallel agent sessions never share a working tree:
    - When working directly in a session, enter a linked worktree via the harness's native worktree tool or `git worktree add .worktrees/<slug> -b <type>/<slug>` before editing any file.
    - If the repository has a `node_modules` directory at the root, symlink it into the worktree (`ln -s ../../node_modules node_modules`) unless the branch modifies dependencies.
      `hooks/guard-symlinked-node-modules.mjs` blocks `npm`/`pnpm`/`yarn`/`bun` installs against a symlinked `node_modules`.
-3. **Merging to `main` happens only when requested by the user**, following [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md).
+3. **Merging to `main` happens only when requested by the user**:
+   - **Local single-developer workflow:**
+     Merges verified worktree branches in the attached root checkout via [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md).
+   - **Multi-developer / team Pull Request workflow:**
+     Still develops and verifies every slice inside an isolated linked worktree (`<type>/<slug>`) and runs the Cold Verifier ([`agents/verifier.md`](../agents/verifier.md)).
+     When authorized by the user, push the worktree branch to the remote to open a Pull Request verified by CI (`rig-verify.yml`, seeded from templates/ci/rig-verify.yml) before merging into `main`.
+     After merge, the root checkout runs `git pull` and removes the linked worktree.
 
 ---
 

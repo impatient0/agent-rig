@@ -248,6 +248,29 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 4. **Merging happens directly in the root checkout** via [`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md):
    the root checkout runs `git merge --no-commit --no-ff`, verifies the uncommitted merge state, commits on `main`, and removes the worktree.
 
+### 3. Pull Request Collaboration & CI Verification
+
+In multi-developer teams or shared repositories, branches reach `main` through Pull Requests verified by automated CI:
+
+1. **Worktree Development & Cold Verification:**
+   Developers and subagents still develop every slice inside an isolated linked worktree (`<type>/<slug>`) and run the Cold Verifier ([`agents/verifier.md`](agents/verifier.md)).
+2. **Push Branch & Open Pull Request:**
+   Once verified locally and authorized by the user, the worktree branch is pushed to the remote to open a Pull Request.
+3. **Automated CI Gate (`templates/ci/rig-verify.yml`):**
+   Continuous integration runs platform-agnostic verification on every pull request and push to `main` or `master`:
+   - Runs the repository test gate via `npm test`.
+   - Runs documentation link graph validation (`rig check-docs` or `node scripts/check-doc-links.mjs`).
+   - Runs documentation format checking (`rig reflow-docs --check` or `node scripts/reflow-docs.mjs --check`).
+4. **Synchronize Main Checkout:**
+   After the Pull Request merges on the remote, the attached root checkout pulls `main` (`git pull`) and removes the local worktree.
+
+Copy the starter workflow template `templates/ci/rig-verify.yml` into your repository:
+
+```bash
+mkdir -p .github/workflows
+cp templates/ci/rig-verify.yml .github/workflows/rig-verify.yml
+```
+
 ---
 
 ## What's Inside
@@ -280,6 +303,9 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 ### Documentation Graph Linters (`scripts/`)
 - `scripts/check-doc-links.mjs` — Enforces resolved relative links and `#fragment` headings, bans wiki-style refs/globs/bare backticked doc paths, verifies reachability from entry points, checks cited repo paths on disk, and enforces ADR byte budgets.
 - `scripts/reflow-docs.mjs` — Normalizes Markdown files to one sentence per line.
+
+### CI Workflow Template (`templates/ci/`)
+- `templates/ci/rig-verify.yml` — Self-contained GitHub Actions workflow template verifying test gates, doc link graph integrity, and one-sentence-per-line formatting on pull requests and pushes to `main`/`master`.
 
 ---
 

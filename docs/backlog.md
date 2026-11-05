@@ -8,10 +8,6 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Ready, unblocked
 
-- **CI verification template and Pull Request collaboration workflow:**
-  Provide a standardized CI workflow template (such as a GitHub Actions `rig-verify.yml` workflow) and platform-agnostic CI documentation for validating test gates, doc link graphs, and formatting on PRs.
-  Document the Pull Request collaboration model in [`rules/AGENTS.md`](../rules/AGENTS.md) as the multi-developer counterpart to local `merge-to-main`, where feature branches created in worktrees are pushed to remotes and verified by CI before merge.
-
 - **Multi-environment integration tests for repository updates and non-rig simulation:**
   Add comprehensive integration tests in `tests/cli.test.mjs` validating `.rig/` layout, `rig attach`, `rig eject`, clean/dirty updates, and non-rig machine behavior across all four harnesses.
   Simulate non-rig machines by spawning git and hook processes with sanitized `PATH` (excluding rig binaries) and an isolated empty `HOME`.

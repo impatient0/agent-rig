@@ -8,6 +8,7 @@
 //   rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
 //   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force] [--harness <id>]
 //   rig attach [<target-dir>] [--home <dir>] [--force]
+//   rig eject [<target-dir>] [--home <dir>]
 //   rig hook pre-commit [<target-dir>]
 //   rig check-docs [<target-dir>]
 //   rig reflow-docs [<target-dir>] [--check]
@@ -335,17 +336,18 @@ export function readRigState(homeDir = homedir()) {
   }
 }
 
-export function writeRigState(homeDir, patch) {
+export function writeRigState(homeDir, patch, { replace = false } = {}) {
   const current = readRigState(homeDir);
+  const shouldReplace = (field) => replace === true || (typeof replace === 'object' && replace !== null && Boolean(replace[field]));
   const next = {
-    installedHarnesses: patch.installedHarnesses
-      ? [...new Set([...current.installedHarnesses, ...patch.installedHarnesses])]
+    installedHarnesses: Array.isArray(patch.installedHarnesses)
+      ? (shouldReplace('installedHarnesses') ? patch.installedHarnesses : [...new Set([...current.installedHarnesses, ...patch.installedHarnesses])])
       : current.installedHarnesses,
-    initializedRepos: patch.initializedRepos
-      ? [...new Set([...current.initializedRepos, ...patch.initializedRepos])]
+    initializedRepos: Array.isArray(patch.initializedRepos)
+      ? (shouldReplace('initializedRepos') ? patch.initializedRepos : [...new Set([...current.initializedRepos, ...patch.initializedRepos])])
       : current.initializedRepos,
-    installedSkills: patch.installedSkills
-      ? [...new Set([...current.installedSkills, ...patch.installedSkills])]
+    installedSkills: Array.isArray(patch.installedSkills)
+      ? (shouldReplace('installedSkills') ? patch.installedSkills : [...new Set([...current.installedSkills, ...patch.installedSkills])])
       : current.installedSkills,
     nodeBin: patch.nodeBin !== undefined ? patch.nodeBin : current.nodeBin,
   };
@@ -1967,6 +1969,72 @@ export function initRepo(
   };
 }
 
+export function ejectRepo(targetDir = process.cwd(), { homeDir = homedir() } = {}) {
+  const dir = path.resolve(targetDir || process.cwd());
+  const where = worktreeInfo(dir);
+  const mainCheckout = where.isRepo ? where.mainCheckout : dir;
+
+  let hooksUnset = false;
+  if (where.isRepo) {
+    const res = spawnSync('git', ['-C', mainCheckout, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+    if (res.status === 0 && res.stdout.trim()) {
+      const hooksPath = res.stdout.trim();
+      const normalized = hooksPath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+      const isRigHooks =
+        normalized === '.rig/hooks' ||
+        normalized === 'scripts/git-hooks' ||
+        normalized.endsWith('/.rig/hooks') ||
+        normalized.endsWith('/scripts/git-hooks') ||
+        path.resolve(mainCheckout, hooksPath) === path.resolve(mainCheckout, '.rig/hooks') ||
+        path.resolve(mainCheckout, hooksPath) === path.resolve(mainCheckout, 'scripts/git-hooks');
+      if (isRigHooks) {
+        const unsetRes = spawnSync('git', ['-C', mainCheckout, 'config', '--unset', 'core.hooksPath'], { encoding: 'utf8' });
+        hooksUnset = unsetRes.status === 0;
+      }
+    }
+  }
+
+  const candidateDirs = [
+    path.join(mainCheckout, '.rig'),
+    path.join(mainCheckout, 'scripts/git-hooks'),
+  ];
+  if (dir !== mainCheckout) {
+    candidateDirs.push(path.join(dir, '.rig'), path.join(dir, 'scripts/git-hooks'));
+  }
+  const removedPaths = [];
+  const seen = new Set();
+  for (const p of candidateDirs) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    if (existsSync(p) || isSymlink(p)) {
+      rmSync(p, { recursive: true, force: true });
+      removedPaths.push(p);
+    }
+  }
+
+  let stateRemoved = false;
+  if (homeDir !== false) {
+    const effectiveHome = homeDir || homedir();
+    const current = readRigState(effectiveHome);
+    const targets = new Set([mainCheckout, dir]);
+    const updatedRepos = current.initializedRepos.filter((r) => {
+      const resolved = path.resolve(r);
+      return !targets.has(r) && !targets.has(resolved);
+    });
+    if (updatedRepos.length < current.initializedRepos.length) {
+      writeRigState(effectiveHome, { initializedRepos: updatedRepos }, { replace: true });
+      stateRemoved = true;
+    }
+  }
+
+  return {
+    dir: mainCheckout,
+    hooksUnset,
+    removedPaths,
+    stateRemoved,
+  };
+}
+
 export function statusRepo(targetDir = process.cwd()) {
   const dir = path.resolve(targetDir);
   const skillDirs = [
@@ -2319,6 +2387,15 @@ async function main() {
     return;
   }
 
+  if (cmd === 'eject') {
+    const homeIdx = args.indexOf('--home');
+    const homeDir = homeIdx !== -1 && args[homeIdx + 1] ? path.resolve(args[homeIdx + 1]) : homedir();
+    const pos = args.slice(1).find((a, i) => !a.startsWith('-') && (homeIdx === -1 || i + 1 !== homeIdx + 1)) ?? process.cwd();
+    const res = ejectRepo(pos, { homeDir });
+    console.log(`rig eject (${res.dir}): hooksUnset=${res.hooksUnset}, removedPaths=${res.removedPaths.length}, stateRemoved=${res.stateRemoved}`);
+    return;
+  }
+
   if (cmd === 'hook') {
     const sub = args[1];
     if (sub === 'pre-commit') {
@@ -2364,6 +2441,7 @@ async function main() {
   rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force] [--harness <id>]
   rig attach [<target-dir>] [--home <dir>] [--force]
+  rig eject [<target-dir>] [--home <dir>]
   rig hook pre-commit [<target-dir>]
   rig check-docs [<target-dir>]
   rig reflow-docs [<target-dir>] [--check]

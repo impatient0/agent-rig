@@ -192,6 +192,20 @@ Inspect an initialized project repository or worktree at a glance to check activ
 rig status /path/to/your-project
 ```
 
+### 7. Eject a Repository (`rig eject`)
+
+When you want to remove `agent-rig` mechanical infrastructure from a repository:
+
+```bash
+rig eject /path/to/your-project
+```
+
+What `rig eject` does:
+1. Unsets `git config core.hooksPath` in the repository if it points to `.rig/hooks` or legacy git hooks.
+2. Deletes `.rig/` and legacy git hooks from the repository.
+3. Removes the repository from global rig state (`~/.config/agent-rig/state.json`).
+4. Preserves `AGENTS.md` and `docs/` as durable documentation while leaving the git repository in a standard un-rigged state.
+
 ---
 
 ## Writing a Per-Project `AGENTS.md`

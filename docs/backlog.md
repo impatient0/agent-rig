@@ -8,11 +8,6 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Ready, unblocked
 
-- **Dedicated `rig eject` subcommand for clean un-rigging:**
-  Introduce `rig eject [<target-dir>]` to completely remove `agent-rig` mechanical infrastructure from a repository in one command.
-  Unsets `git config core.hooksPath`, deletes `.rig/`, and removes the repository from `state.initializedRepos`.
-  Preserves `AGENTS.md` and `docs/` as durable documentation while leaving the git repository in a standard un-rigged state.
-
 - **Selective `rig update` repo management (`--all`, `--repo`, and dirty-tree safety guards):**
   Decouple global harness plugin updates from repository file updates in `bin/rig.mjs`.
   `rig update` by default checks initialized repositories across all four harnesses and reports pending updates as a notice rather than silently mutating disk.

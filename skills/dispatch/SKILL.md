@@ -45,8 +45,7 @@ In the same turn (or while Workers run in the background), present the exact, co
 
 ## Step 2 — Write Grounded Task Briefs
 
-Before spawning a Worker subagent, write a persistent task brief to a deterministic, gitignored location at `<git-common-dir>/rig-briefs/<slug>.md` (or the harness artifact directory when available).
-Standardizing brief storage to `<git-common-dir>/rig-briefs/<slug>.md` prevents Claude Code and Codex subagents from triggering blocked root edits or leaving untracked files in worktrees.
+Before spawning a Worker subagent, construct a grounded task brief passed **inline** directly inside the subagent's invocation prompt (for both the Worker in Step 3 and the Cold Verifier in Step 4) rather than written to `<git-common-dir>/rig-briefs/<slug>.md` or disk files (which trigger `.git/` permission prompts and extra file I/O round-trips).
 Record the following fields:
 - **Base commit SHA** (`git rev-parse HEAD`).
 - **Slice scope:**
@@ -112,6 +111,8 @@ Each Worker traces local call sites from the Core files and must stop and report
    The baseline test suite fails outside the slice's scope.
 4. **Scope explosion:**
    The change requires touching more than twice the Core files listed in the brief (or $> 4$ files when 1 Core file was listed), modifying an unrelated subsystem, or adding a new package dependency.
+   This cap counts only production source and configuration files;
+   test files (`tests/`, `*.test.*`, `*.spec.*`) and documentation or link migrations (`docs/`, `README.md`) are explicitly exempt from the modified-file count.
 5. **Two consecutive fix attempts fail:**
    The same test or build error persists after two targeted fix attempts.
 
@@ -142,7 +143,7 @@ The Verifier must have command execution permissions enabled so it runs `git log
 Instruct the Verifier strictly in prompt not to edit files, stage changes, or create commits.
 Do not act as an execution proxy;
 pass the Verifier **only**:
-1. The grounded task brief from Step 2 (base commit SHA, Core files, acceptance criteria, and verification command, or its `<git-common-dir>/rig-briefs/<slug>.md` path).
+1. The grounded task brief from Step 2 inline in its invocation prompt (base commit SHA, Core files, acceptance criteria, and verification command).
 2. The target worktree path.
 
 If the Verifier returns `VERDICT: FAIL`, send the specific `[BLOCKER]` items back to the Worker (up to 1 remediation round) or halt the slice and surface it to the user.

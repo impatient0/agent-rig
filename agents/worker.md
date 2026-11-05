@@ -44,7 +44,8 @@ Stop work immediately, leave the worktree in a clean or WIP-committed state, and
    The verification command fails on unmodified baseline code outside the slice's scope.
 4. **Scope Explosion:**
    The change requires modifying more than twice the number of Core files listed in the brief (minimum threshold: $> 4$ files if only 1 Core file was listed), touching an unrelated subsystem not connected to the core files, or adding a new package dependency.
-   Suggested new test files listed in the brief count toward the total modified file threshold but are not considered unrelated subsystems.
+   This cap counts only production source and configuration files;
+   test files (`tests/`, `*.test.*`, `*.spec.*`) and documentation or link migrations (`docs/`, `README.md`) are explicitly exempt from the modified-file count.
 5. **Two Consecutive Fix Attempts Fail:**
    The same test, build, or linter error persists after two targeted fix attempts.
 

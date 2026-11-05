@@ -4,10 +4,7 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Do next
 
-- **Idempotent `rig attach`, cloned repo onboarding, and hook auto-attach:**
-  Introduce a dedicated `rig attach [<dir>]` command that configures `core.hooksPath .rig/hooks`, attaches `main` in the root checkout, and registers the repo in `state.initializedRepos` without spawning scaffolding worktrees.
-  Update `rig init` to detect already-rigged repositories (presence of `.rig/` or `AGENTS.md`) and automatically delegate to `rig attach`.
-  Add zero-prompt auto-attach in `hooks/guard-main-checkout-edits.mjs` across all supported harnesses so the first agent tool execution in a fresh clone configures hooks silently.
+- None currently queued.
 
 ## Ready, unblocked
 

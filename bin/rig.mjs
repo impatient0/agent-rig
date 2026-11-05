@@ -7,6 +7,7 @@
 //   rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]
 //   rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
 //   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force] [--harness <id>]
+//   rig attach [<target-dir>] [--home <dir>] [--force]
 //   rig hook pre-commit [<target-dir>]
 //   rig check-docs [<target-dir>]
 //   rig reflow-docs [<target-dir>] [--check]
@@ -1587,6 +1588,62 @@ export function getHookChainingGuidance(manager) {
   }
 }
 
+export function attachRepo(targetDir = process.cwd(), { homeDir = homedir(), force = false, rigRoot = RIG_ROOT } = {}) {
+  const requestedDir = path.resolve(targetDir || process.cwd());
+  const where = worktreeInfo(requestedDir);
+  if (!where.isRepo) {
+    throw new Error(`Target directory is not a git repository: ${requestedDir}`);
+  }
+
+  const mainCheckout = where.mainCheckout || requestedDir;
+
+  const existingHookManager = detectExistingHookManager(mainCheckout, mainCheckout);
+  let hooksConfigured = false;
+  let hookWarning = null;
+  let chainingGuidance = null;
+
+  if (existingHookManager && !force) {
+    chainingGuidance = getHookChainingGuidance(existingHookManager);
+    hookWarning = `Existing git hook manager detected (${existingHookManager.name} at '${existingHookManager.path}'). Preserving existing hook configuration.\n${chainingGuidance}`;
+    hooksConfigured = false;
+  } else {
+    const cfg = spawnSync('git', ['-C', mainCheckout, 'config', 'core.hooksPath', '.rig/hooks'], { encoding: 'utf8' });
+    hooksConfigured = cfg.status === 0;
+  }
+
+  const hookPath = path.join(mainCheckout, '.rig/hooks/pre-commit');
+  if (!existsSync(hookPath)) {
+    if (existsSync(path.join(mainCheckout, '.rig')) || existsSync(path.join(mainCheckout, 'AGENTS.md'))) {
+      const srcHook = path.join(rigRoot, '.rig/hooks/pre-commit');
+      if (existsSync(srcHook)) {
+        mkdirSync(path.dirname(hookPath), { recursive: true });
+        copyFileSync(srcHook, hookPath);
+        try {
+          chmodSync(hookPath, 0o755);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  const mainCheckoutHead = attachMainCheckout(mainCheckout);
+
+  if (homeDir !== false) {
+    writeRigState(homeDir || homedir(), { initializedRepos: [mainCheckout] });
+  }
+
+  return {
+    dir: mainCheckout,
+    hooksConfigured,
+    existingHookManager,
+    hookWarning,
+    chainingGuidance,
+    mainCheckoutHead,
+    hasCommits: where.hasCommits,
+  };
+}
+
 export function initRepo(
   targetDir,
   { selfContained = false, worktrees = true, ui = false, force = false, homeDir = null, harness = null, rigRoot = RIG_ROOT } = {},
@@ -1599,6 +1656,31 @@ export function initRepo(
     spawnSync('git', ['-C', requestedDir, 'init', '-q', '-b', 'main'], { encoding: 'utf8' });
     where = worktreeInfo(requestedDir);
   }
+
+  const mainCheckout = where.isRepo ? where.mainCheckout : requestedDir;
+
+  if (
+    !force &&
+    requestedDir === mainCheckout &&
+    !existsSync(path.join(mainCheckout, '.worktrees', INIT_WORKTREE_SLUG)) &&
+    (existsSync(path.join(mainCheckout, '.rig/hooks/pre-commit')) ||
+      existsSync(path.join(mainCheckout, 'AGENTS.md')) ||
+      existsSync(path.join(mainCheckout, '.rig')))
+  ) {
+    const effectiveHome = homeDir === false ? false : (homeDir || homedir());
+    const attachRes = attachRepo(requestedDir, { homeDir: effectiveHome, force, rigRoot });
+    return {
+      ...attachRes,
+      delegatedToAttach: true,
+      dir: mainCheckout,
+      copied: [],
+      skipped: [],
+      merged: [],
+      staged: [],
+      initWorktree: null,
+    };
+  }
+
   let initWorktree = null;
   if (worktrees && where.isRepo && !where.isLinked && where.hasCommits) {
     initWorktree = ensureInitWorktree(requestedDir);
@@ -1620,7 +1702,6 @@ export function initRepo(
     { force, copied, skipped },
   );
 
-  const mainCheckout = where.isRepo ? where.mainCheckout : requestedDir;
   const projectName = path.basename(mainCheckout);
 
   if (!existsSync(path.join(dir, 'README.md'))) {
@@ -2190,7 +2271,20 @@ async function main() {
     const ui = args.includes('--ui');
     const hIdx = args.findIndex((a) => a === '--harness' || a.startsWith('--harness='));
     const harness = hIdx !== -1 ? (args[hIdx].includes('=') ? args[hIdx].split('=')[1] : args[hIdx + 1]) : null;
-    const res = initRepo(pos, { selfContained, worktrees, ui, force, homeDir: homedir(), harness });
+    const homeIdx = args.indexOf('--home');
+    const homeDir = homeIdx !== -1 && args[homeIdx + 1] ? path.resolve(args[homeIdx + 1]) : homedir();
+    const res = initRepo(pos, { selfContained, worktrees, ui, force, homeDir, harness });
+    if (res.delegatedToAttach) {
+      console.log(
+        `rig init (${res.dir}): already rigged; attached repo (hooksConfigured=${res.hooksConfigured}, mainCheckout=${res.mainCheckoutHead.status})`,
+      );
+      if (res.hookWarning) {
+        console.warn(`  warning: ${res.hookWarning.split('\n').join('\n  ')}`);
+      } else if (!res.hooksConfigured) {
+        console.warn('  warning: could not set git config core.hooksPath=.rig/hooks; set it by hand.');
+      }
+      return;
+    }
     console.log(
       `rig init (${res.dir}): copied ${res.copied.length}, merged ${res.merged.length}, skipped ${res.skipped.length}, staged ${res.staged.length}`,
     );
@@ -2207,6 +2301,20 @@ async function main() {
     } else if (worktrees && res.mainCheckoutHead.status === 'no-commits') {
       console.log('  note: the repository has no commits yet.');
       console.log('  next: git commit -m "chore: initial commit" (allowed on an unborn repo), then work in linked worktrees.');
+    }
+    return;
+  }
+
+  if (cmd === 'attach') {
+    const pos = args.slice(1).find((a) => !a.startsWith('-')) ?? process.cwd();
+    const homeIdx = args.indexOf('--home');
+    const homeDir = homeIdx !== -1 && args[homeIdx + 1] ? path.resolve(args[homeIdx + 1]) : homedir();
+    const res = attachRepo(pos, { homeDir, force });
+    console.log(`rig attach (${res.dir}): hooksConfigured=${res.hooksConfigured}, mainCheckout=${res.mainCheckoutHead.status}`);
+    if (res.hookWarning) {
+      console.warn(`  warning: ${res.hookWarning.split('\n').join('\n  ')}`);
+    } else if (!res.hooksConfigured) {
+      console.warn('  warning: could not set git config core.hooksPath=.rig/hooks; set it by hand.');
     }
     return;
   }
@@ -2255,6 +2363,7 @@ async function main() {
   rig profile set <role> <model> [--effort <low|medium|high|max>] [--subagent-model <selector>] [--profile <name>] [--harness <id>]
   rig model resolve <role> [--harness <id>] [--profile <name>] [--json]
   rig init [<target-dir>] [--self-contained] [--no-worktrees] [--ui] [--force] [--harness <id>]
+  rig attach [<target-dir>] [--home <dir>] [--force]
   rig hook pre-commit [<target-dir>]
   rig check-docs [<target-dir>]
   rig reflow-docs [<target-dir>] [--check]

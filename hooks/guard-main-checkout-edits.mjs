@@ -4,7 +4,8 @@
 // parallel sessions never share a working copy.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, statSync, realpathSync } from 'node:fs';
+import { existsSync, statSync, realpathSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readHookInput, emitDecision } from './lib/hook-io.mjs';
@@ -92,6 +93,85 @@ export function isRiggedRepo(repoRoot) {
   return false;
 }
 
+function hasThirdPartyHookManager(repoRoot) {
+  const artifacts = [
+    '.husky',
+    '.lefthook',
+    'lefthook.yml',
+    'lefthook.yaml',
+    '.lefthook.yml',
+    '.lefthook.yaml',
+    '.pre-commit-config.yaml',
+    '.pre-commit-config.yml',
+  ];
+  return artifacts.some((f) => existsSync(path.join(repoRoot, f)));
+}
+
+function registerRepoInState(repoRoot, homeDir) {
+  if (!homeDir || homeDir === false) return;
+  try {
+    const p = path.join(homeDir, '.config', 'agent-rig', 'state.json');
+    let data = { installedHarnesses: [], initializedRepos: [], installedSkills: [], nodeBin: null };
+    if (existsSync(p)) {
+      try {
+        const raw = JSON.parse(readFileSync(p, 'utf8'));
+        data = {
+          installedHarnesses: Array.isArray(raw.installedHarnesses) ? raw.installedHarnesses : [],
+          initializedRepos: Array.isArray(raw.initializedRepos) ? raw.initializedRepos : [],
+          installedSkills: Array.isArray(raw.installedSkills) ? raw.installedSkills : [],
+          nodeBin: typeof raw.nodeBin === 'string' ? raw.nodeBin : null,
+        };
+      } catch {
+        // ignore parse error
+      }
+    }
+    if (!data.initializedRepos.includes(repoRoot)) {
+      data.initializedRepos.push(repoRoot);
+      mkdirSync(path.dirname(p), { recursive: true });
+      writeFileSync(p, JSON.stringify(data, null, 2) + '\n', 'utf8');
+    }
+  } catch {
+    // ignore filesystem errors
+  }
+}
+
+export function ensureRepoAttached(repoRoot, { homeDir = homedir() } = {}) {
+  if (!repoRoot || typeof repoRoot !== 'string') return { attached: false, hooksConfigured: false };
+
+  const hasRigHook = existsSync(path.join(repoRoot, '.rig/hooks/pre-commit'));
+  const hasLegacyHook = existsSync(path.join(repoRoot, 'scripts/git-hooks/pre-commit'));
+
+  if (!hasRigHook && !hasLegacyHook) {
+    return { attached: false, hooksConfigured: false };
+  }
+
+  let hooksPath = null;
+  try {
+    const res = spawnSync('git', ['-C', repoRoot, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+    if (res.status === 0 && res.stdout.trim()) {
+      hooksPath = res.stdout.trim();
+    }
+  } catch {
+    return { attached: false, hooksConfigured: false };
+  }
+
+  let hooksConfigured = false;
+  if (!hooksPath) {
+    if (hasRigHook && !hasThirdPartyHookManager(repoRoot)) {
+      try {
+        const setRes = spawnSync('git', ['-C', repoRoot, 'config', 'core.hooksPath', '.rig/hooks'], { encoding: 'utf8' });
+        hooksConfigured = setRes.status === 0;
+      } catch {
+        // ignore
+      }
+    }
+    registerRepoInState(repoRoot, homeDir);
+    return { attached: true, hooksConfigured };
+  }
+
+  return { attached: true, hooksConfigured: false, alreadyConfigured: true };
+}
+
 export function checkEditTarget(filePath, options = {}) {
   const harness = options?.harness ?? 'generic';
   const cwd = (typeof options?.cwd === 'string' && options.cwd.trim()) ? options.cwd : process.cwd();
@@ -111,13 +191,19 @@ export function checkEditTarget(filePath, options = {}) {
   const [gitDir, commonDir, topLevel] = res.stdout.trim().split('\n');
   if (!gitDir || !commonDir || !topLevel) return null;
 
+  const repoRoot = path.dirname(commonDir);
+  const targetRoot = isRiggedRepo(repoRoot) ? repoRoot : topLevel;
+  if (isRiggedRepo(targetRoot)) {
+    ensureRepoAttached(targetRoot, { homeDir: options?.homeDir });
+  }
+
   // In a linked worktree, --git-dir is <common>/worktrees/<name>; in the main
   // checkout the two paths are identical.
   if (gitDir !== commonDir) return null;
 
   // If the repository is not rigged under agent-rig conventions, permit edits
   // in the main checkout so globally-installed hooks do not block unrigged repos.
-  if (!isRiggedRepo(topLevel)) return null;
+  if (!isRiggedRepo(topLevel) && !isRiggedRepo(repoRoot)) return null;
 
   // Documentation and backlog files can be edited directly in the main checkout.
   if (isDocFile(absPath, topLevel)) return null;

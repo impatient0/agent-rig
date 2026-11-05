@@ -8,11 +8,7 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Ready, unblocked
 
-- **Allow `.rig/` commits on `main`/`master` and auto-commit in `rig update`:**
-  Update `runPreCommitHook` in `bin/rig.mjs` to permit `.rig/` (and legacy `~~\`scripts/git-hooks/\`~~` deletion) commits directly on `main`/`master` alongside doc-only commits, and update `rig update --repo <dir>` and `rig update --all` to automatically stage and commit repository asset updates on `main`/`master`.
-
-- **Expose `rig`, `node`, and `npm` in `~/.gemini/antigravity/bin` for non-interactive subshells:**
-  Update `installForAntigravity` in `bin/rig.mjs` to install the `rig` wrapper and symlink non-system `node` and `npm` binaries into `~/.gemini/antigravity/bin` so non-interactive subshells resolve them natively on `PATH`.
+- None currently queued.
 
 ## Gated on an in-flight milestone
 

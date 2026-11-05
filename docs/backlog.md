@@ -8,7 +8,25 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Ready, unblocked
 
-- None currently queued.
+- **Thin static hook delegation shim and `rig hook pre-commit` subcommand:**
+  Replace the 70-line shell script in `scripts/git-hooks/pre-commit` with an invariant delegation wrapper that calls `rig hook pre-commit`.
+  Move git worktree commit guards, doc-only commit detection, and doc-linter verification inside `bin/rig.mjs`.
+  Ensures that updating `agent-rig` centrally does not produce uncommitted modifications in tracked repository hook files.
+
+- **Graceful pre-commit fallback for non-rig contributors and branch-targeted main protection:**
+  Update the fallback behavior of `scripts/git-hooks/pre-commit` when `rig` is not installed on the host system.
+  Only enforce direct commit rejection on `main` and `master`, allowing external human contributors to commit normally on feature branches in the root checkout without requiring git worktrees.
+  Enforces session-per-worktree invariants when `rig` or agent harness guards are active while eliminating friction for non-rig contributors.
+
+- **Selective `rig update` repo management (`--all`, `--repo`, and dirty-tree safety guards):**
+  Decouple global harness plugin updates from repository file updates.
+  `rig update` by default checks initialized repositories and reports pending updates as a notice rather than silently mutating disk.
+  Introduce `rig update --all` and `rig update --repo <path>` with pre-update git cleanliness validation (`git status --porcelain`), skipping and warning on dirty working trees or non-main branches.
+
+- **Multi-environment integration tests for repository updates and non-rig simulation:**
+  Add comprehensive integration tests in `tests/cli.test.mjs` simulating clean updates, dirty updates, and external contributor machines.
+  Simulate non-rig machines by spawning git and hook processes with sanitized `PATH` (excluding rig binaries) and an isolated empty `HOME`.
+  Verify that clean repositories update shims cleanly, dirty repositories reject updates with warnings, and non-rig environments permit feature branch commits while protecting `main`.
 
 ## Gated on an in-flight milestone
 

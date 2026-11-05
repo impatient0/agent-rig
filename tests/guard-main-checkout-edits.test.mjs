@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { checkEditTarget, existingAncestor, isRiggedRepo } from '../hooks/guard-main-checkout-edits.mjs';
+import { checkEditTarget, existingAncestor, isRiggedRepo, ensureRepoAttached } from '../hooks/guard-main-checkout-edits.mjs';
 
 const HOOK = path.resolve(import.meta.dirname, '../hooks/guard-main-checkout-edits.mjs');
 
@@ -259,5 +259,94 @@ test('end-to-end hook binary handles Antigravity edit_file and Claude Edit paylo
     assert.equal(claudeAllowUnrigged.stdout.trim(), '');
   } finally {
     unrigged.cleanup();
+  }
+});
+
+test('ensureRepoAttached silently auto-attaches core.hooksPath and registers in state.json for rigged repo', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-fake-home-'));
+  const repo = makeRepoWithWorktree({ rigged: 'hookFile' });
+  try {
+    // Fresh clone: .rig/hooks/pre-commit exists, but core.hooksPath is not set in git config
+    const preCheck = spawnSync('git', ['-C', repo.root, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+    assert.equal(preCheck.stdout.trim(), '');
+
+    const res = ensureRepoAttached(repo.root, { homeDir: fakeHome });
+    assert.equal(res.attached, true);
+    assert.equal(res.hooksConfigured, true);
+
+    const postCheck = spawnSync('git', ['-C', repo.root, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+    assert.equal(postCheck.stdout.trim(), '.rig/hooks');
+
+    const statePath = path.join(fakeHome, '.config/agent-rig/state.json');
+    assert.ok(existsSync(statePath));
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    assert.ok(state.initializedRepos.includes(repo.root));
+
+    // Calling again returns alreadyConfigured without error
+    const resAgain = ensureRepoAttached(repo.root, { homeDir: fakeHome });
+    assert.equal(resAgain.attached, true);
+    assert.equal(resAgain.alreadyConfigured, true);
+  } finally {
+    repo.cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('ensureRepoAttached preserves third-party hook managers', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-fake-home-'));
+  const repo = makeRepoWithWorktree({ rigged: 'hookFile' });
+  try {
+    mkdirSync(path.join(repo.root, '.husky'));
+    const res = ensureRepoAttached(repo.root, { homeDir: fakeHome });
+    assert.equal(res.attached, true);
+    assert.equal(res.hooksConfigured, false);
+
+    const postCheck = spawnSync('git', ['-C', repo.root, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+    assert.equal(postCheck.stdout.trim(), '');
+  } finally {
+    repo.cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('checkEditTarget silently auto-attaches core.hooksPath on fresh clone during worktree or doc edit', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-fake-home-'));
+  const repo = makeRepoWithWorktree({ rigged: 'hookFile' });
+  try {
+    // Before edit: hooksPath not configured
+    const preCheck = spawnSync('git', ['-C', repo.root, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+    assert.equal(preCheck.stdout.trim(), '');
+
+    // First agent edit inside linked worktree: allowed, and auto-attaches core.hooksPath
+    const wtResult = checkEditTarget(path.join(repo.wt, 'index.js'), { harness: 'antigravity', homeDir: fakeHome });
+    assert.equal(wtResult, null);
+
+    const postCheck = spawnSync('git', ['-C', repo.root, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+    assert.equal(postCheck.stdout.trim(), '.rig/hooks');
+
+    const statePath = path.join(fakeHome, '.config/agent-rig/state.json');
+    assert.ok(existsSync(statePath));
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    assert.ok(state.initializedRepos.includes(repo.root));
+  } finally {
+    repo.cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+
+  // Also test doc edit in main checkout of fresh clone
+  const fakeHome2 = mkdtempSync(path.join(tmpdir(), 'rig-fake-home-'));
+  const repo2 = makeRepoWithWorktree({ rigged: 'hookFile' });
+  try {
+    const docResult = checkEditTarget(path.join(repo2.root, 'README.md'), { harness: 'claude', homeDir: fakeHome2 });
+    assert.equal(docResult, null);
+
+    const postCheck = spawnSync('git', ['-C', repo2.root, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+    assert.equal(postCheck.stdout.trim(), '.rig/hooks');
+
+    const state = JSON.parse(readFileSync(path.join(fakeHome2, '.config/agent-rig/state.json'), 'utf8'));
+    assert.ok(state.initializedRepos.includes(repo2.root));
+  } finally {
+    repo2.cleanup();
+    rmSync(fakeHome2, { recursive: true, force: true });
   }
 });

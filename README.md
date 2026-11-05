@@ -158,7 +158,24 @@ Flags for `rig init`:
 - `--ui` — Also copy `templates/docs/design/mockup-scaffold.html`.
 - `--force` — Overwrite existing files.
 
-### 4. Run Documentation Linters Anywhere (`rig check-docs` & `rig reflow-docs`)
+### 4. Attach an Existing or Cloned Repository (`rig attach`)
+
+When working in a cloned repository that is already rigged under `agent-rig` conventions, attach the repository without creating scaffolding worktrees:
+
+```bash
+rig attach /path/to/your-project
+```
+
+What `rig attach` does:
+1. Configures `git config core.hooksPath .rig/hooks` unless a third-party hook manager is detected.
+2. Ensures `.rig/hooks/pre-commit` exists in the main checkout when `AGENTS.md` or `.rig/` is present.
+3. Attaches `main` or `master` in the root checkout.
+4. Registers the root checkout in global rig state (`~/.config/agent-rig/state.json`).
+
+Note that `rig init` automatically detects already-rigged repositories and delegates to `rig attach`.
+In addition, `hooks/guard-main-checkout-edits.mjs` automatically configures `core.hooksPath` on the first agent edit in a fresh clone.
+
+### 5. Run Documentation Linters Anywhere (`rig check-docs` & `rig reflow-docs`)
 
 Verify link graph integrity or normalize Markdown files to one sentence per line in any repository without copying scripts into that project:
 
@@ -167,7 +184,7 @@ rig check-docs /path/to/your-project
 rig reflow-docs /path/to/your-project --check
 ```
 
-### 5. Inspect Repository Status (`rig status`)
+### 6. Inspect Repository Status (`rig status`)
 
 Inspect an initialized project repository or worktree at a glance to check active hooks, skills, and documentation files:
 

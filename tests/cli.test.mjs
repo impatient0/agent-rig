@@ -39,6 +39,7 @@ import {
   detectExistingHookManager,
   getHookChainingGuidance,
   buildNodeFallbackShell,
+  attachRepo,
 } from '../bin/rig.mjs';
 
 function makeRepoWithHistory(prefix) {
@@ -947,5 +948,105 @@ test('buildRigWrapperScript and buildHookCommand fall back to PATH node or versi
     }
   } finally {
     rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('attachRepo configures hooks, re-attaches main, ensures pre-commit hook, and registers in state without worktrees', () => {
+  const { root, git, cleanup } = makeRepoWithHistory('rig-attach-');
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-fake-home-'));
+  try {
+    // Detach HEAD on main checkout
+    git(root, 'checkout', '--detach', 'HEAD');
+    assert.equal(git(root, 'symbolic-ref', '--short', '-q', 'HEAD').stdout.trim(), '');
+
+    // Add AGENTS.md so repo has rig marker
+    writeFileSync(path.join(root, 'AGENTS.md'), '# test project\n');
+
+    const res = attachRepo(root, { homeDir: fakeHome });
+    assert.equal(res.dir, root);
+    assert.equal(res.hooksConfigured, true);
+    assert.equal(res.mainCheckoutHead.status, 'attached');
+    assert.equal(res.mainCheckoutHead.branch, 'main');
+    assert.equal(git(root, 'symbolic-ref', '--short', 'HEAD').stdout.trim(), 'main');
+    assert.equal(git(root, 'config', '--get', 'core.hooksPath').stdout.trim(), '.rig/hooks');
+
+    // pre-commit hook copied and made executable
+    const hookPath = path.join(root, '.rig/hooks/pre-commit');
+    assert.ok(existsSync(hookPath));
+
+    // Registered in fakeHome state
+    assert.ok(readRigState(fakeHome).initializedRepos.includes(root));
+
+    // No worktree spawned
+    assert.equal(existsSync(path.join(root, '.worktrees', 'rig-init')), false);
+
+    // Calling attachRepo when targeting a linked worktree resolves main checkout
+    const wt = path.join(root, '.worktrees', 'feat-x');
+    git(root, 'worktree', 'add', '-q', '-b', 'feature/feat-x', wt, 'main');
+    const resWt = attachRepo(wt, { homeDir: fakeHome });
+    assert.equal(resWt.dir, root);
+    assert.equal(resWt.hooksConfigured, true);
+  } finally {
+    cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('attachRepo preserves existing hook managers unless forced', () => {
+  const { root, git, cleanup } = makeRepoWithHistory('rig-attach-husky-');
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-fake-home-'));
+  try {
+    mkdirSync(path.join(root, '.husky'));
+    const res = attachRepo(root, { homeDir: fakeHome });
+    assert.equal(res.hooksConfigured, false);
+    assert.equal(res.existingHookManager?.name, 'Husky');
+    assert.ok(res.hookWarning);
+    assert.notEqual(git(root, 'config', '--get', 'core.hooksPath').stdout.trim(), '.rig/hooks');
+
+    // Force override
+    const forceRes = attachRepo(root, { homeDir: fakeHome, force: true });
+    assert.equal(forceRes.hooksConfigured, true);
+    assert.equal(git(root, 'config', '--get', 'core.hooksPath').stdout.trim(), '.rig/hooks');
+  } finally {
+    cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('initRepo on already-rigged repository delegates to attachRepo without spawning worktree', () => {
+  const { root, git, cleanup } = makeRepoWithHistory('rig-init-delegate-');
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-fake-home-'));
+  try {
+    writeFileSync(path.join(root, 'AGENTS.md'), '# Existing project\n');
+    git(root, 'add', 'AGENTS.md');
+    git(root, 'commit', '-qm', 'add AGENTS.md');
+
+    // Detach HEAD to ensure attachRepo re-attaches it
+    git(root, 'checkout', '--detach', 'HEAD');
+
+    const res = initRepo(root, { worktrees: true, homeDir: fakeHome });
+    assert.equal(res.delegatedToAttach, true);
+    assert.equal(res.initWorktree, null);
+    assert.equal(res.dir, root);
+    assert.equal(res.copied.length, 0);
+    assert.equal(res.skipped.length, 0);
+    assert.equal(res.merged.length, 0);
+    assert.equal(res.staged.length, 0);
+    assert.equal(res.hooksConfigured, true);
+    assert.equal(res.mainCheckoutHead.status, 'attached');
+    assert.equal(res.mainCheckoutHead.branch, 'main');
+    assert.equal(git(root, 'symbolic-ref', '--short', 'HEAD').stdout.trim(), 'main');
+    assert.ok(readRigState(fakeHome).initializedRepos.includes(root));
+    assert.equal(existsSync(path.join(root, '.worktrees', 'rig-init')), false);
+
+    // End-to-end CLI execution: rig attach <root> --home <fakeHome>
+    const cliRes = spawnSync(process.execPath, [path.join(RIG_ROOT, 'bin/rig.mjs'), 'attach', root, '--home', fakeHome], {
+      encoding: 'utf8',
+    });
+    assert.equal(cliRes.status, 0, cliRes.stderr);
+    assert.match(cliRes.stdout, /rig attach/);
+  } finally {
+    cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
   }
 });

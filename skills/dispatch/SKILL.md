@@ -29,8 +29,17 @@ Partition every candidate item into one of two buckets:
 2. **Bucket 2 — Ask User First:**
    Requires a product, UX, or architectural decision not answered by existing ADRs, or touches a governed contract without prior approval.
 
+**Fulfilling Epistemic Hygiene during Triage:**
+The Tech Lead fully satisfies the *Epistemic Hygiene & Investigation First* rule ([`rules/AGENTS.md`](../../rules/AGENTS.md)) for autonomous delegation once it confirms that:
+1. The Core files and high-level module entry points exist on disk.
+2. Zero unapproved human-gated boundaries ([`rules/ui-change-gate.md`](../../rules/ui-change-gate.md), [`rules/contract-change-gate.md`](../../rules/contract-change-gate.md)) are required.
+3. Zero open product, UX, or architectural decisions remain (`Open Decisions = 0`).
+
+The Tech Lead is **not** responsible for proving line-level root causes, tracing private helper call sites, or auditing internal function bodies during triage.
+Under [`agents/worker.md`](../../agents/worker.md), that line-level epistemic hygiene belongs strictly to the Worker inside its isolated worktree.
+
 **When to stop reading and delegate (Anti-Micromanagement):**
-The moment remaining investigation is purely linear and deterministic (e.g., tracing internal helper line numbers or local call sites inside a known module), the Tech Lead **must stop reading code**, write the Task Brief, and dispatch the Worker.
+The moment remaining investigation is purely linear and deterministic (e.g., tracing internal helper line numbers, private subroutine branches, or local call sites inside a known module), the Tech Lead **must stop reading code**, construct the inline Task Brief, and dispatch the Worker.
 Do not try to "make the Worker's life easier" by pre-solving local implementation mechanics, auditing every downstream call site, or preemptively smoothing out speed bumps before delegation.
 Messy local discovery, edge-case wiring, and test fixture authoring belong to the Worker;
 if the Worker genuinely hits an architectural fork or unexpected wall, the 5 Stop Triggers exist to escalate back to the Tech Lead.

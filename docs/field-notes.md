@@ -101,3 +101,41 @@ Pre-commit hooks originally restricted commits in the root checkout exclusively 
 When upstream `agent-rig` changes, initialized repositories receive updated git hooks (`.rig/hooks/`) or updated asset files.
 Blocking `.rig/` commits on `main` forced developers to create a temporary git worktree merely to accept a non-code hook refresh.
 Permitting `.rig/` and legacy ~~`scripts/git-hooks/`~~ deletion commits directly on `main`/`master` allows `rig update --repo <dir>` and `rig update --all` to automatically stage and commit repository asset updates on clean trunk checkouts without manual worktree scaffolding.
+
+---
+
+## 8. Why Epistemic Hygiene Is Scoped by Execution Gear Rather Than Overridden in `AGENTS.md`
+
+### Failure Mode: The Two-Rule Collision in Autonomous Triage
+
+In autonomous dispatch triage, agents face a direct conflict between two instructions:
+1. **Epistemic Hygiene in [`rules/AGENTS.md`](../rules/AGENTS.md):**
+   *"Never speculate about code, configuration, or behavior you have not opened and read."*
+2. **Anti-Micromanagement in [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md):**
+   *"The moment remaining investigation is purely linear... the Tech Lead must stop reading code, write the Task Brief, and dispatch the Worker."*
+
+When an LLM prepares a task brief that references an internal function or file, it perceives an unresolvable dilemma:
+reading the private implementation feels like micromanagement, but delegating without reading feels like speculating about unread code.
+Because LLMs are heavily aligned to avoid hallucination, models default to over-investigating—reading thousands of lines of implementation code across multiple waves before dispatching.
+
+### Why Overriding `AGENTS.md` Directly Fails
+
+Attempting to resolve this tension by modifying [`rules/AGENTS.md`](../rules/AGENTS.md) with conditional exceptions (such as *"the Tech Lead does not read internal code"*) introduces two critical failure modes:
+1. **Context pollution across subagents:**
+   Harness inspection reveals that subagents (`worker`, `verifier`, `research`) unconditionally inherit the repository's `<user_rules>` and `AGENTS.md` in their prompts.
+   Adding delegator-specific disclaimers to `AGENTS.md` pollutes the Worker's context with Tech Lead rules, increasing prompt confusion and rule-bleed across subagent tiers.
+2. **Degrading Gear 1 Interactive Pairing:**
+   In Gear 1 (interactive pairing), the human developer and agent collaborate directly as Player-Coaches.
+   Weakening Epistemic Hygiene in `AGENTS.md` risks creating a lazy, aloof partner that refuses to trace call sites or verify root causes alongside the user.
+
+### The Fix: Harmonious Scoping in `dispatch`
+
+Rather than altering the universal engineering rules in [`rules/AGENTS.md`](../rules/AGENTS.md), [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md) explicitly defines how Epistemic Hygiene is *satisfied* during autonomous task triage:
+- Confirming that candidate Core files and module boundaries exist on disk, verifying active human-in-the-loop gates (`rules/`), and ensuring `Open Decisions = 0` fully satisfies Epistemic Hygiene for the triage boundary.
+- Proving line-level root causes, tracing private subroutine branches, and authoring test fixtures belong strictly to the Worker's Epistemic Hygiene inside its isolated worktree under [`agents/worker.md`](../agents/worker.md).
+
+### The Pipelining Caveat: Sequential Over Interleaved Waves
+
+Attempting to pipeline investigation across waves (investigating Wave 2 code while Wave 1 Workers run in the background) does not save net execution time and actively pollutes the Tech Lead's context window.
+If a Wave 1 Worker triggers a Stop Trigger or encounters a merge collision, an orchestrator saturated with Wave 2 code struggles with context fragmentation.
+Triage investigation must remain strictly wave-scoped.

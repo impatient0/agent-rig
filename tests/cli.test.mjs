@@ -1505,7 +1505,13 @@ test('multi-environment self-contained repository lifecycle across all 4 harness
     const repo = mkdtempSync(path.join(tmpdir(), `rig-self-${h.id}-`));
     const fakeHome = mkdtempSync(path.join(tmpdir(), `rig-home-${h.id}-`));
     try {
-      const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+      installRig({ homeDir: fakeHome, harnesses: [h.id] });
+      const git = (cwd, ...args) =>
+        spawnSync('git', args, {
+          cwd,
+          encoding: 'utf8',
+          env: { ...process.env, HOME: fakeHome, PATH: `${path.join(fakeHome, '.local/bin')}:${process.env.PATH}` },
+        });
       git(repo, 'init', '-q', '-b', 'main');
       git(repo, 'config', 'user.email', 'test@example.com');
       git(repo, 'config', 'user.name', 'Test');
@@ -1542,23 +1548,24 @@ test('multi-environment self-contained repository lifecycle across all 4 harness
       git(repo, 'add', '-A');
       git(repo, 'commit', '-qm', 'chore: initial self-contained setup');
 
-      // 2. Tamper with a vendored file, commit it, and verify update restores it
+      // 2. Tamper with a vendored .rig file and a vendored harness skill, commit them, and verify update auto-commits on main
       writeFileSync(path.join(repo, '.rig/bin/rig.mjs'), '#!/usr/bin/env node\n// outdated vendored rig\n');
+      writeFileSync(path.join(dotPath, 'skills/dispatch/SKILL.md'), '# outdated dispatch skill\n');
       git(repo, 'add', '-A');
-      git(repo, 'commit', '-qm', 'chore: tamper vendored file');
+      git(repo, 'commit', '-qm', 'chore: tamper vendored files');
 
       const pending = checkRepoPendingUpdates(repo, { harness: h.id });
       assert.equal(pending.hasPendingUpdates, true);
       assert.ok(pending.pendingFiles.some((f) => f.endsWith('.rig/bin/rig.mjs')));
+      assert.ok(pending.pendingFiles.some((f) => f.endsWith('skills/dispatch/SKILL.md')));
 
-      const upd = updateRepo(repo, { harness: h.id });
+      const upd = updateRepo(repo, { harness: h.id, autoCommit: true, homeDir: fakeHome });
+      assert.equal(upd.committed, true, upd.commitError);
       assert.ok(upd.copied.some((f) => f.endsWith('.rig/bin/rig.mjs')));
       assert.doesNotMatch(readFileSync(path.join(repo, '.rig/bin/rig.mjs'), 'utf8'), /\/\/ outdated vendored rig/);
+      assert.doesNotMatch(readFileSync(path.join(dotPath, 'skills/dispatch/SKILL.md'), 'utf8'), /# outdated dispatch skill/);
       assert.equal(checkRepoPendingUpdates(repo, { harness: h.id }).hasPendingUpdates, false);
-
-      // Commit restored files so working tree is clean again before testing attach
-      git(repo, 'add', '-A');
-      git(repo, 'commit', '-qm', 'chore: commit restored vendored file');
+      assert.equal(git(repo, 'status', '--porcelain').stdout.trim(), '');
 
       // 3. Test rig attach: detach HEAD and unset hooksPath, then attach restores them
       git(repo, 'checkout', '--detach', 'HEAD');

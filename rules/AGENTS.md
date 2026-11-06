@@ -16,7 +16,7 @@ By default, parallel agent sessions never share a working tree:
 
 1. **Root checkout stays attached to `main` as a merge-only trunk for code** and code files are never edited directly.
    Documentation and backlog files (`docs/`, `README.md`) may be edited and committed directly on `main`, guarded by automated doc linters in `.rig/hooks/pre-commit`.
-   `hooks/guard-main-checkout-edits.mjs` blocks direct code edits, and `.rig/hooks/pre-commit` ensures only verified merge commits or verified doc-only commits land on `main`.
+   `hooks/guard-main-checkout-edits.mjs` blocks direct code edits, and `.rig/hooks/pre-commit` ensures only verified merge commits, verified doc-only commits, or `.rig/` / vendored harness asset updates land on `main`.
    Standard operations (`git pull`, `git status`) work natively in the root checkout.
 2. **Work happens in a linked git worktree** on a `<type>/<slug>` branch (`feature/<slug>`, `fix/<slug>`, `docs/<slug>`, `chore/<slug>`):
    - When dispatching subagents, spawn each Worker in an isolated worktree using the harness's native worktree-isolation option (or create a worktree under `.worktrees/<slug>`).
@@ -86,14 +86,7 @@ Agents can discover and run core `rig` CLI commands directly across sessions and
 
 - Use Conventional Commits (`feat(scope): ...`, `fix(scope): ...`, `docs: ...`, `test: ...`, `chore: ...`).
 - Keep commits atomic: one logical slice per commit, with tests passing before commit.
-- On delegated or autonomous slices, every commit message must carry one `Unmandated-call: <choice> — <rationale> (<file>:<line>)` trailer per judgment call not explicitly specified in the brief, or `Unmandated-call: none` if zero unmandated choices were made.
-- `Unmandated-call:` trailers are required only for meaningful behavioral, fallback, or edge-case judgment calls rather than routine coding mechanics:
-  - **Positive examples (require trailers):**
-    silent fallback vs. throwing on an I/O error or parse failure, picking a default timeout or retry limit, or choosing input precedence when configuration sources collide.
-  - **Negative examples (never require trailers):**
-    extracting private helper functions, naming local identifiers or variables, or structuring unit test fixtures and assertions.
-- Architectural forks, data schema shifts, public interface changes, and user-visible behavioral alterations are never unmandated calls;
-  they require human authorization or halting under Stop Trigger #2.
+- On delegated or autonomous slices, record `Unmandated-call: <choice> — <rationale> (<file>:<line>)` (or `Unmandated-call: none`) on every commit per the canonical trailer rules, positive/negative examples, and Stop Trigger #2 boundary in [`agents/worker.md`](../agents/worker.md).
 
 ---
 

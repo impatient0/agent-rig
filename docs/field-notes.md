@@ -98,9 +98,9 @@ Passing grounded Task Briefs directly in the subagent's invocation prompt elimin
 ## 7. Why `.rig/` Commits Are Permitted Directly on `main`/`master`
 
 Pre-commit hooks originally restricted commits in the root checkout exclusively to verified merge commits and documentation-only changes.
-When upstream `agent-rig` changes, initialized repositories receive updated git hooks (`.rig/hooks/`) or updated asset files.
+When upstream `agent-rig` changes, initialized repositories receive updated git hooks (`.rig/hooks/`) or updated `--self-contained` asset files.
 Blocking `.rig/` commits on `main` forced developers to create a temporary git worktree merely to accept a non-code hook refresh.
-Permitting `.rig/` and legacy ~~`scripts/git-hooks/`~~ deletion commits directly on `main`/`master` allows `rig update --repo <dir>` and `rig update --all` to automatically stage and commit repository asset updates on clean trunk checkouts without manual worktree scaffolding.
+Permitting `.rig/`, vendored harness asset (`.gemini/`, `.claude/`, `.codex/`, `.cursor/`), and legacy ~~`scripts/git-hooks/`~~ deletion commits directly on `main`/`master` allows `rig update --repo <dir>` and `rig update --all` to automatically stage and commit repository asset updates on clean trunk checkouts without manual worktree scaffolding.
 
 ---
 

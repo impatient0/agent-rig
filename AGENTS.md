@@ -3,7 +3,7 @@
 `agent-rig` is a subagent-first, platform-agnostic agentic workflow rig providing multi-protocol `PreToolUse` guards, Triage/Worker/Verifier task dispatch, git worktree isolation locks, and documentation graph linters.
 
 - **Test and verification gate** — `npm test` (runs `node --test tests/*.test.mjs`, `scripts/check-doc-links.mjs`, and `scripts/reflow-docs.mjs --check`)
-- **CLI entry point** — `bin/rig.mjs` (`rig install`, `rig update`, `rig profile`, `rig model resolve`, `rig init`, `rig attach`, `rig check-docs`, `rig reflow-docs`, `rig status`, `rig eject`)
+- **CLI entry point** — `bin/rig.mjs` (`rig install`, `rig update`, `rig profile`, `rig model resolve`, `rig init`, `rig attach`, `rig hook pre-commit`, `rig check-docs`, `rig reflow-docs`, `rig status`, `rig eject`)
 - **Architecture and empirical rationale** — [`docs/field-notes.md`](docs/field-notes.md), [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md), and [`docs/adr/0002-two-gear-execution-and-worker-subagent.md`](docs/adr/0002-two-gear-execution-and-worker-subagent.md)
 - **Active backlog** — [`docs/backlog.md`](docs/backlog.md)
 
@@ -22,6 +22,6 @@
   - [`skills/backlog-audit/SKILL.md`](skills/backlog-audit/SKILL.md) — Actionability tiering and ADR-rejection check for [`docs/backlog.md`](docs/backlog.md)
   - [`skills/doc-audit/SKILL.md`](skills/doc-audit/SKILL.md) — Token-budget, duplication, and code-grounding audit for Markdown docs
   - [`skills/rig-onboard/SKILL.md`](skills/rig-onboard/SKILL.md) — Legacy repository onboarding workflow eliminating dual-convention state
-  - [`skills/rig-update/SKILL.md`](skills/rig-update/SKILL.md) — Autonomous worktree-isolated repository asset update and verification procedure
+  - [`skills/rig-update/SKILL.md`](skills/rig-update/SKILL.md) — Global harness and clean-trunk repository asset update and verification procedure
   - [`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md) — Safe worktree-to-`main` merge procedure in the root checkout
   - [`skills/secure-credential-handoff/SKILL.md`](skills/secure-credential-handoff/SKILL.md) — Mode-`0600` secret handoff for non-interactive shell calls

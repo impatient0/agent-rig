@@ -24,7 +24,7 @@ Where a default convention is too heavy for a small project, the CLI provides op
    Running `rig update` or `rig profile use` re-hydrates your harnesses immediately with any changes.
 2. **Per-Project Layer (`rig init`):**
    Touches a project repository as lightly as possible:
-   sets up git worktree commit hooks (`.rig/hooks/`), leaves the root checkout attached to `main` as a merge-only trunk, and creates a minimal 7-line `AGENTS.md` project-context stub alongside [`docs/backlog.md`](docs/backlog.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
+   sets up git worktree commit hooks (`.rig/hooks/`), leaves the root checkout attached to `main` as a merge-only trunk for code, and creates a minimal 10-line `AGENTS.md` project-context stub alongside [`docs/backlog.md`](docs/backlog.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
 
 ---
 
@@ -53,8 +53,8 @@ rig install --detected
 What `rig install` configures:
 - **CLI Binary (`~/.local/bin/rig`):**
   Installs an executable shell wrapper at `~/.local/bin/rig` with resolved Node runtime execution and fail-safe diagnostics advising `rig update` if Node is relocated.
-- **Antigravity (`~/.gemini/config/`):**
-  Registers `agent-rig` in `~/.gemini/config/plugins.json` and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating [`rules/AGENTS.md`](rules/AGENTS.md), all 8 skills under `skills/`, and `hooks.json` with dynamic Node runtime resolution across every workspace with symlinked `hooks/`.
+- **Antigravity (`~/.gemini/config/` & `~/.gemini/antigravity/bin/`):**
+  Registers `agent-rig` in `~/.gemini/config/plugins.json`, installs a `rig` CLI wrapper in `~/.gemini/antigravity/bin/rig` (plus `node`/`npm` symlinks when Node is not on system `PATH`), and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating `rules/` ([`rules/AGENTS.md`](rules/AGENTS.md), [`rules/ui-change-gate.md`](rules/ui-change-gate.md), [`rules/contract-change-gate.md`](rules/contract-change-gate.md)), all 8 skills under `skills/`, subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and `hooks.json` with dynamic Node runtime resolution across every workspace with symlinked `hooks/`.
 - **Claude Code (`~/.claude/`):**
   Installs hydrated `skills/` into `~/.claude/skills/`, subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)) into `~/.claude/agents/`, and `rules/` into `~/.claude/rules/`, symlinks `hooks/` into `~/.claude/hooks/`, and non-destructively merges dynamically resolved `PreToolUse` hooks into `~/.claude/settings.json`.
   (Alternatively, inside Claude Code you can run `/plugin marketplace add impatient0/agent-rig` and `/plugin install agent-rig@agent-rig`.)
@@ -153,15 +153,18 @@ rig init /path/to/your-project
 ```
 
 What `rig init` does by default:
-1. Copies `.rig/hooks/pre-commit` and configures `git config core.hooksPath .rig/hooks`.
-2. Creates a minimal project-context `AGENTS.md` (`templates/AGENTS.md`), [`docs/backlog.md`](docs/backlog.md), and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) if they do not exist yet.
-3. Leaves the root checkout attached to `main` as a merge-only trunk.
+1. In a repository with existing commits, creates a linked git worktree at `.worktrees/rig-init` on branch `chore/rig-init` (and symlinks `node_modules` if present) so scaffolding can be committed without violating the main-checkout commit lock;
+   in an unborn repository, scaffolds directly in the root checkout.
+2. Copies `.rig/hooks/pre-commit`, configures `git config core.hooksPath .rig/hooks` (preserving any existing third-party hook manager unless `--force` is passed), and normalizes `.gitignore` to ignore `.worktrees/` and symlinked `node_modules`.
+3. Scaffolds and stages a minimal project-context `AGENTS.md` (`templates/AGENTS.md`), [`docs/backlog.md`](docs/backlog.md), [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md), and `README.md` if they do not exist yet.
+4. Leaves the root checkout attached to `main` as a merge-only trunk for code and registers the repository in `~/.config/agent-rig/state.json`.
 
 Flags for `rig init`:
-- `--self-contained` — Also copy `skills/`, `agents/`, `rules/`, `hooks/`, `scripts/check-doc-links.mjs`, and `scripts/reflow-docs.mjs` directly into the repository (useful for team repos or CI).
+- `--self-contained` — Hydrate `skills/`, `agents/`, and `rules/` into the repository's harness dot-directory (`.gemini/`, `.claude/`, `.codex/`, `.cursor/`, plus `.claude/hooks/` and `.claude/settings.json` for Claude) and vendor `bin/rig.mjs`, `templates/models.json`, `templates/rig-config.default.json`, `scripts/check-doc-links.mjs`, `scripts/reflow-docs.mjs`, and `hooks/` under `.rig/` (useful for team repos or CI).
+- `--harness <id>` — Specify target harness(es) (`antigravity`, `claude`, `codex`, `cursor`) for `--self-contained` initialization.
 - `--no-worktrees` — Skip git worktree hooks for single-checkout repos.
 - `--ui` — Also copy `templates/docs/design/mockup-scaffold.html`.
-- `--force` — Overwrite existing files.
+- `--force` — Overwrite existing files and hook configurations.
 
 ### 4. Attach an Existing or Cloned Repository (`rig attach`)
 
@@ -240,9 +243,9 @@ Keep each project's `AGENTS.md` focused strictly on project-specific facts a col
 
 ### 2. Session-Per-Worktree Isolation
 
-1. **Root checkout stays attached to `main` as a merge-only trunk** and is never edited directly.
+1. **Root checkout stays attached to `main` as a merge-only trunk for code** and code files are never edited directly (`README.md` and `docs/` may be edited and committed directly on `main`, guarded by automated doc linters).
 2. **Every session or Worker subagent operates in a linked git worktree** on a `<type>/<slug>` branch.
-   `hooks/guard-main-checkout-edits.mjs` blocks direct file edits in the root checkout, and `.rig/hooks/pre-commit` blocks root-checkout commits made via shell commands.
+   `hooks/guard-main-checkout-edits.mjs` blocks direct code edits in the root checkout, and `.rig/hooks/pre-commit` (`rig hook pre-commit`) ensures only verified merge commits, verified doc-only commits, or `.rig/` / vendored harness asset updates land on `main`.
 3. **Shared dependency caching via symlinked `node_modules`:**
    If the repository has a `node_modules` directory at the root, symlink it into the worktree (`ln -s ../../node_modules node_modules`) unless the branch modifies dependencies (`hooks/guard-symlinked-node-modules.mjs` blocks package installs against a symlinked directory).
 4. **Merging happens directly in the root checkout** via [`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md):
@@ -289,16 +292,16 @@ cp templates/ci/rig-verify.yml .github/workflows/rig-verify.yml
 - [`backlog-audit`](skills/backlog-audit/SKILL.md) — Sorts `Unranked` items in [`docs/backlog.md`](docs/backlog.md) into six actionability tiers after checking existing ADRs for prior rejections.
 - [`doc-audit`](skills/doc-audit/SKILL.md) — Audits documentation for mixed lifecycles (stable decisions vs. chronological slice logs), duplicate prose, and stale code claims.
 - [`rig-onboard`](skills/rig-onboard/SKILL.md) — Onboards an existing repository with legacy agent files (CLAUDE.md), decision logs, or backlog into agent-rig conventions without dual-convention state.
-- [`rig-update`](skills/rig-update/SKILL.md) — Autonomous worktree-isolated repository asset update and verification procedure.
+- [`rig-update`](skills/rig-update/SKILL.md) — Global harness and clean-trunk repository asset update and verification procedure.
 - [`merge-to-main`](skills/merge-to-main/SKILL.md) — Safe worktree-to-`main` merge procedure.
 - [`secure-credential-handoff`](skills/secure-credential-handoff/SKILL.md) — Mode-`0600` env-file pattern so secrets never enter the chat transcript.
 
 ### Multi-Protocol Mechanical Guards (`hooks/` & `.rig/hooks/`)
 - `hooks/lib/hook-io.mjs` — Documented `PreToolUse` JSON schema adapter supporting Antigravity (`toolCall.args` → `{ decision, reason }`), Claude Code (`tool_input` → `{ hookSpecificOutput }`), generic JSON runners, and explicit `--harness=<name>` flags.
 - `hooks/guard-remote-mutation.mjs` — Prompts (`ask`) before commands that mutate remote or shared state (`ssh`, `scp`, `rsync`, `crontab`, `docker -H`, `git push` to `main`, mutating `gh` calls).
-- `hooks/guard-main-checkout-edits.mjs` — Refuses (`deny`) file edits in the root checkout.
+- `hooks/guard-main-checkout-edits.mjs` — Refuses (`deny`) code file edits in the root checkout while permitting `README.md` and `docs/` edits (and auto-attaching `core.hooksPath` in fresh clones).
 - `hooks/guard-symlinked-node-modules.mjs` — Refuses (`deny`) `npm`, `pnpm`, `yarn`, and `bun` installs when `node_modules` is a shared symlink (including `cd .worktrees/<slug> && npm install` chains).
-- `.rig/hooks/pre-commit` — Refuses direct non-merge commits in the root checkout and direct commits on `main`.
+- `.rig/hooks/pre-commit` — Invokes `rig hook pre-commit` (with POSIX shell fallback) to refuse direct code commits in the root checkout and direct commits on `main` in linked worktrees, while allowing verified merge commits, linter-verified doc commits (`README.md`, `docs/`), and `.rig/` or vendored harness asset updates on `main`/`master`.
 
 ### Documentation Graph Linters (`scripts/`)
 - `scripts/check-doc-links.mjs` — Enforces resolved relative links and `#fragment` headings, bans wiki-style refs/globs/bare backticked doc paths, verifies reachability from entry points, checks cited repo paths on disk, and enforces ADR byte budgets.

@@ -26,7 +26,7 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
   the threshold for adopting this is whether multi-machine environment heterogeneity or external distribution warrants maintaining a release matrix.
 
 - **Decoupling repository documentation linters from Node in non-Node projects:**
-  `rig init` copies `scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs` into target repositories so local git hooks and test gates enforce doc graph invariants.
+  `rig init --self-contained` vendors `scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs` into `.rig/scripts/`, while `.rig/hooks/pre-commit` (`rig hook pre-commit`) and `rig check-docs` / `rig reflow-docs` execute those `.mjs` scripts to enforce doc graph invariants.
   In non-JavaScript projects (such as Go, Rust, or Python services), this introduces a Node.js runtime requirement exclusively for documentation checking.
   Key trade-offs and open questions:
   whether target repositories should vendor standalone POSIX shell / compiled linters, or delegate `rig check-docs` to the developer's globally installed `rig` CLI;

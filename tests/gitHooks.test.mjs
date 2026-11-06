@@ -332,7 +332,14 @@ test('pre-commit allows .rig/ and legacy scripts/git-hooks deletion commits on m
     assert.match(addHookCommit.stderr, /refusing direct commit in the main checkout/);
     git(root, 'reset', '--hard', 'HEAD');
 
-    // 7. Modifying unauthorized path (app.js) alongside .rig/ is rejected on main
+    // 7. Direct commit on main updating vendored harness asset (.gemini/skills/...) succeeds
+    mkdirSync(path.join(root, '.gemini/skills/dispatch'), { recursive: true });
+    writeFileSync(path.join(root, '.gemini/skills/dispatch/SKILL.md'), '# Dispatch\n');
+    git(root, 'add', '.gemini/skills/dispatch/SKILL.md');
+    const vendoredCommit = git(root, 'commit', '-m', 'chore(rig): update vendored harness skill');
+    assert.equal(vendoredCommit.status, 0, vendoredCommit.stderr);
+
+    // 8. Modifying unauthorized path (app.js) alongside .rig/ is rejected on main
     writeFileSync(path.join(root, 'app.js'), 'console.log("unauthorized");\n');
     writeFileSync(path.join(root, '.rig/test-asset.txt'), 'asset v4\n');
     git(root, 'add', 'app.js', '.rig/test-asset.txt');

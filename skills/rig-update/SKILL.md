@@ -1,79 +1,62 @@
 ---
 name: rig-update
 description: >-
-  Use when updating agent-rig repository assets, hooks, or vendored skills.
-  Inspects pending updates, creates an isolated chore/rig-update worktree,
-  applies rig update, runs the verification gate, commits, and merges to main.
+  Use when updating agent-rig global harness plugins, repository assets, hooks,
+  or vendored skills. Inspects pending updates, validates that target
+  repositories are clean on main, applies rig update --repo or rig update --all
+  with automatic main-branch asset commits, and runs the verification gate.
 ---
 
-# Autonomous Worktree-Isolated Repository Update (`rig-update`)
+# Global Harness & Clean-Trunk Repository Update (`rig-update`)
 
-When upstream `agent-rig` changes, initialized repositories may receive updated git hooks (`.rig/hooks/`), updated linting scripts, or updated vendored skills in `--self-contained` mode.
-To maintain session-per-worktree isolation governed by [`rules/AGENTS.md`](../../rules/AGENTS.md), repository updates never mutate the root checkout directly.
-Instead, this procedure inspects pending changes, applies updates inside a dedicated linked worktree on `chore/rig-update`, executes the verification gate, commits, and merges safely into `main`.
-
----
-
-## Step 1 — Inspect Pending Updates
-
-1. **Check repository status and harness synchronization:**
-   Run `rig update` or `rig status` to inspect global harness synchronization and check if the repository has pending `.rig/` or `--self-contained` updates.
-   ```bash
-   rig status
-   ```
-2. **Confirm repository cleanliness:**
-   Confirm that the root checkout is clean on `main` before beginning an update:
-   ```bash
-   git status --short
-   ```
+When upstream `agent-rig` changes, initialized repositories may have pending updates to `.rig/` (git hooks, vendored CLI, and linting scripts) or vendored harness assets (`.gemini/`, `.claude/`, `.codex/`, `.cursor/`) in `--self-contained` mode.
+Because `.rig/hooks/pre-commit` (`rig hook pre-commit`) permits `.rig/`, vendored harness asset, and legacy ~~`scripts/git-hooks/`~~ deletion commits directly on `main`/`master` in the root checkout (governed by [`rules/AGENTS.md`](../../rules/AGENTS.md)), `rig update --repo <target-dir>` and `rig update --all` validate that the target checkout is clean on `main`/`master` and automatically stage and commit updated repository assets on `main` without manual worktree scaffolding.
 
 ---
 
-## Step 2 — Create an Isolated Worktree
+## Step 1 — Inspect Pending Updates & Cleanliness
 
-1. **Create the `chore/rig-update` worktree:**
-   Set up an isolated linked worktree from the attached `main` trunk:
+1. **Refresh global harnesses and inspect pending repository updates:**
+   Run `rig update` (with no repository flags) or `rig status [<target-dir>]` to sync global harness configurations and list any initialized repositories with pending asset updates:
    ```bash
-   git worktree add .worktrees/rig-update -b chore/rig-update
+   rig update
+   rig status <target-dir>
    ```
-2. **Symlink dependencies if present:**
-   If the repository has a root `node_modules` directory, symlink it into the worktree:
+2. **Confirm repository cleanliness on `main`:**
+   Confirm that the target repository's root checkout is on `main` (or `master`) with a clean working tree:
    ```bash
-   ln -s ../../node_modules .worktrees/rig-update/node_modules
+   git -C <target-dir> status --short
+   ```
+   *(If a repository is on a non-`main` branch or has uncommitted changes, `rig update --repo` and `rig update --all` safely skip it with a warning rather than mutating disk).*
+
+---
+
+## Step 2 — Apply Repository Asset Refresh on `main`
+
+1. **Run `rig update` for the target repository (or all initialized repositories):**
+   ```bash
+   # Update a specific clean repository on main:
+   rig update --repo <target-dir>
+
+   # Or update all clean initialized repositories on main:
+   rig update --all
+   ```
+   *(This refreshes `.rig/` hooks and any `--self-contained` vendored skills, agents, rules, and hooks, then automatically commits `chore(rig): update agent-rig repository assets` with `Unmandated-call: none` directly on `main`).*
+2. **Confirm clean post-update status:**
+   Verify that the asset refresh was committed cleanly and no untracked or unstaged changes remain:
+   ```bash
+   git -C <target-dir> status --short
+   git -C <target-dir> log -1
    ```
 
 ---
 
-## Step 3 — Apply Repository Asset Refresh
+## Step 3 — Run the Verification Gate
 
-1. **Run `rig update` targeting the worktree:**
-   Apply the repository asset refresh directly to the isolated worktree:
+1. **Execute project and documentation verification:**
+   Run the repository's verification gate and documentation linters on the updated `main` checkout:
    ```bash
-   rig update --repo .worktrees/rig-update
+   rig check-docs <target-dir>
+   rig reflow-docs <target-dir> --check
    ```
-   *(For self-contained repositories, this refreshes vendored skills, rules, agents, and hooks inside `.worktrees/rig-update`).*
-
----
-
-## Step 4 — Run the Verification Gate
-
-1. **Execute project verification inside the worktree:**
-   Run the repository's verification gate (such as `npm test`, `rig check-docs`, and `rig reflow-docs --check`) inside `.worktrees/rig-update`:
-   ```bash
-   cd .worktrees/rig-update && npm test
-   ```
-2. **Confirm exit status:**
-   Confirm that all verification commands and linters exit with code `0`.
-
----
-
-## Step 5 — Commit and Merge to `main`
-
-1. **Commit changes on `chore/rig-update`:**
-   Stage and commit the updated assets inside `.worktrees/rig-update` following Conventional Commits and commit discipline defined in [`rules/AGENTS.md`](../../rules/AGENTS.md):
-   ```bash
-   git -C .worktrees/rig-update add -A
-   git -C .worktrees/rig-update commit -m "chore(rig): update agent-rig repository assets" -m "Unmandated-call: none"
-   ```
-2. **Merge into `main`:**
-   Merge the verified `chore/rig-update` branch into `main` from the attached root checkout following [`skills/merge-to-main/SKILL.md`](../merge-to-main/SKILL.md).
+   *(If the repository defines a test suite such as `npm test`, run it in `<target-dir>` and confirm exit status `0`).*

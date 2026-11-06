@@ -19,12 +19,12 @@ Where a default convention is too heavy for a small project, the CLI provides op
 `agent-rig` separates **how you work across every project** from **what a specific project is about**:
 
 1. **Global Layer (`rig install`):**
-   Installs your universal engineering rules ([`rules/AGENTS.md`](rules/AGENTS.md), [`rules/ui-change-gate.md`](rules/ui-change-gate.md), [`rules/contract-change-gate.md`](rules/contract-change-gate.md)), all 8 skills (`skills/`), the Worker and Verifier subagent definitions ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and the multi-protocol `PreToolUse` guards (`hooks/`) into your harnesses' global configuration directories (`~/.gemini/config/`, `~/.claude/`, `~/.codex/`, `~/.cursor/`).
+   Installs all 8 skills (`skills/`), the Worker and Verifier subagent definitions ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and the multi-protocol `PreToolUse` guards (`hooks/`) into your harnesses' global configuration directories (`~/.gemini/config/`, `~/.claude/`, `~/.codex/`, `~/.cursor/`).
    Prompts, skills, and agent definitions are statically hydrated with your active model profile from `.rig.local.json` (seeded from [`templates/rig-config.default.json`](templates/rig-config.default.json) and validated by [`templates/rig-config.schema.json`](templates/rig-config.schema.json) using the model catalog [`templates/models.json`](templates/models.json)).
    Running `rig update` or `rig profile use` re-hydrates your harnesses immediately with any changes.
 2. **Per-Project Layer (`rig init`):**
    Touches a project repository as lightly as possible:
-   sets up git worktree commit hooks (`.rig/hooks/`), leaves the root checkout attached to `main` as a merge-only trunk for code, and creates a minimal 10-line `AGENTS.md` project-context stub alongside [`docs/backlog.md`](docs/backlog.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
+   sets up git worktree commit hooks (`.rig/hooks/`), leaves the root checkout attached to `main` as a merge-only trunk for code, and provisions an `AGENTS.md` with a demarcated universal engineering rules block alongside a project-context stub, [`docs/backlog.md`](docs/backlog.md), and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
 
 ---
 
@@ -54,12 +54,12 @@ What `rig install` configures:
 - **CLI Binary (`~/.local/bin/rig`):**
   Installs an executable shell wrapper at `~/.local/bin/rig` with resolved Node runtime execution and fail-safe diagnostics advising `rig update` if Node is relocated.
 - **Antigravity (`~/.gemini/config/` & `~/.gemini/antigravity/bin/`):**
-  Registers `agent-rig` in `~/.gemini/config/plugins.json`, installs a `rig` CLI wrapper in `~/.gemini/antigravity/bin/rig` (plus `node`/`npm` symlinks when Node is not on system `PATH`), and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating `rules/` ([`rules/AGENTS.md`](rules/AGENTS.md), [`rules/ui-change-gate.md`](rules/ui-change-gate.md), [`rules/contract-change-gate.md`](rules/contract-change-gate.md)), all 8 skills under `skills/`, subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and `hooks.json` with dynamic Node runtime resolution across every workspace with symlinked `hooks/`.
+  Registers `agent-rig` in `~/.gemini/config/plugins.json`, installs a `rig` CLI wrapper in `~/.gemini/antigravity/bin/rig` (plus `node`/`npm` symlinks when Node is not on system `PATH`), and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating gate rules ([`rules/ui-change-gate.md`](rules/ui-change-gate.md), [`rules/contract-change-gate.md`](rules/contract-change-gate.md)), all 8 skills under `skills/`, subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and `hooks.json` with dynamic Node runtime resolution across every workspace with symlinked `hooks/`.
 - **Claude Code (`~/.claude/`):**
-  Installs hydrated `skills/` into `~/.claude/skills/`, subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)) into `~/.claude/agents/`, and `rules/` into `~/.claude/rules/`, symlinks `hooks/` into `~/.claude/hooks/`, and non-destructively merges dynamically resolved `PreToolUse` hooks into `~/.claude/settings.json`.
+  Installs hydrated `skills/` into `~/.claude/skills/`, subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)) into `~/.claude/agents/`, and gate rules into `~/.claude/rules/`, symlinks `hooks/` into `~/.claude/hooks/`, and non-destructively merges dynamically resolved `PreToolUse` hooks into `~/.claude/settings.json`.
   (Alternatively, inside Claude Code you can run `/plugin marketplace add impatient0/agent-rig` and `/plugin install agent-rig@agent-rig`.)
 - **Codex CLI (`~/.codex/`) & Cursor (`~/.cursor/`):**
-  Installs hydrated skills and global `AGENTS.md` rules.
+  Installs hydrated skills, subagents, and gate rules.
 
 To pull updates in `agent-rig`, standard `git pull` works directly in the root checkout;
 run `rig update` afterwards to sync newly added skills, subagents, or hook entries into your previously selected harnesses:
@@ -160,6 +160,8 @@ What `rig init` does by default:
 4. Leaves the root checkout attached to `main` as a merge-only trunk for code and registers the repository in `~/.config/agent-rig/state.json`.
 
 Flags for `rig init`:
+- `--stealth` — Initialize without tracking any files in git or modifying `.gitignore`.
+  Configures `.git/info/exclude` to ignore `AGENTS.md`, `.rig/`, and `.worktrees/`, keeping `git status` completely clean for seamless work in shared team repositories.
 - `--self-contained` — Hydrate `skills/`, `agents/`, and `rules/` into the repository's harness dot-directory (`.gemini/`, `.claude/`, `.codex/`, `.cursor/`, plus `.claude/hooks/` and `.claude/settings.json` for Claude) and vendor `bin/rig.mjs`, `templates/models.json`, `templates/rig-config.default.json`, `scripts/check-doc-links.mjs`, `scripts/reflow-docs.mjs`, and `hooks/` under `.rig/` (useful for team repos or CI).
 - `--harness <id>` — Specify target harness(es) (`antigravity`, `claude`, `codex`, `cursor`) for `--self-contained` initialization.
 - `--no-worktrees` — Skip git worktree hooks for single-checkout repos.
@@ -216,15 +218,21 @@ What `rig eject` does:
 
 ---
 
-## Writing a Per-Project `AGENTS.md`
+## Demarcated Per-Project `AGENTS.md`
 
-Because your universal workflow rules ([`rules/AGENTS.md`](rules/AGENTS.md)) are already loaded globally via `rig install`, a project's local `AGENTS.md` should **never** repeat generic workflow instructions (worktree rules, commit trailers, doc formatting).
-Keep each project's `AGENTS.md` focused strictly on project-specific facts a cold session cannot infer quickly:
+`rig init` provisions a two-part `AGENTS.md` in each rigged project:
 
-1. **One-paragraph purpose and stack summary.**
-2. **Exact build, test, and verification commands** (`npm test`, `cargo test`, etc.).
-3. **Non-obvious domain invariants or footguns** specific to that codebase.
-4. **Entry-point links** to [`docs/backlog.md`](docs/backlog.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) so `rig check-docs` can traverse the project's documentation graph.
+1. **Managed Universal Rules (`<!-- AGENT-RIG:START --> ... <!-- AGENT-RIG:END -->`):**
+   Placed at the top of the file, this block contains the universal engineering rules (investigation first, session-per-worktree isolation, triage & verification, commit trailers, doc graph rules).
+   It is automatically updated by `rig update` and protected from manual edits or agent tampering by both `PreToolUse` hooks and git `pre-commit` hooks.
+   Because universal rules are localized inside each rigged project's `AGENTS.md`, unrigged repositories remain completely untouched and free of context pollution.
+2. **Project Context (`# Project Context`):**
+   Located below the managed block, this section is preserved across `rig update` calls and may be edited directly on `main`.
+   Focus this section strictly on project-specific facts a cold session cannot infer quickly:
+   - **One-paragraph purpose and stack summary.**
+   - **Exact build, test, and verification commands** (`npm test`, `cargo test`, etc.).
+   - **Non-obvious domain invariants or footguns** specific to that codebase.
+   - **Entry-point links** to [`docs/backlog.md`](docs/backlog.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) so `rig check-docs` can traverse the project's documentation graph.
 
 ---
 

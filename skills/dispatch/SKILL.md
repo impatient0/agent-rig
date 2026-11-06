@@ -109,38 +109,10 @@ Workers follow a strict five-stage lifecycle:
 5. **Terminate:**
    The Worker is suspended or terminated only after its branch has successfully landed in `main`.
 
-### Worker Contract & Five Stop Triggers
+### Worker Stop Triggers & Commit Trailer Contract
 
-Each Worker traces local call sites from the Core files and must stop and report back to the Tech Lead immediately if any of the five triggers fire:
-1. **Human-gated boundary needed:**
-   Completing the slice requires editing files covered by human-gated boundary rules ([`rules/ui-change-gate.md`](../../rules/ui-change-gate.md), [`rules/contract-change-gate.md`](../../rules/contract-change-gate.md)) not authorized in the brief.
-2. **Spec contradiction or architectural fork:**
-   Live code contradicts the brief, or multiple valid designs exist that alter contracts, public interfaces, schemas, or user-visible behavior.
-3. **Unrelated test failure:**
-   The baseline test suite fails outside the slice's scope.
-4. **Scope explosion:**
-   The change requires touching more than twice the Core files listed in the brief (or $> 4$ files when 1 Core file was listed), modifying an unrelated subsystem, or adding a new package dependency.
-   This cap counts only production source and configuration files;
-   test files (`tests/`, `*.test.*`, `*.spec.*`) and documentation or link migrations (`docs/`, `README.md`) are explicitly exempt from the modified-file count.
-5. **Two consecutive fix attempts fail:**
-   The same test or build error persists after two targeted fix attempts.
-
-### Commit & Trailer Discipline
-
-Each Worker commits its completed slice on its worktree branch using Conventional Commits and appends one trailer per unmandated judgment call:
-
-```text
-Unmandated-call: <decision taken> — <1-line rationale> (<file>:<line>)
-```
-
-If zero unmandated calls were needed, the Worker appends:
-
-```text
-Unmandated-call: none
-```
-
-Contractual, schema, or behavioral forks must never be resolved via `Unmandated-call:` trailers;
-they require halting under Stop Trigger #2.
+Each Worker traces local call sites from the Core files and is governed by the **Five Hard Stop Triggers** (human-gated boundary needed, spec contradiction or architectural fork, unrelated baseline test failure, scope explosion, and two consecutive failed fix attempts) and the **`Unmandated-call:` commit trailer contract** defined canonically in [`agents/worker.md`](../../agents/worker.md).
+If any stop trigger fires, the Worker halts immediately in its worktree and reports the exact file, line, and question back to the Tech Lead.
 
 ---
 

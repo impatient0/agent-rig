@@ -2581,6 +2581,12 @@ export function runPreCommitHook(targetDir = process.cwd()) {
           if (norm.startsWith('.rig/')) {
             return true;
           }
+          if (
+            /^\.(gemini|claude|codex|cursor)\/(skills|agents|rules|hooks)\//.test(norm) ||
+            norm === '.claude/settings.json'
+          ) {
+            return true;
+          }
           if (status === 'D' && norm.startsWith('scripts/git-hooks/')) {
             return true;
           }

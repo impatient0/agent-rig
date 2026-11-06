@@ -83,3 +83,21 @@ The user was reduced to managing Jira tickets, and models running on lower tiers
    Triggered explicitly by the user (`/dispatch` or backlog sweep).
    The Tech Lead explores only until **`Open Decisions = 0`** (Gate A human gates under `rules/` cleared, Gate B core files and acceptance criteria known).
    The Tech Lead dispatches an isolated Worker subagent governed by [`agents/worker.md`](../agents/worker.md) to trace line-level root causes under five hard stop triggers.
+
+---
+
+## 6. Why Task Briefs Are Passed Inline in Prompts
+
+In earlier iterations, [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md) wrote Task Briefs to `<git-common-dir>/rig-briefs/<slug>.md`.
+In practice, agent harnesses guard `.git/` at the tool boundary, triggering manual permission approval prompts on every file write into `.git/`.
+Furthermore, every subagent invocation tool natively accepts an invocation prompt string whose complete trajectory is already persisted in the harness session transcript.
+Passing grounded Task Briefs directly in the subagent's invocation prompt eliminates redundant disk round-trips and prevents spurious harness permission prompts.
+
+---
+
+## 7. Why `.rig/` Commits Are Permitted Directly on `main`/`master`
+
+Pre-commit hooks originally restricted commits in the root checkout exclusively to verified merge commits and documentation-only changes.
+When upstream `agent-rig` changes, initialized repositories receive updated git hooks (`.rig/hooks/`) or updated asset files.
+Blocking `.rig/` commits on `main` forced developers to create a temporary git worktree merely to accept a non-code hook refresh.
+Permitting `.rig/` and legacy ~~`scripts/git-hooks/`~~ deletion commits directly on `main`/`master` allows `rig update --repo <dir>` and `rig update --all` to automatically stage and commit repository asset updates on clean trunk checkouts without manual worktree scaffolding.

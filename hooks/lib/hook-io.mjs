@@ -42,6 +42,7 @@ export function parseHookInput(rawText, { argv = process.argv.slice(2), env = pr
       command: typeof args.CommandLine === 'string' ? args.CommandLine : (typeof args.command === 'string' ? args.command : ''),
       filePath: typeof args.Path === 'string' ? args.Path : (typeof args.file_path === 'string' ? args.file_path : ''),
       cwd: ws,
+      toolArgs: args,
       raw,
     };
   }
@@ -55,6 +56,7 @@ export function parseHookInput(rawText, { argv = process.argv.slice(2), env = pr
       command: typeof ti.command === 'string' ? ti.command : '',
       filePath: typeof ti.file_path === 'string' ? ti.file_path : '',
       cwd: typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : defaultCwd,
+      toolArgs: ti,
       raw,
     };
   }
@@ -66,6 +68,7 @@ export function parseHookInput(rawText, { argv = process.argv.slice(2), env = pr
     command: typeof raw?.command === 'string' ? raw.command : (typeof raw?.CommandLine === 'string' ? raw.CommandLine : ''),
     filePath: typeof raw?.filePath === 'string' ? raw.filePath : (typeof raw?.Path === 'string' ? raw.Path : ''),
     cwd: typeof raw?.cwd === 'string' && raw.cwd ? raw.cwd : defaultCwd,
+    toolArgs: raw?.toolArgs ?? raw?.args ?? raw?.tool_input ?? {},
     raw,
   };
 }

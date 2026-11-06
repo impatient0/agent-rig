@@ -204,9 +204,9 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     const agyPluginDir = path.join(fakeHome, '.gemini/config/plugins/agent-rig');
     assert.equal(lstatSync(agyPluginDir).isSymbolicLink(), false);
     assert.ok(lstatSync(path.join(agyPluginDir, 'hooks')).isSymbolicLink());
-    const agyAgents = readFileSync(path.join(agyPluginDir, 'rules/AGENTS.md'), 'utf8');
-    assert.match(agyAgents, /antigravity-budget/);
-    assert.equal(agyAgents.includes('{{'), false);
+    assert.equal(existsSync(path.join(agyPluginDir, 'rules/AGENTS.md')), false);
+    assert.ok(existsSync(path.join(agyPluginDir, 'rules/contract-change-gate.md')));
+    assert.ok(existsSync(path.join(agyPluginDir, 'rules/ui-change-gate.md')));
     const agyVerifier = readFileSync(path.join(agyPluginDir, 'agents/verifier.md'), 'utf8');
     assert.match(agyVerifier, /gemini-3-8-flash/);
     assert.equal(agyVerifier.includes('{{'), false);
@@ -455,7 +455,10 @@ test('updateRig refreshes repo git hooks without overwriting user-edited AGENTS.
     // 4. Explicit update with clean working tree updates hooks and cleans legacy files
     const upd = updateRig({ homeDir: fakeHome, allRepos: true });
     assert.equal(upd.updatedRepos.length, 1);
-    assert.equal(readFileSync(path.join(repo, 'AGENTS.md'), 'utf8'), '# Custom Project Rules\n');
+    const updatedAgents = readFileSync(path.join(repo, 'AGENTS.md'), 'utf8');
+    assert.ok(updatedAgents.includes('# Custom Project Rules'));
+    assert.ok(updatedAgents.includes('<!-- AGENT-RIG:START -->'));
+    assert.ok(updatedAgents.includes('<!-- AGENT-RIG:END -->'));
     assert.equal(readFileSync(path.join(repo, 'docs/backlog.md'), 'utf8'), '# Custom Backlog\n');
     assert.ok(existsSync(path.join(repo, '.rig/hooks/pre-commit')));
     assert.equal(existsSync(path.join(repo, 'scripts/git-hooks/pre-commit')), false);
@@ -635,6 +638,7 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
     copyFileSync(path.join(RIG_ROOT, 'plugin.json'), path.join(fakeRig, 'plugin.json'));
     copyFileSync(path.join(RIG_ROOT, 'hooks.json'), path.join(fakeRig, 'hooks.json'));
     writeFileSync(path.join(fakeRig, 'rules/AGENTS.md'), '# Rules\nProfile: {{RIG_PROFILE}}\nWorker: {{MODEL_WORKER}}\n');
+    writeFileSync(path.join(fakeRig, 'agents/worker.md'), '# Worker\nProfile: {{RIG_PROFILE}}\nWorker: {{MODEL_WORKER}}\n');
     writeFileSync(path.join(fakeRig, 'skills/dispatch/SKILL.md'), '# Dispatch\nModel: {{SUBAGENT_MODEL_WORKER}}\n');
 
     // Install rig globally in fakeHome
@@ -653,9 +657,10 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
     useProfile('antigravity-pro', { rigRoot: fakeRig, homeDir: fakeHome });
     const afterUse = listProfiles(fakeRig);
     assert.equal(afterUse.activeProfiles.antigravity, 'antigravity-pro');
-    const hydratedAgents = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules/AGENTS.md'), 'utf8');
-    assert.match(hydratedAgents, /Profile: antigravity-pro/);
-    assert.match(hydratedAgents, /Worker: gemini-4-argon/);
+    assert.equal(existsSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules/AGENTS.md')), false);
+    const hydratedWorker = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/agents/worker.md'), 'utf8');
+    assert.match(hydratedWorker, /Profile: antigravity-pro/);
+    assert.match(hydratedWorker, /Worker: gemini-4-argon/);
 
     // Update role in profile
     setProfileRole('worker', 'claude-opus-5-5', { effort: 'medium', rigRoot: fakeRig, homeDir: fakeHome, harness: 'antigravity' });
@@ -664,8 +669,8 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
     assert.equal(afterSet.subagentModel, 'pro'); // claude-opus-5-5 mapped to pro on antigravity
     assert.equal(afterSet.effort, 'medium');
 
-    const rehydratedAgents = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules/AGENTS.md'), 'utf8');
-    assert.match(rehydratedAgents, /Worker: claude-opus-5-5/);
+    const rehydratedWorker = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/agents/worker.md'), 'utf8');
+    assert.match(rehydratedWorker, /Worker: claude-opus-5-5/);
   } finally {
     rmSync(fakeRig, { recursive: true, force: true });
     rmSync(fakeHome, { recursive: true, force: true });
@@ -868,29 +873,14 @@ test('installRig rewrites relative inter-doc links for Codex and hydrates repo-r
     const res = installRig({ homeDir: fakeHome, harnesses: ['codex', 'claude'] });
     assert.deepEqual(res.installedHarnesses, ['codex', 'claude']);
 
-    // Codex: AGENTS.md is hydrated directly into ~/.codex/AGENTS.md
-    const codexAgentsPath = path.join(fakeHome, '.codex/AGENTS.md');
-    assert.ok(existsSync(codexAgentsPath));
-    const codexAgents = readFileSync(codexAgentsPath, 'utf8');
-
-    // Inter-doc links in ~/.codex/AGENTS.md must point to skills/... instead of broken ../skills/...
-    assert.match(codexAgents, /\[`skills\/dispatch\/SKILL\.md`\]\(skills\/dispatch\/SKILL\.md\)/);
-    assert.match(codexAgents, /\[`skills\/merge-to-main\/SKILL\.md`\]\(skills\/merge-to-main\/SKILL\.md\)/);
-    assert.equal(codexAgents.includes('../skills/'), false);
+    // Global install does NOT write global AGENTS.md for Codex or Claude (rules live in per-repo demarcated blocks)
+    assert.equal(existsSync(path.join(fakeHome, '.codex/AGENTS.md')), false);
+    assert.equal(existsSync(path.join(fakeHome, '.claude/rules/AGENTS.md')), false);
 
     // Codex skills must point to repo-relative docs/backlog.md rather than ../../docs/backlog.md
     const codexBacklogSkill = readFileSync(path.join(fakeHome, '.codex/skills/backlog-audit/SKILL.md'), 'utf8');
     assert.match(codexBacklogSkill, /\[`docs\/backlog\.md`\]\(docs\/backlog\.md\)/);
     assert.equal(codexBacklogSkill.includes('../../docs/backlog.md'), false);
-
-    // Codex skills pointing to rules/AGENTS.md must point to ~/.codex/AGENTS.md via ../../AGENTS.md
-    const codexWrapUp = readFileSync(path.join(fakeHome, '.codex/skills/wrap-up/SKILL.md'), 'utf8');
-    assert.match(codexWrapUp, /\.\.\/\.\.\/AGENTS\.md/);
-    assert.equal(codexWrapUp.includes('../../rules/AGENTS.md'), false);
-
-    // Claude: rules/AGENTS.md sits inside ~/.claude/rules/, so ../skills/... correctly resolves to ~/.claude/skills/
-    const claudeAgents = readFileSync(path.join(fakeHome, '.claude/rules/AGENTS.md'), 'utf8');
-    assert.match(claudeAgents, /\[`skills\/dispatch\/SKILL\.md`\]\(\.\.\/skills\/dispatch\/SKILL\.md\)/);
 
     // Global Claude skills also rewrite ../../docs/ to repo-relative docs/
     const claudeBacklogSkill = readFileSync(path.join(fakeHome, '.claude/skills/backlog-audit/SKILL.md'), 'utf8');

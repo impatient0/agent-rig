@@ -156,9 +156,16 @@ function parseDoc(file) {
   const docPrefixRe = /^(?:docs|skills|rules|\.claude|\.agents)\//;
 
   let inFence = false;
+  let inManagedBlock = false;
   let currentHeading = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (line.includes('<!-- AGENT-RIG:START -->')) {
+      inManagedBlock = true;
+    }
+    if (line.includes('<!-- AGENT-RIG:END -->')) {
+      inManagedBlock = false;
+    }
     if (/^\s*```/.test(line)) {
       inFence = !inFence;
       continue;
@@ -182,13 +189,13 @@ function parseDoc(file) {
       }
       if (/^(mailto:|#)/i.test(raw)) {
         if (raw.startsWith('#')) {
-          links.push({ line: i + 1, targetFile: file, fragment: raw.slice(1), raw });
+          links.push({ line: i + 1, targetFile: file, fragment: raw.slice(1), raw, inManagedBlock });
         }
         continue;
       }
       const [relPath, fragment = null] = raw.split('#');
       const targetFile = path.normalize(path.join(path.dirname(file), relPath));
-      links.push({ line: i + 1, targetFile, fragment, raw });
+      links.push({ line: i + 1, targetFile, fragment, raw, inManagedBlock });
     }
 
     for (const m of line.matchAll(/\[\[([^\]]+)\]\]/g)) {
@@ -219,7 +226,7 @@ function parseDoc(file) {
         !cleaned.includes('…') &&
         !cleaned.includes('...')
       ) {
-        repoPaths.push({ line: i + 1, raw: `${m[1]}${tok}${m[1]}`, targetPath: path.normalize(cleaned) });
+        repoPaths.push({ line: i + 1, raw: `${m[1]}${tok}${m[1]}`, targetPath: path.normalize(cleaned), inManagedBlock });
       }
     }
   }
@@ -245,8 +252,30 @@ const gitTracked = (() => {
   return new Set(r.stdout.split('\n').filter(Boolean).map(path.normalize));
 })();
 
+const isOwnRepo = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+    return pkg.name === 'agent-rig';
+  } catch {
+    return false;
+  }
+})();
+
+const isStealthRepo = (() => {
+  try {
+    const r = spawnSync('git', ['check-ignore', '-q', 'AGENTS.md']);
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+})();
+
 function isCommitted(p) {
   if (!existsSync(p)) return false;
+  if (isStealthRepo) {
+    const r = spawnSync('git', ['check-ignore', '-q', p]);
+    if (r.status === 0) return true;
+  }
   if (!gitTracked || gitTracked.size === 0) return true;
   if (gitTracked.has(p)) return true;
   const prefix = p.endsWith(path.sep) ? p : p + path.sep;
@@ -255,12 +284,18 @@ function isCommitted(p) {
 }
 
 for (const [file, { links, bareRefs, repoPaths, externalUrls }] of parsed) {
-  for (const { line, targetFile, fragment, raw } of links) {
+  for (const { line, targetFile, fragment, raw, inManagedBlock } of links) {
     if (!existsSync(targetFile)) {
+      if (inManagedBlock && !isOwnRepo) {
+        continue;
+      }
       errors.push(`${file}:${line}: broken link (${raw}) — ${targetFile} does not exist`);
       continue;
     }
     if (!isCommitted(targetFile)) {
+      if (inManagedBlock && !isOwnRepo) {
+        continue;
+      }
       errors.push(`${file}:${line}: link target is untracked/gitignored (${raw}) — ${targetFile} is not in git`);
       continue;
     }
@@ -274,8 +309,11 @@ for (const [file, { links, bareRefs, repoPaths, externalUrls }] of parsed) {
   for (const { line, raw, reason } of bareRefs) {
     errors.push(`${file}:${line}: ${raw} — ${reason}`);
   }
-  for (const { line, raw, targetPath } of repoPaths) {
+  for (const { line, raw, targetPath, inManagedBlock } of repoPaths) {
     if (!existsSync(targetPath)) {
+      if (inManagedBlock && !isOwnRepo) {
+        continue;
+      }
       const baseName = path.basename(targetPath);
       const dotIdx = baseName.lastIndexOf('.');
       if (dotIdx > 0) {
@@ -294,6 +332,9 @@ for (const [file, { links, bareRefs, repoPaths, externalUrls }] of parsed) {
         `${file}:${line}: ${raw} — ${targetPath} does not exist (strike through as ~~${raw}~~ if deliberately removed)`,
       );
     } else if (!isCommitted(targetPath)) {
+      if (inManagedBlock && !isOwnRepo) {
+        continue;
+      }
       errors.push(`${file}:${line}: ${raw} — ${targetPath} is untracked/gitignored`);
     }
   }

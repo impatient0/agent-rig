@@ -62,7 +62,8 @@ function isStructural(line) {
     /^\s*#{1,6}\s/.test(line) ||
     /^\s*\|/.test(line) ||
     /^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line) ||
-    /^\s*```/.test(line)
+    /^\s*```/.test(line) ||
+    /^\s*<!--/.test(line)
   );
 }
 

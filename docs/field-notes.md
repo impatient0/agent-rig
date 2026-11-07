@@ -33,7 +33,7 @@ a fresh Verifier subagent receives *only* the grounded task brief and commit ran
 Written instructions in `AGENTS.md` telling sessions to work in a linked git worktree were occasionally bypassed during quick fixes—either via direct file-edit tool calls in the root checkout or via `sed -i` shell commands.
 
 **Fix:**
-1. `hooks/guard-main-checkout-edits.mjs` intercepts file-edit tools before code files are touched in the main checkout and returns the exact worktree setup command, while permitting direct edits to documentation and backlog files (`docs/`, `README.md`).
+1. `hooks/guard-main-checkout-edits.mjs` intercepts file-edit tools before code files are touched in the main checkout and returns the exact worktree setup command, while permitting direct edits to documentation, backlog, and project context files (`docs/`, `README.md`, `AGENTS.md`).
 2. `.rig/hooks/pre-commit` enforces that the root checkout only accepts merge commits onto `main` (and the initial commit on an unborn repo) or doc-only commits verified by doc linters, while refusing direct code edits and non-merge code commits. ~~\`scripts/git-hooks/pre-merge-commit\`~~ was removed because verified merges now happen cleanly in the root checkout rather than inside a worktree.
 3. Keeping the root checkout attached to `main` as a merge-only trunk for code allows standard operations (`git pull`, `git status`, `git branch -d`) to work natively without detached-`HEAD` friction, while [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md) merges into `main` directly in the root checkout.
 

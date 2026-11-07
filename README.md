@@ -24,7 +24,7 @@ Where a default convention is too heavy for a small project, the CLI provides op
    Running `rig update` or `rig profile use` re-hydrates your harnesses immediately with any changes.
 2. **Per-Project Layer (`rig init`):**
    Touches a project repository as lightly as possible:
-   sets up git worktree commit hooks (`.rig/hooks/`), leaves the root checkout attached to `main` as a merge-only trunk for code, and provisions an `AGENTS.md` with a demarcated universal engineering rules block alongside a project-context stub, [`docs/backlog.md`](docs/backlog.md), and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
+   sets up git worktree commit hooks (`.rig/hooks/`), leaves the root checkout attached to `main` as a merge-only trunk for code, and provisions an `AGENTS.md` with a demarcated universal engineering rules block and an automated documentation index block alongside a project-context stub, [`docs/backlog.md`](docs/backlog.md), and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
 
 ---
 
@@ -156,12 +156,12 @@ What `rig init` does by default:
 1. In a repository with existing commits, creates a linked git worktree at `.worktrees/rig-init` on branch `chore/rig-init` (and symlinks `node_modules` if present) so scaffolding can be committed without violating the main-checkout commit lock;
    in an unborn repository, scaffolds directly in the root checkout.
 2. Copies `.rig/hooks/pre-commit`, configures `git config core.hooksPath .rig/hooks` (preserving any existing third-party hook manager unless `--force` is passed), and normalizes `.gitignore` to ignore `.worktrees/` and symlinked `node_modules`.
-3. Scaffolds and stages a minimal project-context `AGENTS.md` (`templates/AGENTS.md`), [`docs/backlog.md`](docs/backlog.md), [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md), and `README.md` if they do not exist yet.
+3. Scaffolds and stages a demarcated `AGENTS.md` (combining universal engineering rules, an automated documentation index, and a project-context stub), [`docs/backlog.md`](docs/backlog.md), and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) if they do not exist yet.
 4. Leaves the root checkout attached to `main` as a merge-only trunk for code and registers the repository in `~/.config/agent-rig/state.json`.
 
 Flags for `rig init`:
 - `--stealth` — Initialize without tracking any files in git or modifying `.gitignore`.
-  Configures `.git/info/exclude` to ignore `AGENTS.md`, `.rig/`, and `.worktrees/`, keeping `git status` completely clean for seamless work in shared team repositories.
+  Configures `.git/info/exclude` to ignore `AGENTS.md`, `.rig/`, `.worktrees/`, [`docs/backlog.md`](docs/backlog.md), and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md), keeping `git status` completely clean for seamless work in shared team repositories.
 - `--self-contained` — Hydrate `skills/`, `agents/`, and `rules/` into the repository's harness dot-directory (`.gemini/`, `.claude/`, `.codex/`, `.cursor/`, plus `.claude/hooks/` and `.claude/settings.json` for Claude) and vendor `bin/rig.mjs`, `templates/models.json`, `templates/rig-config.default.json`, `scripts/check-doc-links.mjs`, `scripts/reflow-docs.mjs`, and `hooks/` under `.rig/` (useful for team repos or CI).
 - `--harness <id>` — Specify target harness(es) (`antigravity`, `claude`, `codex`, `cursor`) for `--self-contained` initialization.
 - `--no-worktrees` — Skip git worktree hooks for single-checkout repos.
@@ -191,6 +191,8 @@ Verify link graph integrity or normalize Markdown files to one sentence per line
 
 ```bash
 rig check-docs /path/to/your-project
+# Automatically refresh the managed documentation index in AGENTS.md:
+rig check-docs /path/to/your-project --fix
 rig reflow-docs /path/to/your-project --check
 ```
 
@@ -220,19 +222,22 @@ What `rig eject` does:
 
 ## Demarcated Per-Project `AGENTS.md`
 
-`rig init` provisions a two-part `AGENTS.md` in each rigged project:
+`rig init` provisions a three-part `AGENTS.md` in each rigged project:
 
 1. **Managed Universal Rules (`<!-- AGENT-RIG:START --> ... <!-- AGENT-RIG:END -->`):**
    Placed at the top of the file, this block contains the universal engineering rules (investigation first, session-per-worktree isolation, triage & verification, commit trailers, doc graph rules).
    It is automatically updated by `rig update` and protected from manual edits or agent tampering by both `PreToolUse` hooks and git `pre-commit` hooks.
    Because universal rules are localized inside each rigged project's `AGENTS.md`, unrigged repositories remain completely untouched and free of context pollution.
-2. **Project Context (`# Project Context`):**
-   Located below the managed block, this section is preserved across `rig update` calls and may be edited directly on `main`.
+2. **Managed Documentation Index (`<!-- AGENT-RIG:DOCS:START --> ... <!-- AGENT-RIG:DOCS:END -->`):**
+   Located directly beneath the universal rules, this block provides a mechanically maintained documentation index of permanent documents under `docs/` (such as [`docs/backlog.md`](docs/backlog.md) and ADRs under `docs/adr/`) and renders Michael Nygard ADR statuses (e.g. `(Superseded by ADR XXXX)`, `(Deprecated)`, `(Proposed)`).
+   It is automatically updated by `rig update` or `rig check-docs --fix` and protected from manual edits by both `PreToolUse` and git `pre-commit` hooks.
+   Ephemeral artifacts (such as epic trackers under `docs/epics/`, design mockups, or documents marked with `ephemeral: true`) are excluded from this index block.
+3. **Project Context (`# Project Context`):**
+   Located below the managed documentation index block, this section is preserved across `rig update` calls and may be edited directly on `main`.
    Focus this section strictly on project-specific facts a cold session cannot infer quickly:
    - **One-paragraph purpose and stack summary.**
    - **Exact build, test, and verification commands** (`npm test`, `cargo test`, etc.).
    - **Non-obvious domain invariants or footguns** specific to that codebase.
-   - **Entry-point links** to [`docs/backlog.md`](docs/backlog.md) and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) so `rig check-docs` can traverse the project's documentation graph.
 
 ---
 
@@ -251,7 +256,7 @@ What `rig eject` does:
 
 ### 2. Session-Per-Worktree Isolation
 
-1. **Root checkout stays attached to `main` as a merge-only trunk for code** and code files are never edited directly (`README.md` and `docs/` may be edited and committed directly on `main`, guarded by automated doc linters).
+1. **Root checkout stays attached to `main` as a merge-only trunk for code** and code files are never edited directly (`docs/`, `README.md`, and `AGENTS.md` project context may be edited and committed directly on `main`, guarded by automated doc linters).
 2. **Every session or Worker subagent operates in a linked git worktree** on a `<type>/<slug>` branch.
    `hooks/guard-main-checkout-edits.mjs` blocks direct code edits in the root checkout, and `.rig/hooks/pre-commit` (`rig hook pre-commit`) ensures only verified merge commits, verified doc-only commits, or `.rig/` / vendored harness asset updates land on `main`.
 3. **Shared dependency caching via symlinked `node_modules`:**
@@ -307,9 +312,9 @@ cp templates/ci/rig-verify.yml .github/workflows/rig-verify.yml
 ### Multi-Protocol Mechanical Guards (`hooks/` & `.rig/hooks/`)
 - `hooks/lib/hook-io.mjs` — Documented `PreToolUse` JSON schema adapter supporting Antigravity (`toolCall.args` → `{ decision, reason }`), Claude Code (`tool_input` → `{ hookSpecificOutput }`), generic JSON runners, and explicit `--harness=<name>` flags.
 - `hooks/guard-remote-mutation.mjs` — Prompts (`ask`) before commands that mutate remote or shared state (`ssh`, `scp`, `rsync`, `crontab`, `docker -H`, `git push` to `main`, mutating `gh` calls).
-- `hooks/guard-main-checkout-edits.mjs` — Refuses (`deny`) code file edits in the root checkout while permitting `README.md` and `docs/` edits (and auto-attaching `core.hooksPath` in fresh clones).
+- `hooks/guard-main-checkout-edits.mjs` — Refuses (`deny`) code file edits in the root checkout while permitting `README.md`, `AGENTS.md` project context, and `docs/` edits (and auto-attaching `core.hooksPath` in fresh clones).
 - `hooks/guard-symlinked-node-modules.mjs` — Refuses (`deny`) `npm`, `pnpm`, `yarn`, and `bun` installs when `node_modules` is a shared symlink (including `cd .worktrees/<slug> && npm install` chains).
-- `.rig/hooks/pre-commit` — Invokes `rig hook pre-commit` (with POSIX shell fallback) to refuse direct code commits in the root checkout and direct commits on `main` in linked worktrees, while allowing verified merge commits, linter-verified doc commits (`README.md`, `docs/`), and `.rig/` or vendored harness asset updates on `main`/`master`.
+- `.rig/hooks/pre-commit` — Invokes `rig hook pre-commit` (with POSIX shell fallback) to refuse direct code commits in the root checkout and direct commits on `main` in linked worktrees, while allowing verified merge commits, linter-verified doc commits (`docs/`, `README.md`, `AGENTS.md`), and `.rig/` or vendored harness asset updates on `main`/`master`.
 
 ### Documentation Graph Linters (`scripts/`)
 - `scripts/check-doc-links.mjs` — Enforces resolved relative links and `#fragment` headings, bans wiki-style refs/globs/bare backticked doc paths, verifies reachability from entry points, checks cited repo paths on disk, and enforces ADR byte budgets.
@@ -326,4 +331,4 @@ cp templates/ci/rig-verify.yml .github/workflows/rig-verify.yml
 npm test
 ```
 
-`npm test` runs the full `node:test` suite (`tests/hookIo.test.mjs`, `tests/guard-remote-mutation.test.mjs`, `tests/guard-main-checkout-edits.test.mjs`, `tests/guard-symlinked-node-modules.test.mjs`, `tests/gitHooks.test.mjs`, `tests/checkDocLinks.test.mjs`, `tests/reflowDocs.test.mjs`, `tests/cli.test.mjs`), followed by `scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs --check`.
+`npm test` runs the full `node:test` suite (`tests/hookIo.test.mjs`, `tests/guard-remote-mutation.test.mjs`, `tests/guard-main-checkout-edits.test.mjs`, `tests/guard-symlinked-node-modules.test.mjs`, `tests/gitHooks.test.mjs`, `tests/checkDocLinks.test.mjs`, `tests/reflowDocs.test.mjs`, `tests/cli.test.mjs`, `tests/demarcated-stealth-integration.test.mjs`, `tests/docsIndexAndAdrStatus.test.mjs`), followed by `scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs --check`.

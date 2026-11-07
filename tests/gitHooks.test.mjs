@@ -101,8 +101,8 @@ test('pre-commit allows doc-only commits on main checkout and rejects mixed comm
     // 1. Doc-only commit on main succeeds when reachability and doc format are valid
     mkdirSync(path.join(root, 'docs'), { recursive: true });
     writeFileSync(path.join(root, 'docs/backlog.md'), '# Backlog\n\n- Task 1.\n');
-    writeFileSync(path.join(root, 'README.md'), '# App\n\nSee [docs/backlog.md](docs/backlog.md).\n');
-    git(root, 'add', 'README.md', 'docs/backlog.md');
+    writeFileSync(path.join(root, 'AGENTS.md'), '# Agents\n\nSee [docs/backlog.md](docs/backlog.md).\n');
+    git(root, 'add', 'AGENTS.md', 'docs/backlog.md');
     const docCommit = git(root, 'commit', '-m', 'docs: update backlog');
     assert.equal(docCommit.status, 0, docCommit.stderr);
 
@@ -308,16 +308,16 @@ test('pre-commit allows .rig/ and legacy scripts/git-hooks deletion commits on m
     // 4. Combined commit: updating .rig/ and documentation file on main succeeds when docs are valid
     mkdirSync(path.join(root, 'docs'), { recursive: true });
     writeFileSync(path.join(root, 'docs/backlog.md'), '# Backlog\n\n- Task 1.\n');
-    writeFileSync(path.join(root, 'README.md'), '# App\n\nSee [docs/backlog.md](docs/backlog.md).\n');
+    writeFileSync(path.join(root, 'AGENTS.md'), '# App\n\nSee [docs/backlog.md](docs/backlog.md).\n');
     writeFileSync(path.join(root, '.rig/test-asset.txt'), 'asset v2\n');
-    git(root, 'add', 'README.md', 'docs/backlog.md', '.rig/test-asset.txt');
+    git(root, 'add', 'AGENTS.md', 'docs/backlog.md', '.rig/test-asset.txt');
     const comboCommit = git(root, 'commit', '-m', 'docs: update docs and rig asset');
     assert.equal(comboCommit.status, 0, comboCommit.stderr);
 
     // 5. Combined commit with broken doc link fails doc linter
-    writeFileSync(path.join(root, 'README.md'), '# App\n\nSee [docs/missing.md](docs/missing.md).\n'); // check-doc-links:ignore
+    writeFileSync(path.join(root, 'AGENTS.md'), '# App\n\nSee [docs/missing.md](docs/missing.md).\n'); // check-doc-links:ignore
     writeFileSync(path.join(root, '.rig/test-asset.txt'), 'asset v3\n');
-    git(root, 'add', 'README.md', '.rig/test-asset.txt');
+    git(root, 'add', 'AGENTS.md', '.rig/test-asset.txt');
     const brokenDocCommit = git(root, 'commit', '-m', 'docs: broken doc link');
     assert.notEqual(brokenDocCommit.status, 0);
     assert.match(brokenDocCommit.stderr + brokenDocCommit.stdout, /broken/i);

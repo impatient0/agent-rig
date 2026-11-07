@@ -10,7 +10,7 @@
 //   rig attach [<target-dir>] [--home <dir>] [--force]
 //   rig eject [<target-dir>] [--home <dir>]
 //   rig hook pre-commit [<target-dir>]
-//   rig check-docs [<target-dir>]
+//   rig check-docs [<target-dir>] [--fix]
 //   rig reflow-docs [<target-dir>] [--check]
 //   rig status [<target-dir>]
 
@@ -19,6 +19,7 @@ import {
   copyFileSync,
   existsSync,
   lstatSync,
+  statSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -107,6 +108,10 @@ export const MANAGED_AGENTS_START = '<!-- AGENT-RIG:START -->';
 export const MANAGED_AGENTS_END = '<!-- AGENT-RIG:END -->';
 export const MANAGED_AGENTS_HEADER = '<!-- Managed by `rig init` / `rig update`. Do not edit between AGENT-RIG:START and AGENT-RIG:END. -->';
 
+export const MANAGED_DOCS_START = '<!-- AGENT-RIG:DOCS:START -->';
+export const MANAGED_DOCS_END = '<!-- AGENT-RIG:DOCS:END -->';
+export const MANAGED_DOCS_HEADER = '<!-- Managed by `rig update` / `rig check-docs`. Do not edit between AGENT-RIG:DOCS:START and AGENT-RIG:DOCS:END. -->';
+
 export function loadCatalog(rigRoot = RIG_ROOT) {
   const catalogPath = path.join(rigRoot, 'templates', 'models.json');
   if (!existsSync(catalogPath)) {
@@ -141,6 +146,10 @@ export function configFilePath(rigRoot = RIG_ROOT) {
 export function ensureRigConfig(rigRoot = RIG_ROOT) {
   const p = configFilePath(rigRoot);
   if (!existsSync(p)) {
+    if (path.basename(rigRoot) === '.rig') {
+      const template = path.join(rigRoot, 'templates', 'rig-config.default.json');
+      return existsSync(template) ? template : p;
+    }
     const template = path.join(rigRoot, 'templates', 'rig-config.default.json');
     if (existsSync(template)) {
       try {
@@ -155,13 +164,23 @@ export function ensureRigConfig(rigRoot = RIG_ROOT) {
 }
 
 export function loadRigConfig(rigRoot = RIG_ROOT) {
-  const p = ensureRigConfig(rigRoot);
-  if (!existsSync(p)) return { activeProfiles: {}, profiles: {} };
-  try {
-    return JSON.parse(readFileSync(p, 'utf8'));
-  } catch {
-    return { activeProfiles: {}, profiles: {} };
+  const p = configFilePath(rigRoot);
+  const templatePath = path.join(rigRoot, 'templates', 'rig-config.default.json');
+  if (existsSync(p)) {
+    try {
+      return JSON.parse(readFileSync(p, 'utf8'));
+    } catch {
+      // fall through to template
+    }
   }
+  if (existsSync(templatePath)) {
+    try {
+      return JSON.parse(readFileSync(templatePath, 'utf8'));
+    } catch {
+      return { activeProfiles: {}, profiles: {} };
+    }
+  }
+  return { activeProfiles: {}, profiles: {} };
 }
 
 export function writeRigConfig(config, rigRoot = RIG_ROOT) {
@@ -306,7 +325,14 @@ export function writeHydratedFile(
 }
 
 export function buildManagedAgentsBlock(resolvedProfile, { rigRoot = RIG_ROOT, isSelfContained = false } = {}) {
-  const rulesAgentsPath = path.join(rigRoot, 'rules/AGENTS.md');
+  const candidates = [
+    path.join(rigRoot, 'rules/AGENTS.md'),
+    path.join(rigRoot, '.rig/rules/AGENTS.md'),
+    path.join(rigRoot, '../rules/AGENTS.md'),
+    path.join(homedir(), '.gemini/config/plugins/agent-rig/rules/AGENTS.md'),
+    path.join(homedir(), '.claude/plugins/agent-rig/rules/AGENTS.md'),
+  ];
+  const rulesAgentsPath = candidates.find((c) => existsSync(c)) || path.join(rigRoot, 'rules/AGENTS.md');
   const template = readFileSync(rulesAgentsPath, 'utf8');
   let hydrated = hydrateText(template, resolvedProfile);
   hydrated = hydrated.replaceAll('../skills/', 'skills/');
@@ -330,24 +356,194 @@ export function extractManagedAgentsBlock(content) {
   return { block, before, after, hasBlock: true };
 }
 
-export function mergeManagedAgentsFile(existingContent, managedBlock, defaultProjectContext = '') {
-  const normBlock = managedBlock.trim();
-  if (!existingContent || !existingContent.trim()) {
-    const projContext = defaultProjectContext.trim();
-    return projContext ? `${normBlock}\n\n${projContext}\n` : `${normBlock}\n`;
+export function parseAdrStatus(filePath) {
+  if (!existsSync(filePath)) return null;
+  let content = '';
+  try {
+    content = readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
   }
-  const { hasBlock, before, after } = extractManagedAgentsBlock(existingContent);
-  if (hasBlock) {
-    const cleanBefore = before.trim();
-    const cleanAfter = after.trim();
-    const parts = [];
-    if (cleanBefore) parts.push(cleanBefore);
-    parts.push(normBlock);
-    if (cleanAfter) parts.push(cleanAfter);
-    return parts.join('\n\n') + '\n';
+  const h1Match = content.match(/^\s*#\s+(.+)$/m);
+  const title = h1Match ? h1Match[1].trim() : path.basename(filePath, '.md');
+  const statusMatch = content.match(/^\s*##\s+Status\s*\n+([^\n]+)/m);
+  const rawStatus = statusMatch ? statusMatch[1].trim() : '';
+
+  let statusTag = null;
+  if (/^superseded\b/i.test(rawStatus)) {
+    const byMatch = rawStatus.match(/by\s+(\[?ADR\s*\d+[^\]\n]*\]?)/i) || rawStatus.match(/by\s+([^.\n]+)/i);
+    statusTag = byMatch ? `Superseded by ${byMatch[1].replace(/[[\]]/g, '').trim()}` : 'Superseded';
+  } else if (/^deprecated\b/i.test(rawStatus)) {
+    statusTag = 'Deprecated';
+  } else if (/^proposed\b/i.test(rawStatus)) {
+    statusTag = 'Proposed';
+  } else if (/^rejected\b/i.test(rawStatus)) {
+    statusTag = 'Rejected';
   }
-  const cleanExisting = existingContent.trim();
-  return `${normBlock}\n\n${cleanExisting}\n`;
+  if (statusTag) {
+    statusTag = statusTag.replace(/\.+$/, '').trim();
+  }
+  return { title, rawStatus, statusTag };
+}
+
+export function isEphemeralDoc(filePath, content) {
+  const norm = filePath.replace(/\\/g, '/');
+  if (norm.includes('/docs/epics/') || norm.startsWith('docs/epics/')) {
+    return true;
+  }
+  if (typeof content === 'string') {
+    if (/^---\n[\s\S]*?\bephemeral:\s*true\b[\s\S]*?\n---/m.test(content)) return true;
+    if (/<!--\s*ephemeral\s*-->/i.test(content)) return true;
+    if (/delete this file (?:when|after|once)\b/i.test(content)) return true;
+  }
+  return false;
+}
+
+export function buildDocsIndexBlock(repoRoot = process.cwd()) {
+  const docsDir = path.join(repoRoot, 'docs');
+  if (!existsSync(docsDir)) return '';
+  try {
+    if (!statSync(docsDir).isDirectory()) return '';
+  } catch {
+    return '';
+  }
+
+  const items = [];
+
+  // 1. Top-level markdown files in docs
+  try {
+    const topFiles = readdirSync(docsDir)
+      .filter((f) => f.endsWith('.md') && statSync(path.join(docsDir, f)).isFile())
+      .sort();
+    for (const f of topFiles) {
+      const fullPath = path.join(docsDir, f);
+      const content = readFileSync(fullPath, 'utf8');
+      if (isEphemeralDoc(`docs/${f}`, content)) continue;
+      const h1Match = content.match(/^\s*#\s+(.+)$/m);
+      const title = h1Match ? h1Match[1].trim() : f;
+      items.push({ relPath: `docs/${f}`, title, statusTag: null });
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2. ADR files in docs/adr
+  const adrDir = path.join(docsDir, 'adr');
+  if (existsSync(adrDir)) {
+    try {
+      const adrFiles = readdirSync(adrDir)
+        .filter((f) => f.endsWith('.md') && statSync(path.join(adrDir, f)).isFile())
+        .sort();
+      for (const f of adrFiles) {
+        const fullPath = path.join(adrDir, f);
+        const { title, statusTag } = parseAdrStatus(fullPath) || {};
+        items.push({ relPath: `docs/adr/${f}`, title: title || f, statusTag: statusTag || null });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3. Other permanent subdirectories under docs/ (excluding epics and adr)
+  try {
+    const subEntries = readdirSync(docsDir)
+      .filter((entry) => {
+        if (entry === 'adr' || entry === 'epics') return false;
+        const subPath = path.join(docsDir, entry);
+        return statSync(subPath).isDirectory();
+      })
+      .sort();
+
+    function walkSubdir(subRel) {
+      const subDir = path.join(repoRoot, subRel);
+      for (const entry of readdirSync(subDir).sort()) {
+        const fullPath = path.join(subDir, entry);
+        const rel = path.join(subRel, entry).replace(/\\/g, '/');
+        const st = statSync(fullPath);
+        if (st.isDirectory()) {
+          walkSubdir(rel);
+        } else if (st.isFile() && entry.endsWith('.md')) {
+          const content = readFileSync(fullPath, 'utf8');
+          if (isEphemeralDoc(rel, content)) continue;
+          const h1Match = content.match(/^\s*#\s+(.+)$/m);
+          const title = h1Match ? h1Match[1].trim() : entry;
+          items.push({ relPath: rel, title, statusTag: null });
+        }
+      }
+    }
+
+    for (const sub of subEntries) {
+      walkSubdir(`docs/${sub}`);
+    }
+  } catch {
+    // ignore
+  }
+
+  if (items.length === 0) return '';
+
+  const lines = [
+    MANAGED_DOCS_START,
+    MANAGED_DOCS_HEADER,
+    '## Documentation Index',
+    '',
+  ];
+  for (const item of items) {
+    const tag = item.statusTag ? ` (${item.statusTag})` : '';
+    lines.push(`- [\`${item.relPath}\`](${item.relPath}) — ${item.title}${tag}`);
+  }
+  lines.push(MANAGED_DOCS_END);
+  return lines.join('\n');
+}
+
+export function extractManagedDocsBlock(content) {
+  if (typeof content !== 'string') return { block: null, before: '', after: '', hasBlock: false };
+  const startIdx = content.indexOf(MANAGED_DOCS_START);
+  if (startIdx === -1) return { block: null, before: content, after: '', hasBlock: false };
+  const endIdx = content.indexOf(MANAGED_DOCS_END, startIdx + MANAGED_DOCS_START.length);
+  if (endIdx === -1) return { block: null, before: content, after: '', hasBlock: false };
+  const fullEnd = endIdx + MANAGED_DOCS_END.length;
+  const block = content.slice(startIdx, fullEnd);
+  const before = content.slice(0, startIdx);
+  const after = content.slice(fullEnd);
+  return { block, before, after, hasBlock: true };
+}
+
+export function mergeManagedAgentsFile(existingContent, managedBlock, defaultProjectContext = '', docsIndexBlock = undefined) {
+  const normRules = managedBlock ? managedBlock.trim() : '';
+
+  // 1. Extract rules block if present
+  const { hasBlock: hasRules, before: beforeRules, after: afterRules } = extractManagedAgentsBlock(existingContent || '');
+  let remainder = hasRules
+    ? (beforeRules.trim() ? beforeRules.trim() + '\n\n' : '') + afterRules.trim()
+    : (existingContent || '').trim();
+
+  // 2. Extract docs index block from remainder if present
+  const { hasBlock: hasDocs, before: beforeDocs, after: afterDocs, block: existingDocsBlock } = extractManagedDocsBlock(remainder);
+  let userContext = hasDocs
+    ? (beforeDocs.trim() ? beforeDocs.trim() + '\n\n' : '') + afterDocs.trim()
+    : remainder;
+  userContext = userContext.trim();
+
+  if (!userContext && defaultProjectContext) {
+    userContext = defaultProjectContext.trim();
+  }
+
+  // 3. Determine effective docs block
+  let effectiveDocs = '';
+  if (docsIndexBlock !== undefined) {
+    effectiveDocs = docsIndexBlock ? docsIndexBlock.trim() : '';
+  } else if (hasDocs) {
+    effectiveDocs = existingDocsBlock.trim();
+  }
+
+  // 4. Assemble in canonical order
+  const parts = [];
+  if (hasRules && beforeRules.trim()) parts.push(beforeRules.trim());
+  if (normRules) parts.push(normRules);
+  if (effectiveDocs) parts.push(effectiveDocs);
+  if (userContext) parts.push(userContext);
+
+  return parts.join('\n\n') + '\n';
 }
 
 export function copyOrHydrateDir(
@@ -1072,6 +1268,7 @@ export const installGlobal = installRig;
 
 export const VENDORED_RIG_FILES = [
   { src: 'bin/rig.mjs', dest: '.rig/bin/rig.mjs' },
+  { src: 'rules/AGENTS.md', dest: '.rig/rules/AGENTS.md' },
   { src: 'templates/models.json', dest: '.rig/templates/models.json' },
   { src: 'templates/rig-config.default.json', dest: '.rig/templates/rig-config.default.json' },
   { src: 'scripts/check-doc-links.mjs', dest: '.rig/scripts/check-doc-links.mjs' },
@@ -1446,8 +1643,9 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
       const resolvedProfile = resolveProfile(tHarness, { rigRoot });
       const isSelf = isSelfContainedRepo(dir);
       const expectedBlock = buildManagedAgentsBlock(resolvedProfile, { rigRoot, isSelfContained: isSelf });
+      const docsBlock = buildDocsIndexBlock(dir);
       const existing = readFileSync(agentsPath, 'utf8');
-      const updated = mergeManagedAgentsFile(existing, expectedBlock);
+      const updated = mergeManagedAgentsFile(existing, expectedBlock, '', docsBlock);
       if (updated !== existing) {
         writeFileSync(agentsPath, updated, 'utf8');
         copied.push(agentsPath);
@@ -2257,16 +2455,6 @@ export function initRepo(
     { force, copied, skipped },
   );
 
-  const projectName = path.basename(mainCheckout);
-
-  if (!stealth && !existsSync(path.join(dir, 'README.md'))) {
-    writeFileSync(
-      path.join(dir, 'README.md'),
-      '# ' + projectName + '\n\nSee [AGENTS.md](AGENTS.md) and [docs/backlog.md](docs/backlog.md).\n',
-      'utf8',
-    );
-    copied.push(path.join(dir, 'README.md'));
-  }
 
   if (ui) {
     copyFileSafe(
@@ -2460,6 +2648,11 @@ export function initRepo(
     skipped,
     executable: true,
   });
+  copyFileSafe(path.join(rigRoot, 'rules/AGENTS.md'), path.join(dir, '.rig/rules/AGENTS.md'), {
+    force,
+    copied,
+    skipped,
+  });
   copyFileSafe(path.join(rigRoot, 'templates/models.json'), path.join(dir, '.rig/templates/models.json'), {
     force,
     copied,
@@ -2519,7 +2712,8 @@ export function initRepo(
       );
     }
   }
-  const mergedAgents = mergeManagedAgentsFile(existingAgents, managedBlock, templateProjContext);
+  const docsBlock = buildDocsIndexBlock(dir);
+  const mergedAgents = mergeManagedAgentsFile(existingAgents, managedBlock, templateProjContext, docsBlock);
   writeFileSync(agentsPath, mergedAgents, 'utf8');
   copied.push(agentsPath);
 
@@ -2732,9 +2926,11 @@ function resolveDocScript(scriptName, targetDir = process.cwd()) {
   return path.join(RIG_ROOT, 'scripts', scriptName);
 }
 
-export function runCheckDocs(targetDir = process.cwd()) {
+export function runCheckDocs(targetDir = process.cwd(), { fix = false } = {}) {
   const script = resolveDocScript('check-doc-links.mjs', targetDir);
-  return spawnSync(process.execPath, [script, path.resolve(targetDir)], { encoding: 'utf8' });
+  const args = [script, path.resolve(targetDir)];
+  if (fix) args.push('--fix');
+  return spawnSync(process.execPath, args, { encoding: 'utf8' });
 }
 
 export function runReflowDocs(targetDir = process.cwd(), { check = false } = {}) {
@@ -2809,6 +3005,38 @@ export function runPreCommitHook(targetDir = process.cwd()) {
                 'pre-commit: refusing commit with modified agent-rig managed block in AGENTS.md.\n' +
                 'The block between <!-- AGENT-RIG:START --> and <!-- AGENT-RIG:END --> is managed by agent-rig.\n' +
                 "Run 'rig update' to refresh it, or restore the block from HEAD.\n",
+            };
+          }
+        }
+
+        const { block: stagedDocsBlock, hasBlock: stagedHasDocsBlock } = extractManagedDocsBlock(stagedShow.stdout);
+        if (stagedHasDocsBlock) {
+          let docsMatches = false;
+          const headShow = git('show', 'HEAD:AGENTS.md');
+          if (headShow.status === 0) {
+            const { block: headDocsBlock, hasBlock: headHasDocsBlock } = extractManagedDocsBlock(headShow.stdout);
+            if (headHasDocsBlock && headDocsBlock.trim() === stagedDocsBlock.trim()) {
+              docsMatches = true;
+            }
+          }
+          if (!docsMatches) {
+            try {
+              const canonicalDocsBlock = buildDocsIndexBlock(repoRoot);
+              if (canonicalDocsBlock.trim() === stagedDocsBlock.trim()) {
+                docsMatches = true;
+              }
+            } catch {
+              // ignore
+            }
+          }
+          if (!docsMatches) {
+            return {
+              status: 1,
+              stdout: '',
+              stderr:
+                'pre-commit: refusing commit with modified agent-rig documentation index in AGENTS.md.\n' +
+                'The block between <!-- AGENT-RIG:DOCS:START --> and <!-- AGENT-RIG:DOCS:END --> is managed by agent-rig.\n' +
+                "Run 'rig update' or 'rig check-docs --fix' to refresh it, or restore the block from HEAD.\n",
             };
           }
         }
@@ -3121,7 +3349,8 @@ async function main() {
 
   if (cmd === 'check-docs') {
     const pos = args.slice(1).find((a) => !a.startsWith('-')) ?? process.cwd();
-    const res = runCheckDocs(pos);
+    const fix = args.includes('--fix');
+    const res = runCheckDocs(pos, { fix });
     if (res.stdout) process.stdout.write(res.stdout);
     if (res.stderr) process.stderr.write(res.stderr);
     process.exit(res.status ?? 1);
@@ -3153,7 +3382,7 @@ async function main() {
   rig attach [<target-dir>] [--home <dir>] [--force]
   rig eject [<target-dir>] [--home <dir>]
   rig hook pre-commit [<target-dir>]
-  rig check-docs [<target-dir>]
+  rig check-docs [<target-dir>] [--fix]
   rig reflow-docs [<target-dir>] [--check]
   rig status [<target-dir>]`);
 }

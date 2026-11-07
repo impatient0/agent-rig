@@ -166,6 +166,7 @@ export function reflowMarkdown(src) {
   const out = [];
   let inFence = false;
   let inFrontmatter = false;
+  let inDocsBlock = false;
   let buf = [];
   let bufKind = null;
 
@@ -178,6 +179,20 @@ export function reflowMarkdown(src) {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+
+    if (line.includes('<!-- AGENT-RIG:DOCS:START -->')) {
+      inDocsBlock = true;
+      flush();
+      out.push(line);
+      continue;
+    }
+    if (inDocsBlock) {
+      out.push(line);
+      if (line.includes('<!-- AGENT-RIG:DOCS:END -->')) {
+        inDocsBlock = false;
+      }
+      continue;
+    }
 
     if (i === 0 && line.trim() === '---') {
       inFrontmatter = true;

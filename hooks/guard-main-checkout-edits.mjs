@@ -203,19 +203,22 @@ export function checkEditTarget(filePath, options = {}) {
   // in the main checkout so globally-installed hooks do not block unrigged repos.
   if (!isRigged) return null;
 
-  // Protect the agent-rig managed block in AGENTS.md across both main checkout and worktrees
+  // Protect the agent-rig managed blocks in AGENTS.md across both main checkout and worktrees
   const isAgentsMd =
     path.resolve(absPath) === path.resolve(topLevel, 'AGENTS.md') ||
     path.resolve(absPath) === path.resolve(repoRoot, 'AGENTS.md');
   if (isAgentsMd && existsSync(absPath)) {
     try {
       const existingText = readFileSync(absPath, 'utf8');
+      const toolArgs = options?.toolArgs ?? {};
+      const target = toolArgs.Target ?? toolArgs.old_string ?? toolArgs.target;
+      const newContent = toolArgs.Content ?? toolArgs.content;
+      const append = Boolean(toolArgs.Append ?? toolArgs.append);
+
       const startIdx = existingText.indexOf('<!-- AGENT-RIG:START -->');
       const endIdx = existingText.indexOf('<!-- AGENT-RIG:END -->');
       if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
         const managedEnd = endIdx + '<!-- AGENT-RIG:END -->'.length;
-        const toolArgs = options?.toolArgs ?? {};
-        const target = toolArgs.Target ?? toolArgs.old_string ?? toolArgs.target;
         if (typeof target === 'string' && target.length > 0) {
           let tIdx = existingText.indexOf(target);
           while (tIdx !== -1) {
@@ -229,14 +232,40 @@ export function checkEditTarget(filePath, options = {}) {
             tIdx = existingText.indexOf(target, tIdx + 1);
           }
         }
-        const newContent = toolArgs.Content ?? toolArgs.content;
-        const append = Boolean(toolArgs.Append ?? toolArgs.append);
         if (typeof newContent === 'string' && !append) {
           const existingBlock = existingText.slice(startIdx, managedEnd);
           if (!newContent.includes(existingBlock)) {
             return (
               'The block between <!-- AGENT-RIG:START --> and <!-- AGENT-RIG:END --> in AGENTS.md is managed by agent-rig (run `rig update` to refresh it). ' +
               'Only edit the `# Project Context` section below <!-- AGENT-RIG:END -->.'
+            );
+          }
+        }
+      }
+
+      const docsStartIdx = existingText.indexOf('<!-- AGENT-RIG:DOCS:START -->');
+      const docsEndIdx = existingText.indexOf('<!-- AGENT-RIG:DOCS:END -->');
+      if (docsStartIdx !== -1 && docsEndIdx !== -1 && docsEndIdx > docsStartIdx) {
+        const docsManagedEnd = docsEndIdx + '<!-- AGENT-RIG:DOCS:END -->'.length;
+        if (typeof target === 'string' && target.length > 0) {
+          let tIdx = existingText.indexOf(target);
+          while (tIdx !== -1) {
+            const tEnd = tIdx + target.length;
+            if (tIdx < docsManagedEnd && tEnd > docsStartIdx) {
+              return (
+                'The block between <!-- AGENT-RIG:DOCS:START --> and <!-- AGENT-RIG:DOCS:END --> in AGENTS.md is managed by agent-rig (run `rig update` or `rig check-docs --fix` to refresh it). ' +
+                'Only edit the `# Project Context` section.'
+              );
+            }
+            tIdx = existingText.indexOf(target, tIdx + 1);
+          }
+        }
+        if (typeof newContent === 'string' && !append) {
+          const existingDocsBlock = existingText.slice(docsStartIdx, docsManagedEnd);
+          if (!newContent.includes(existingDocsBlock)) {
+            return (
+              'The block between <!-- AGENT-RIG:DOCS:START --> and <!-- AGENT-RIG:DOCS:END --> in AGENTS.md is managed by agent-rig (run `rig update` or `rig check-docs --fix` to refresh it). ' +
+              'Only edit the `# Project Context` section.'
             );
           }
         }

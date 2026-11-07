@@ -9,7 +9,7 @@
 //      refs, glob paths like `docs/adr/0001-*.md`, and bare backticked doc paths like  check-doc-links:ignore
 //      `docs/backlog.md` (unless struck through: ~~`docs/gone.md`~~) are banned.       check-doc-links:ignore
 //   3. Every doc under docs/ is reachable by following links from an entry point
-//      a cold session actually starts from (README.md, AGENTS.md, CLAUDE.md,
+//      a cold session actually starts from (AGENTS.md, CLAUDE.md,
 //      GEMINI.md, a SKILL.md, or a rule under rules/ or .claude/rules/).
 //   4. Every backticked path into the repo (`src/…`, `scripts/…`, `hooks/…`, etc.)
 //      names a file that exists — or, when deliberately removed, is struck through:
@@ -19,13 +19,22 @@
 //   6. Code comments cite docs the same way docs do: a `docs/…md` path resolves,
 //      a #fragment names a real heading, and glob paths are banned here too.
 //
-// Usage: node scripts/check-doc-links.mjs [target-dir]
+// Usage: node scripts/check-doc-links.mjs [target-dir] [--fix]
 
-import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import {
+  buildDocsIndexBlock,
+  extractManagedDocsBlock,
+  extractManagedAgentsBlock,
+  mergeManagedAgentsFile,
+} from '../bin/rig.mjs';
 
-const targetRoot = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd();
+const args = process.argv.slice(2);
+const fix = args.includes('--fix');
+const targetArg = args.find((a) => !a.startsWith('-'));
+const targetRoot = targetArg ? path.resolve(targetArg) : process.cwd();
 process.chdir(targetRoot);
 
 const DEFAULTS = {
@@ -95,7 +104,6 @@ const CFG = loadConfig();
 const DOC_ROOTS = CFG.docRoots;
 
 const isEntryPoint = (f) =>
-  f === 'README.md' ||
   f === 'AGENTS.md' ||
   f === 'CLAUDE.md' ||
   f === 'GEMINI.md' ||
@@ -160,10 +168,10 @@ function parseDoc(file) {
   let currentHeading = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.includes('<!-- AGENT-RIG:START -->')) {
+    if (line.includes('<!-- AGENT-RIG:START -->') || line.includes('<!-- AGENT-RIG:DOCS:START -->')) {
       inManagedBlock = true;
     }
-    if (line.includes('<!-- AGENT-RIG:END -->')) {
+    if (line.includes('<!-- AGENT-RIG:END -->') || line.includes('<!-- AGENT-RIG:DOCS:END -->')) {
       inManagedBlock = false;
     }
     if (/^\s*```/.test(line)) {
@@ -270,6 +278,41 @@ const isStealthRepo = (() => {
   }
 })();
 
+if (existsSync('docs') && statSync('docs').isDirectory()) {
+  const expectedBlock = buildDocsIndexBlock(targetRoot);
+  if (expectedBlock) {
+    if (existsSync('AGENTS.md')) {
+      const agentsContent = readFileSync('AGENTS.md', 'utf8');
+      const isRigged =
+        agentsContent.includes('<!-- AGENT-RIG:START -->') ||
+        agentsContent.includes('<!-- AGENT-RIG:DOCS:START -->') ||
+        isOwnRepo;
+      if (isRigged) {
+        const { block: currentDocsBlock, hasBlock } = extractManagedDocsBlock(agentsContent);
+        if (!hasBlock || currentDocsBlock.trim() !== expectedBlock.trim()) {
+          if (fix) {
+            const { block: rulesBlock } = extractManagedAgentsBlock(agentsContent);
+            const updated = mergeManagedAgentsFile(agentsContent, rulesBlock || '', '', expectedBlock);
+            writeFileSync('AGENTS.md', updated, 'utf8');
+            console.log('check-doc-links: updated documentation index in AGENTS.md');
+            if (parsed.has('AGENTS.md')) {
+              parsed.set('AGENTS.md', parseDoc('AGENTS.md'));
+            }
+          } else {
+            errors.push(
+              'AGENTS.md: documentation index is missing or out of date — run `rig check-docs --fix` or `rig update` to refresh it',
+            );
+          }
+        }
+      }
+    } else {
+      if (isOwnRepo) {
+        errors.push('AGENTS.md: missing in repository root — required for documentation index and agent conventions');
+      }
+    }
+  }
+}
+
 function isCommitted(p) {
   if (!existsSync(p)) return false;
   if (isStealthRepo) {
@@ -366,8 +409,9 @@ while (queue.length > 0) {
 }
 
 for (const file of parsed.keys()) {
+  if (file === 'README.md') continue;
   if (!reachable.has(file)) {
-    errors.push(`${file}: orphan — not reachable from README.md, AGENTS.md, CLAUDE.md, any SKILL.md, or rules/`);
+    errors.push(`${file}: orphan — not reachable from AGENTS.md, CLAUDE.md, any SKILL.md, or rules/`);
   }
 }
 

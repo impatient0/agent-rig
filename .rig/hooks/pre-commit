@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+if [ -f "$root/.rig/bin/rig.mjs" ] && command -v node >/dev/null 2>&1; then
+  exec node "$root/.rig/bin/rig.mjs" hook pre-commit "$@"
+fi
 command -v rig >/dev/null 2>&1 && exec rig hook pre-commit "$@"
 [ -x "${HOME:-}/.local/bin/rig" ] && exec "$HOME/.local/bin/rig" hook pre-commit "$@"
-root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; [ -f "$root/.rig/bin/rig.mjs" ] && command -v node >/dev/null 2>&1 && exec node "$root/.rig/bin/rig.mjs" hook pre-commit "$@"
 b="$(git symbolic-ref --short -q HEAD 2>/dev/null)" && { [ "$b" = main ] || [ "$b" = master ]; } && git rev-parse --verify -q HEAD >/dev/null 2>&1 && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] && { echo "pre-commit: refusing direct commit in the main checkout on $b." >&2; exit 1; } || exit 0

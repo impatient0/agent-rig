@@ -17,8 +17,8 @@ Do not gold-plate, add speculative abstractions, or refactor adjacent code outsi
 By default, parallel agent sessions never share a working tree:
 
 1. **Root checkout stays attached to `main` as a merge-only trunk for code** and code files are never edited directly.
-   Documentation and backlog files (`docs/`, `README.md`) may be edited and committed directly on `main`, guarded by automated doc linters in `.rig/hooks/pre-commit`.
-   `hooks/guard-main-checkout-edits.mjs` blocks direct code edits, and `.rig/hooks/pre-commit` ensures only verified merge commits, verified doc-only commits, or `.rig/` / vendored harness asset updates land on `main`.
+   Documentation, backlog, and project context files (`docs/`, `README.md`, `AGENTS.md`) may be edited and committed directly on `main`, guarded by automated doc linters in `.rig/hooks/pre-commit`.
+   `hooks/guard-main-checkout-edits.mjs` blocks direct code edits and edits to the demarcated agent-rig block in `AGENTS.md`, and `.rig/hooks/pre-commit` ensures only verified merge commits, verified doc-only commits, or `.rig/` / vendored harness asset updates land on `main`.
    Standard operations (`git pull`, `git status`) work natively in the root checkout.
 2. **Work happens in a linked git worktree** on a `<type>/<slug>` branch (`feature/<slug>`, `fix/<slug>`, `docs/<slug>`, `chore/<slug>`):
    - When dispatching subagents, spawn each Worker in an isolated worktree using the harness's native worktree-isolation option (or create a worktree under `.worktrees/<slug>`).
@@ -101,9 +101,19 @@ Every Markdown file in a rigged repository follows two mechanical invariants enf
 2. **Resolved, reachable link graph:**
    - Every relative link and `#fragment` heading anchor must resolve.
    - Cross-references to repo docs must use standard Markdown links, never wiki-style brackets, wildcard globs, or bare backticked doc paths.
-   - Every file under `docs/` must be reachable from `README.md`, `AGENTS.md`, `CLAUDE.md`, a `SKILL.md` file under `skills/`, or a rule file under `rules/`.
+   - Every file under `docs/` must be reachable from `AGENTS.md`, `CLAUDE.md`, a `SKILL.md` file under `skills/`, or a rule file under `rules/`.
    - Every backticked repo path (`src/...`, `scripts/...`, `bin/...`, `hooks/...`, `skills/...`, `agents/...`) must exist on disk or be struck through (`~~\`scripts/removed.mjs\`~~`) when documenting a deletion.
 <!-- AGENT-RIG:END -->
+
+<!-- AGENT-RIG:DOCS:START -->
+<!-- Managed by `rig update` / `rig check-docs`. Do not edit between AGENT-RIG:DOCS:START and AGENT-RIG:DOCS:END. -->
+## Documentation Index
+
+- [`docs/backlog.md`](docs/backlog.md) — Backlog (`agent-rig`)
+- [`docs/field-notes.md`](docs/field-notes.md) — Field Notes: Why Each Mechanism Exists
+- [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) — ADR 0001: Record Architecture Decisions and Dual-Protocol Hook Architecture
+- [`docs/adr/0002-two-gear-execution-and-worker-subagent.md`](docs/adr/0002-two-gear-execution-and-worker-subagent.md) — ADR 0002: Two-Gear Execution Model and Isolated Worker Subagent
+<!-- AGENT-RIG:DOCS:END -->
 
 # Project Context (`agent-rig`)
 

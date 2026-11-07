@@ -110,18 +110,19 @@ test('integration: pre-commit hook rejects manual edits to AGENTS.md managed blo
 test('integration: rig update refreshes the demarcated AGENTS.md block and auto-commits on main', () => {
   const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-upd-integ-home-'));
   const repo = mkdtempSync(path.join(tmpdir(), 'rig-upd-integ-repo-'));
+  const { env, cleanup: cleanupEnv } = makeTestEnv(fakeHome);
   try {
     mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
-    installRig({ homeDir: fakeHome, harnesses: ['antigravity'] });
+    installRig({ homeDir: fakeHome, harnesses: ['antigravity'], rigRoot: RIG_ROOT });
 
-    gitCmd(repo, 'init', '-q', '-b', 'main');
-    gitCmd(repo, 'config', 'user.email', 'test@example.com');
-    gitCmd(repo, 'config', 'user.name', 'Test');
-    initRepo(repo, { selfContained: false, homeDir: fakeHome });
+    gitCmd(repo, env, 'init', '-q', '-b', 'main');
+    gitCmd(repo, env, 'config', 'user.email', 'test@example.com');
+    gitCmd(repo, env, 'config', 'user.name', 'Test');
+    initRepo(repo, { selfContained: false, homeDir: fakeHome, rigRoot: RIG_ROOT });
 
     // Initial commit
-    gitCmd(repo, 'add', '-A');
-    gitCmd(repo, 'commit', '-m', 'chore: initial');
+    gitCmd(repo, env, 'add', '-A');
+    gitCmd(repo, env, 'commit', '-m', 'chore: initial');
 
     const agentsPath = path.join(repo, 'AGENTS.md');
     const initialContent = readFileSync(agentsPath, 'utf8');
@@ -132,34 +133,41 @@ test('integration: rig update refreshes the demarcated AGENTS.md block and auto-
       '<!-- Managed by `rig init` / `rig update`. Outdated signature v0. -->',
     );
     writeFileSync(agentsPath, outdated, 'utf8');
-    gitCmd(repo, 'add', 'AGENTS.md');
+    gitCmd(repo, env, 'add', 'AGENTS.md');
     // Commit with --no-verify to simulate historical / pulled commit
-    gitCmd(repo, 'commit', '--no-verify', '-m', 'chore: simulate historical older block');
+    gitCmd(repo, env, 'commit', '--no-verify', '-m', 'chore: simulate historical older block');
 
-    const beforeUpdateSha = gitCmd(repo, 'rev-parse', 'HEAD').stdout.trim();
+    const beforeUpdateSha = gitCmd(repo, env, 'rev-parse', 'HEAD').stdout.trim();
 
     // Run rig update targeting this repo
-    const updRes = updateRig({ homeDir: fakeHome, repoDir: repo });
-    assert.equal(updRes.updatedRepos.length, 1);
-    assert.equal(updRes.updatedRepos[0].committed, true);
+    const origEnv = process.env;
+    process.env = { ...origEnv, ...env };
+    try {
+      const updRes = updateRig({ homeDir: fakeHome, repoDir: repo, rigRoot: RIG_ROOT });
+      assert.equal(updRes.updatedRepos.length, 1);
+      assert.equal(updRes.updatedRepos[0].committed, true);
 
-    const afterUpdateSha = gitCmd(repo, 'rev-parse', 'HEAD').stdout.trim();
-    assert.notEqual(beforeUpdateSha, afterUpdateSha);
+      const afterUpdateSha = gitCmd(repo, env, 'rev-parse', 'HEAD').stdout.trim();
+      assert.notEqual(beforeUpdateSha, afterUpdateSha);
 
-    const lastCommitMsg = gitCmd(repo, 'log', '-1', '--pretty=%B').stdout.trim();
-    assert.match(lastCommitMsg, /chore\(rig\): update agent-rig repository assets/);
-    assert.match(lastCommitMsg, /Unmandated-call: none/);
+      const lastCommitMsg = gitCmd(repo, env, 'log', '-1', '--pretty=%B').stdout.trim();
+      assert.match(lastCommitMsg, /chore\(rig\): update agent-rig repository assets/);
+      assert.match(lastCommitMsg, /Unmandated-call: none/);
 
-    const refreshedContent = readFileSync(agentsPath, 'utf8');
-    assert.doesNotMatch(refreshedContent, /Outdated signature v0/);
-    assert.match(refreshedContent, /Do not edit between AGENT-RIG:START and AGENT-RIG:END/);
+      const refreshedContent = readFileSync(agentsPath, 'utf8');
+      assert.doesNotMatch(refreshedContent, /Outdated signature v0/);
+      assert.match(refreshedContent, /Do not edit between AGENT-RIG:START and AGENT-RIG:END/);
 
-    // Idempotent: running again produces no commit
-    const noopRes = updateRig({ homeDir: fakeHome, repoDir: repo });
-    assert.equal(noopRes.updatedRepos.length, 1);
-    assert.equal(noopRes.updatedRepos[0].committed, false);
-    assert.equal(gitCmd(repo, 'rev-parse', 'HEAD').stdout.trim(), afterUpdateSha);
+      // Idempotent: running again produces no commit
+      const noopRes = updateRig({ homeDir: fakeHome, repoDir: repo, rigRoot: RIG_ROOT });
+      assert.equal(noopRes.updatedRepos.length, 1);
+      assert.equal(noopRes.updatedRepos[0].committed, false);
+      assert.equal(gitCmd(repo, env, 'rev-parse', 'HEAD').stdout.trim(), afterUpdateSha);
+    } finally {
+      process.env = origEnv;
+    }
   } finally {
+    cleanupEnv();
     rmSync(fakeHome, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
   }

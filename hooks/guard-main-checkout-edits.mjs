@@ -49,7 +49,7 @@ export function isDocFile(filePath, repoRoot) {
   const rel = path.relative(repoRoot, filePath);
   if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
   const normalized = rel.split(path.sep).join('/');
-  return normalized === 'README.md' || normalized.startsWith('docs/');
+  return normalized === 'README.md' || normalized === 'AGENTS.md' || normalized.startsWith('docs/');
 }
 
 export function isRiggedRepo(repoRoot) {
@@ -197,13 +197,58 @@ export function checkEditTarget(filePath, options = {}) {
     ensureRepoAttached(targetRoot, { homeDir: options?.homeDir });
   }
 
-  // In a linked worktree, --git-dir is <common>/worktrees/<name>; in the main
-  // checkout the two paths are identical.
-  if (gitDir !== commonDir) return null;
+  const isRigged = isRiggedRepo(topLevel) || isRiggedRepo(repoRoot);
 
   // If the repository is not rigged under agent-rig conventions, permit edits
   // in the main checkout so globally-installed hooks do not block unrigged repos.
-  if (!isRiggedRepo(topLevel) && !isRiggedRepo(repoRoot)) return null;
+  if (!isRigged) return null;
+
+  // Protect the agent-rig managed block in AGENTS.md across both main checkout and worktrees
+  const isAgentsMd =
+    path.resolve(absPath) === path.resolve(topLevel, 'AGENTS.md') ||
+    path.resolve(absPath) === path.resolve(repoRoot, 'AGENTS.md');
+  if (isAgentsMd && existsSync(absPath)) {
+    try {
+      const existingText = readFileSync(absPath, 'utf8');
+      const startIdx = existingText.indexOf('<!-- AGENT-RIG:START -->');
+      const endIdx = existingText.indexOf('<!-- AGENT-RIG:END -->');
+      if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+        const managedEnd = endIdx + '<!-- AGENT-RIG:END -->'.length;
+        const toolArgs = options?.toolArgs ?? {};
+        const target = toolArgs.Target ?? toolArgs.old_string ?? toolArgs.target;
+        if (typeof target === 'string' && target.length > 0) {
+          let tIdx = existingText.indexOf(target);
+          while (tIdx !== -1) {
+            const tEnd = tIdx + target.length;
+            if (tIdx < managedEnd && tEnd > startIdx) {
+              return (
+                'The block between <!-- AGENT-RIG:START --> and <!-- AGENT-RIG:END --> in AGENTS.md is managed by agent-rig (run `rig update` to refresh it). ' +
+                'Only edit the `# Project Context` section below <!-- AGENT-RIG:END -->.'
+              );
+            }
+            tIdx = existingText.indexOf(target, tIdx + 1);
+          }
+        }
+        const newContent = toolArgs.Content ?? toolArgs.content;
+        const append = Boolean(toolArgs.Append ?? toolArgs.append);
+        if (typeof newContent === 'string' && !append) {
+          const existingBlock = existingText.slice(startIdx, managedEnd);
+          if (!newContent.includes(existingBlock)) {
+            return (
+              'The block between <!-- AGENT-RIG:START --> and <!-- AGENT-RIG:END --> in AGENTS.md is managed by agent-rig (run `rig update` to refresh it). ' +
+              'Only edit the `# Project Context` section below <!-- AGENT-RIG:END -->.'
+            );
+          }
+        }
+      }
+    } catch {
+      // ignore read errors
+    }
+  }
+
+  // In a linked worktree, --git-dir is <common>/worktrees/<name>; in the main
+  // checkout the two paths are identical.
+  if (gitDir !== commonDir) return null;
 
   // Documentation and backlog files can be edited directly in the main checkout.
   if (isDocFile(absPath, topLevel)) return null;
@@ -219,7 +264,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
     process.exit(0);
   }
   try {
-    const reason = checkEditTarget(parsed.filePath, { harness: parsed.harness, cwd: parsed.cwd });
+    const reason = checkEditTarget(parsed.filePath, { harness: parsed.harness, cwd: parsed.cwd, toolArgs: parsed.toolArgs });
     if (reason) {
       emitDecision(parsed.schema, 'deny', reason);
     } else {

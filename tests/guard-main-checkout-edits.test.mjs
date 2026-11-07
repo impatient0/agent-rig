@@ -350,3 +350,74 @@ test('checkEditTarget silently auto-attaches core.hooksPath on fresh clone durin
     rmSync(fakeHome2, { recursive: true, force: true });
   }
 });
+
+test('protects agent-rig managed block in AGENTS.md while permitting project context edits', () => {
+  const repo = makeRepoWithWorktree({ rigged: 'hookFile' });
+  try {
+    const agentsPath = path.join(repo.root, 'AGENTS.md');
+    const content = [
+      '<!-- AGENT-RIG:START -->',
+      '<!-- Managed by `rig init` / `rig update`. Do not edit between AGENT-RIG:START and AGENT-RIG:END. -->',
+      '# Universal Agentic Engineering Rules (`agent-rig`)',
+      'Rules go here.',
+      '<!-- AGENT-RIG:END -->',
+      '',
+      '# Project Context',
+      'This is custom project notes.',
+    ].join('\n');
+    writeFileSync(agentsPath, content, 'utf8');
+    writeFileSync(path.join(repo.wt, 'AGENTS.md'), content, 'utf8');
+
+    // 1. Edit targeting inside the managed block on main checkout should be DENIED
+    const deniedMain = checkEditTarget(agentsPath, {
+      harness: 'antigravity',
+      toolArgs: { Target: 'Rules go here.' },
+    });
+    assert.ok(deniedMain);
+    assert.match(deniedMain, /managed by agent-rig/);
+
+    // 2. Edit targeting inside the managed block in a worktree should ALSO be DENIED
+    const deniedWt = checkEditTarget(path.join(repo.wt, 'AGENTS.md'), {
+      harness: 'claude',
+      toolArgs: { old_string: 'Rules go here.' },
+    });
+    assert.ok(deniedWt);
+    assert.match(deniedWt, /managed by agent-rig/);
+
+    // 3. Edit targeting # Project Context on main checkout should be ALLOWED
+    const allowedMain = checkEditTarget(agentsPath, {
+      harness: 'antigravity',
+      toolArgs: { Target: 'This is custom project notes.' },
+    });
+    assert.equal(allowedMain, null);
+
+    // 4. Overwrite write_file that strips or modifies the managed block should be DENIED
+    const deniedOverwrite = checkEditTarget(agentsPath, {
+      harness: 'antigravity',
+      toolArgs: { Content: '# New Content without managed block\n', Append: false },
+    });
+    assert.ok(deniedOverwrite);
+    assert.match(deniedOverwrite, /managed by agent-rig/);
+
+    // 5. Overwrite write_file that preserves the managed block should be ALLOWED
+    const allowedOverwrite = checkEditTarget(agentsPath, {
+      harness: 'antigravity',
+      toolArgs: {
+        Content: [
+          '<!-- AGENT-RIG:START -->',
+          '<!-- Managed by `rig init` / `rig update`. Do not edit between AGENT-RIG:START and AGENT-RIG:END. -->',
+          '# Universal Agentic Engineering Rules (`agent-rig`)',
+          'Rules go here.',
+          '<!-- AGENT-RIG:END -->',
+          '',
+          '# Project Context',
+          'Updated project notes.',
+        ].join('\n'),
+        Append: false,
+      },
+    });
+    assert.equal(allowedOverwrite, null);
+  } finally {
+    repo.cleanup();
+  }
+});

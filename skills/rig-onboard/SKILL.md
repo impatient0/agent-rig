@@ -52,12 +52,15 @@ the user decides whether the global rule wins or the project opts out (`rig init
 ## Step 3 — Port the Legacy Agent File Into `AGENTS.md`
 
 Follow the "Writing a Per-Project `AGENTS.md`" section of the `agent-rig` README:
-1. **Keep only what a cold session cannot infer quickly:**
+1. **Preserve the demarcated agent-rig block:**
+   `rig init` provisions a managed `<!-- AGENT-RIG:START --> ... <!-- AGENT-RIG:END -->` block at the top containing universal rules;
+   port project facts into the `# Project Context` section below this block.
+2. **Keep only what a cold session cannot infer quickly:**
    purpose and stack, exact build/test/verification commands, non-obvious domain invariants and footguns, infrastructure safety rules, and entry-point links to the project's docs.
-2. **Drop what the global rules already say:**
+3. **Drop what universal rules already say:**
    generic principles, debugging protocols, commit discipline, doc hygiene, definition of done, and harness-specific instructions (Plan Mode, a specific harness's task list).
-3. **Delete the legacy file** and replace every reference found in Step 1 with `AGENTS.md`, including HTML mockups and code comments.
-4. Never rewrite git history to remove old attribution trailers or session links;
+4. **Delete the legacy file** and replace every reference found in Step 1 with `AGENTS.md`, including HTML mockups and code comments.
+5. Never rewrite git history to remove old attribution trailers or session links;
    history stays as it was.
 
 ---

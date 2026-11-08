@@ -33,6 +33,15 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
   how external contributors and headless CI runners in non-Node repositories run doc verification if verification delegates to the host `rig` CLI;
   whether doc link checking and reflow formatting can be implemented in portable POSIX shell / awk or distributed as tiny static utility binaries.
 
+- **Deterministic Gear 2 orchestrator subcommand (`rig dispatch`) invoked transitively from Gear 1:**
+  Under [`docs/adr/0002-two-gear-execution-and-worker-subagent.md`](adr/0002-two-gear-execution-and-worker-subagent.md), Gear 2 autonomous wave execution ([`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md)) currently relies on the host harness's prompt-driven subagent tools to enforce the `Triage -> Worktree -> Worker -> Cold Verifier -> Merge Gate` state machine, the five hard stop triggers in [`agents/worker.md`](../agents/worker.md), and read-only Cold Verifier isolation in [`agents/verifier.md`](../agents/verifier.md).
+  Moving the Gear 2 state machine into a native `rig` CLI orchestrator subcommand (`bin/rig.mjs`) would allow the interactive Gear 1 session to stay inside the developer's preferred host harness (Antigravity, Claude Code, Cursor, or Codex) and invoke Gear 2 transitively as a deterministic tool.
+  `rig` would manage worktree creation, bind Worker `cwd` roots, enforce modified-file-count caps (Stop Trigger #4) and consecutive test-failure limits (Stop Trigger #5) in code rather than prose, run the Cold Verifier in a clean read-only/test-only context without the Worker's transcript, and pause cleanly in `.worktrees/<slug>` whenever a Stop Trigger fires so the developer and main session can seamlessly downshift to Gear 1 in the same conversation before resuming the wave.
+  Key trade-offs and open questions:
+  whether Worker and Verifier execution turns inside `rig` should wrap headless host harness CLIs (preserving flat-rate subscription billing), call provider APIs directly (BYOK), or embed a lightweight open-source agent loop;
+  how paused Worker contexts are suspended and resumed across interactive Gear 1 interventions when an architectural fork (Stop Trigger #2) is resolved in chat;
+  whether deterministic state gates should first land as lightweight `rig` subcommands called by existing harness subagents before building a full headless runner loop.
+
 ## Waiting on an external trigger
 
 - **Optional Playwright `browser-driver` plugin/skill:**

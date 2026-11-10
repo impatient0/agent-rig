@@ -45,7 +45,12 @@ import {
   extractManagedAgentsBlock,
   parseAdrStatus,
   isEphemeralDoc,
+  parseDocFrontmatter,
+  isCollectionDir,
+  findCollectionDirs,
+  buildCollectionDocsIndexBlock,
   buildDocsIndexBlock,
+  updateDocManagedDocsBlock,
   extractManagedDocsBlock,
   mergeManagedAgentsFile,
 } from '../scripts/check-doc-links.mjs';
@@ -60,7 +65,12 @@ export {
   extractManagedAgentsBlock,
   parseAdrStatus,
   isEphemeralDoc,
+  parseDocFrontmatter,
+  isCollectionDir,
+  findCollectionDirs,
+  buildCollectionDocsIndexBlock,
   buildDocsIndexBlock,
+  updateDocManagedDocsBlock,
   extractManagedDocsBlock,
   mergeManagedAgentsFile,
 };
@@ -363,6 +373,7 @@ export function buildManagedAgentsBlock(resolvedProfile, { rigRoot = RIG_ROOT, i
 
   return `${MANAGED_AGENTS_START}\n${MANAGED_AGENTS_HEADER}\n${hydrated.trim()}\n${MANAGED_AGENTS_END}`;
 }
+
 
 export function copyOrHydrateDir(
   srcDir,
@@ -1473,6 +1484,31 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
     }
   }
 
+  const docsDir = path.join(dir, 'docs');
+  if (existsSync(docsDir)) {
+    try {
+      if (statSync(docsDir).isDirectory()) {
+        const colDirs = findCollectionDirs(docsDir);
+        for (const cDir of colDirs) {
+          const readmePath = path.join(cDir, 'README.md');
+          if (existsSync(readmePath)) {
+            const existing = readFileSync(readmePath, 'utf8');
+            const expectedBlock = buildCollectionDocsIndexBlock(cDir, dir);
+            if (expectedBlock) {
+              const updated = updateDocManagedDocsBlock(existing, expectedBlock);
+              if (updated !== existing) {
+                writeFileSync(readmePath, updated, 'utf8');
+                copied.push(readmePath);
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   // If the repo was initialized with --self-contained, refresh static rig assets without touching AGENTS.md or docs/
   const isSelfContained = isSelfContainedRepo(dir);
 
@@ -2535,6 +2571,31 @@ export function initRepo(
   writeFileSync(agentsPath, mergedAgents, 'utf8');
   copied.push(agentsPath);
 
+  const initDocsDir = path.join(dir, 'docs');
+  if (existsSync(initDocsDir)) {
+    try {
+      if (statSync(initDocsDir).isDirectory()) {
+        const colDirs = findCollectionDirs(initDocsDir);
+        for (const cDir of colDirs) {
+          const readmePath = path.join(cDir, 'README.md');
+          if (existsSync(readmePath)) {
+            const existing = readFileSync(readmePath, 'utf8');
+            const expectedBlock = buildCollectionDocsIndexBlock(cDir, dir);
+            if (expectedBlock) {
+              const updated = updateDocManagedDocsBlock(existing, expectedBlock);
+              if (updated !== existing) {
+                writeFileSync(readmePath, updated, 'utf8');
+                copied.push(readmePath);
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   if (homeDir !== false) {
     writeRigState(homeDir || homedir(), { initializedRepos: [mainCheckout] });
   }
@@ -2856,6 +2917,51 @@ export function runPreCommitHook(targetDir = process.cwd()) {
                 'The block between <!-- AGENT-RIG:DOCS:START --> and <!-- AGENT-RIG:DOCS:END --> is managed by agent-rig.\n' +
                 "Run 'rig update' or 'rig check-docs --fix' to refresh it, or restore the block from HEAD.\n",
             };
+          }
+        }
+      }
+
+      for (const line of stagedLines) {
+        const tabIdx = line.indexOf('\t');
+        if (tabIdx === -1) continue;
+        const status = line.slice(0, tabIdx).trim();
+        if (status === 'D') continue;
+        const stagedFile = line.slice(tabIdx + 1).trim().replace(/\\/g, '/');
+        if (stagedFile !== 'AGENTS.md' && stagedFile.endsWith('README.md') && stagedFile.startsWith('docs/')) {
+          const colShow = git('show', `:${stagedFile}`);
+          if (colShow.status === 0) {
+            const { block: stagedDocsBlock, hasBlock: stagedHasDocsBlock } = extractManagedDocsBlock(colShow.stdout);
+            if (stagedHasDocsBlock) {
+              let docsMatches = false;
+              const headShow = git('show', `HEAD:${stagedFile}`);
+              if (headShow.status === 0) {
+                const { block: headDocsBlock, hasBlock: headHasDocsBlock } = extractManagedDocsBlock(headShow.stdout);
+                if (headHasDocsBlock && headDocsBlock.trim() === stagedDocsBlock.trim()) {
+                  docsMatches = true;
+                }
+              }
+              if (!docsMatches) {
+                try {
+                  const colDir = path.dirname(path.join(repoRoot, stagedFile));
+                  const canonicalDocsBlock = buildCollectionDocsIndexBlock(colDir, repoRoot);
+                  if (canonicalDocsBlock.trim() === stagedDocsBlock.trim()) {
+                    docsMatches = true;
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+              if (!docsMatches) {
+                return {
+                  status: 1,
+                  stdout: '',
+                  stderr:
+                    `pre-commit: refusing commit with modified agent-rig documentation index in ${stagedFile}.\n` +
+                    'The block between <!-- AGENT-RIG:DOCS:START --> and <!-- AGENT-RIG:DOCS:END --> is managed by agent-rig.\n' +
+                    "Run 'rig update' or 'rig check-docs --fix' to refresh it, or restore the block from HEAD.\n",
+                };
+              }
+            }
           }
         }
       }

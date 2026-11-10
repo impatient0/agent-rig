@@ -44,6 +44,8 @@ Scan the session from the first turn to the last for four categories of knowledg
 ## Step 3 — Cold-Session Reachability Check & Worktree Commit
 
 Verify that every new or updated document under `docs/` is linked from an entry point a fresh agent session reads (`AGENTS.md`, `CLAUDE.md`, a `SKILL.md` file under `skills/`, or a rule file under `rules/`).
+Verify that new permanent docs include a concise frontmatter `description` to keep the documentation index informative.
+If adding a grouped set of documents in a subdirectory, add a `README.md` with `collection: true` frontmatter so `rig check-docs --fix` generates its local index and preserves BFS reachability from `AGENTS.md`.
 Re-run the doc linters and commit all documentation changes directly to the feature branch inside the worktree before proceeding to merge.
 
 ---

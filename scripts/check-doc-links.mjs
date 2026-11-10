@@ -47,6 +47,44 @@ export function extractManagedAgentsBlock(content) {
   return { block, before, after, hasBlock: true };
 }
 
+export function parseDocFrontmatter(content) {
+  if (typeof content !== 'string') return {};
+  const cleaned = content.replace(/^\uFEFF/, '');
+  const match = cleaned.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return {};
+  const raw = match[1];
+  const result = {};
+  const lines = raw.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const keyMatch = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+    if (!keyMatch) continue;
+    const key = keyMatch[1];
+    let val = keyMatch[2].trim();
+    if (/^true\b/i.test(val)) {
+      result[key] = true;
+      continue;
+    }
+    if (/^false\b/i.test(val)) {
+      result[key] = false;
+      continue;
+    }
+    if (val === '>' || val === '>-' || val === '|' || val === '|-') {
+      const collected = [];
+      while (i + 1 < lines.length && /^\s+/.test(lines[i + 1])) {
+        i++;
+        collected.push(lines[i].trim());
+      }
+      val = collected.join(' ').trim();
+    }
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    result[key] = val.trim();
+  }
+  return result;
+}
+
 export function parseAdrStatus(filePath) {
   if (!existsSync(filePath)) return null;
   let content = '';
@@ -74,7 +112,12 @@ export function parseAdrStatus(filePath) {
   if (statusTag) {
     statusTag = statusTag.replace(/\.+$/, '').trim();
   }
-  return { title, rawStatus, statusTag };
+  const fm = parseDocFrontmatter(content);
+  const res = { title, rawStatus, statusTag };
+  if (fm.description) {
+    res.description = fm.description;
+  }
+  return res;
 }
 
 export function isEphemeralDoc(filePath, content) {
@@ -83,6 +126,8 @@ export function isEphemeralDoc(filePath, content) {
     return true;
   }
   if (typeof content === 'string') {
+    const fm = parseDocFrontmatter(content);
+    if (fm.ephemeral === true) return true;
     if (/^---\n[\s\S]*?\bephemeral:\s*true\b[\s\S]*?\n---/m.test(content)) return true;
     if (/<!--\s*ephemeral\s*-->/i.test(content)) return true;
     if (/delete this file (?:when|after|once)\b/i.test(content)) return true;
@@ -90,7 +135,199 @@ export function isEphemeralDoc(filePath, content) {
   return false;
 }
 
-export function buildDocsIndexBlock(repoRoot = process.cwd()) {
+export function isCollectionDir(dirPath) {
+  if (!dirPath || !existsSync(dirPath)) return false;
+  try {
+    if (!statSync(dirPath).isDirectory()) return false;
+    const readmePath = path.join(dirPath, 'README.md');
+    if (!existsSync(readmePath) || !statSync(readmePath).isFile()) return false;
+    const content = readFileSync(readmePath, 'utf8');
+    const fm = parseDocFrontmatter(content);
+    return fm.collection === true;
+  } catch {
+    return false;
+  }
+}
+
+export function findCollectionDirs(docsDir) {
+  if (!docsDir || !existsSync(docsDir)) return [];
+  const results = [];
+  function scan(currentDir) {
+    try {
+      const entries = readdirSync(currentDir).sort();
+      for (const entry of entries) {
+        if (entry === 'epics') continue;
+        const fullPath = path.join(currentDir, entry);
+        try {
+          if (statSync(fullPath).isDirectory()) {
+            if (isCollectionDir(fullPath)) {
+              results.push(fullPath);
+            }
+            scan(fullPath);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  scan(docsDir);
+  return results;
+}
+
+export function buildCollectionDocsIndexBlock(collectionDir, repoRoot = process.cwd()) {
+  const absCollectionDir = path.isAbsolute(collectionDir) ? collectionDir : path.resolve(repoRoot, collectionDir);
+  if (!existsSync(absCollectionDir)) return '';
+  try {
+    if (!statSync(absCollectionDir).isDirectory()) return '';
+  } catch {
+    return '';
+  }
+
+  const items = [];
+
+  // 1. Immediate markdown files in collectionDir (excluding README.md)
+  try {
+    const topFiles = readdirSync(absCollectionDir)
+      .filter((f) => f.endsWith('.md') && f !== 'README.md' && statSync(path.join(absCollectionDir, f)).isFile())
+      .sort();
+    for (const f of topFiles) {
+      const fullPath = path.join(absCollectionDir, f);
+      const content = readFileSync(fullPath, 'utf8');
+      const relForEphemeral = path.relative(repoRoot, fullPath).replace(/\\/g, '/');
+      if (isEphemeralDoc(relForEphemeral, content)) continue;
+      const fm = parseDocFrontmatter(content);
+      const h1Match = content.match(/^\s*#\s+(.+)$/m);
+      const title = h1Match ? h1Match[1].trim() : f;
+      items.push({
+        relPath: f,
+        title,
+        statusTag: null,
+        description: fm.description || null,
+      });
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2. ADR files in adr/ if present
+  const adrDir = path.join(absCollectionDir, 'adr');
+  if (existsSync(adrDir)) {
+    if (isCollectionDir(adrDir)) {
+      try {
+        const readmePath = path.join(adrDir, 'README.md');
+        const content = readFileSync(readmePath, 'utf8');
+        const fm = parseDocFrontmatter(content);
+        const h1Match = content.match(/^\s*#\s+(.+)$/m);
+        const title = h1Match ? h1Match[1].trim() : 'adr';
+        items.push({
+          relPath: 'adr/README.md',
+          title,
+          statusTag: null,
+          description: fm.description || null,
+        });
+      } catch {
+        // ignore
+      }
+    } else {
+      try {
+        const adrFiles = readdirSync(adrDir)
+          .filter((f) => f.endsWith('.md') && statSync(path.join(adrDir, f)).isFile())
+          .sort();
+        for (const f of adrFiles) {
+          const fullPath = path.join(adrDir, f);
+          const { title, statusTag, description = null } = parseAdrStatus(fullPath) || {};
+          items.push({
+            relPath: `adr/${f}`,
+            title: title || f,
+            statusTag: statusTag || null,
+            description: description || null,
+          });
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  // 3. Subdirectories in collectionDir (excluding epics and adr)
+  try {
+    const subEntries = readdirSync(absCollectionDir)
+      .filter((entry) => {
+        if (entry === 'adr' || entry === 'epics') return false;
+        const subPath = path.join(absCollectionDir, entry);
+        return statSync(subPath).isDirectory();
+      })
+      .sort();
+
+    function walkColSubdir(subRel) {
+      const subDir = path.join(absCollectionDir, subRel);
+      if (isCollectionDir(subDir)) {
+        const readmePath = path.join(subDir, 'README.md');
+        const content = readFileSync(readmePath, 'utf8');
+        const fm = parseDocFrontmatter(content);
+        const h1Match = content.match(/^\s*#\s+(.+)$/m);
+        const title = h1Match ? h1Match[1].trim() : path.basename(subDir);
+        items.push({
+          relPath: path.join(subRel, 'README.md').replace(/\\/g, '/'),
+          title,
+          statusTag: null,
+          description: fm.description || null,
+        });
+        return;
+      }
+      for (const entry of readdirSync(subDir).sort()) {
+        const fullPath = path.join(subDir, entry);
+        const rel = path.join(subRel, entry).replace(/\\/g, '/');
+        const st = statSync(fullPath);
+        if (st.isDirectory()) {
+          walkColSubdir(rel);
+        } else if (st.isFile() && entry.endsWith('.md')) {
+          const content = readFileSync(fullPath, 'utf8');
+          const relForEphemeral = path.relative(repoRoot, fullPath).replace(/\\/g, '/');
+          if (isEphemeralDoc(relForEphemeral, content)) continue;
+          const fm = parseDocFrontmatter(content);
+          const h1Match = content.match(/^\s*#\s+(.+)$/m);
+          const title = h1Match ? h1Match[1].trim() : entry;
+          items.push({ relPath: rel, title, statusTag: null, description: fm.description || null });
+        }
+      }
+    }
+
+    for (const sub of subEntries) {
+      walkColSubdir(sub);
+    }
+  } catch {
+    // ignore
+  }
+
+  if (items.length === 0) return '';
+
+  const lines = [
+    MANAGED_DOCS_START,
+    MANAGED_DOCS_HEADER,
+    '## Documentation Index',
+    '',
+  ];
+  for (const item of items) {
+    const tag = item.statusTag ? ` (${item.statusTag})` : '';
+    const desc = item.description ? ` — ${item.description}` : '';
+    lines.push(`- [\`${item.relPath}\`](${item.relPath}) — ${item.title}${tag}${desc}`);
+  }
+  lines.push(MANAGED_DOCS_END);
+  return lines.join('\n');
+}
+
+export function buildDocsIndexBlock(repoRoot = process.cwd(), targetCollectionRel = null) {
+  if (targetCollectionRel) {
+    const colDir = path.isAbsolute(targetCollectionRel)
+      ? targetCollectionRel
+      : path.resolve(repoRoot, targetCollectionRel);
+    return buildCollectionDocsIndexBlock(colDir, repoRoot);
+  }
+
   const docsDir = path.join(repoRoot, 'docs');
   if (!existsSync(docsDir)) return '';
   try {
@@ -110,9 +347,10 @@ export function buildDocsIndexBlock(repoRoot = process.cwd()) {
       const fullPath = path.join(docsDir, f);
       const content = readFileSync(fullPath, 'utf8');
       if (isEphemeralDoc(`docs/${f}`, content)) continue;
+      const fm = parseDocFrontmatter(content);
       const h1Match = content.match(/^\s*#\s+(.+)$/m);
       const title = h1Match ? h1Match[1].trim() : f;
-      items.push({ relPath: `docs/${f}`, title, statusTag: null });
+      items.push({ relPath: `docs/${f}`, title, statusTag: null, description: fm.description || null });
     }
   } catch {
     // ignore
@@ -121,17 +359,30 @@ export function buildDocsIndexBlock(repoRoot = process.cwd()) {
   // 2. ADR files in docs/adr
   const adrDir = path.join(docsDir, 'adr');
   if (existsSync(adrDir)) {
-    try {
-      const adrFiles = readdirSync(adrDir)
-        .filter((f) => f.endsWith('.md') && statSync(path.join(adrDir, f)).isFile())
-        .sort();
-      for (const f of adrFiles) {
-        const fullPath = path.join(adrDir, f);
-        const { title, statusTag } = parseAdrStatus(fullPath) || {};
-        items.push({ relPath: `docs/adr/${f}`, title: title || f, statusTag: statusTag || null });
+    if (isCollectionDir(adrDir)) {
+      try {
+        const readmePath = path.join(adrDir, 'README.md');
+        const content = readFileSync(readmePath, 'utf8');
+        const fm = parseDocFrontmatter(content);
+        const h1Match = content.match(/^\s*#\s+(.+)$/m);
+        const title = h1Match ? h1Match[1].trim() : 'adr';
+        items.push({ relPath: 'docs/adr/README.md', title, statusTag: null, description: fm.description || null });
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
+    } else {
+      try {
+        const adrFiles = readdirSync(adrDir)
+          .filter((f) => f.endsWith('.md') && statSync(path.join(adrDir, f)).isFile())
+          .sort();
+        for (const f of adrFiles) {
+          const fullPath = path.join(adrDir, f);
+          const { title, statusTag, description = null } = parseAdrStatus(fullPath) || {};
+          items.push({ relPath: `docs/adr/${f}`, title: title || f, statusTag: statusTag || null, description: description || null });
+        }
+      } catch {
+        // ignore
+      }
     }
   }
 
@@ -147,6 +398,20 @@ export function buildDocsIndexBlock(repoRoot = process.cwd()) {
 
     function walkSubdir(subRel) {
       const subDir = path.join(repoRoot, subRel);
+      if (isCollectionDir(subDir)) {
+        const readmePath = path.join(subDir, 'README.md');
+        const content = readFileSync(readmePath, 'utf8');
+        const fm = parseDocFrontmatter(content);
+        const h1Match = content.match(/^\s*#\s+(.+)$/m);
+        const title = h1Match ? h1Match[1].trim() : path.basename(subDir);
+        items.push({
+          relPath: path.join(subRel, 'README.md').replace(/\\/g, '/'),
+          title,
+          statusTag: null,
+          description: fm.description || null,
+        });
+        return;
+      }
       for (const entry of readdirSync(subDir).sort()) {
         const fullPath = path.join(subDir, entry);
         const rel = path.join(subRel, entry).replace(/\\/g, '/');
@@ -156,9 +421,10 @@ export function buildDocsIndexBlock(repoRoot = process.cwd()) {
         } else if (st.isFile() && entry.endsWith('.md')) {
           const content = readFileSync(fullPath, 'utf8');
           if (isEphemeralDoc(rel, content)) continue;
+          const fm = parseDocFrontmatter(content);
           const h1Match = content.match(/^\s*#\s+(.+)$/m);
           const title = h1Match ? h1Match[1].trim() : entry;
-          items.push({ relPath: rel, title, statusTag: null });
+          items.push({ relPath: rel, title, statusTag: null, description: fm.description || null });
         }
       }
     }
@@ -180,10 +446,26 @@ export function buildDocsIndexBlock(repoRoot = process.cwd()) {
   ];
   for (const item of items) {
     const tag = item.statusTag ? ` (${item.statusTag})` : '';
-    lines.push(`- [\`${item.relPath}\`](${item.relPath}) — ${item.title}${tag}`);
+    const desc = item.description ? ` — ${item.description}` : '';
+    lines.push(`- [\`${item.relPath}\`](${item.relPath}) — ${item.title}${tag}${desc}`);
   }
   lines.push(MANAGED_DOCS_END);
   return lines.join('\n');
+}
+
+export function updateDocManagedDocsBlock(content, newBlock) {
+  const { hasBlock, before, after } = extractManagedDocsBlock(content);
+  if (hasBlock) {
+    if (!newBlock) {
+      const b = before.trimEnd();
+      const a = after.trim();
+      return b && a ? `${b}\n\n${a}\n` : b ? `${b}\n` : a ? `${a}\n` : '';
+    }
+    return before + newBlock + after;
+  }
+  if (!newBlock) return content;
+  const trimmed = (content || '').trimEnd();
+  return trimmed ? `${trimmed}\n\n${newBlock}\n` : `${newBlock}\n`;
 }
 
 export function extractManagedDocsBlock(content) {
@@ -514,6 +796,32 @@ export function runCli(argv = process.argv.slice(2)) {
       } else {
         if (isOwnRepo) {
           errors.push('AGENTS.md: missing in repository root — required for documentation index and agent conventions');
+        }
+      }
+    }
+
+    const colDirs = findCollectionDirs(path.join(targetRoot, 'docs'));
+    for (const cDir of colDirs) {
+      const relReadme = path.relative(targetRoot, path.join(cDir, 'README.md')).replace(/\\/g, '/');
+      const readmePath = path.join(cDir, 'README.md');
+      if (existsSync(readmePath)) {
+        const expectedColBlock = buildCollectionDocsIndexBlock(cDir, targetRoot);
+        const colContent = readFileSync(readmePath, 'utf8');
+        const { block: currentColBlock, hasBlock: colHasBlock } = extractManagedDocsBlock(colContent);
+        if (expectedColBlock) {
+          if (!colHasBlock || currentColBlock.trim() !== expectedColBlock.trim()) {
+            if (fix) {
+              const updated = updateDocManagedDocsBlock(colContent, expectedColBlock);
+              writeFileSync(readmePath, updated, 'utf8');
+              console.log(`check-doc-links: updated documentation index in ${relReadme}`);
+              const normRel = path.normalize(relReadme);
+              parsed.set(normRel, parseDoc(normRel, CFG));
+            } else {
+              errors.push(
+                `${relReadme}: documentation index is missing or out of date — run \`rig check-docs --fix\` or \`rig update\` to refresh it`,
+              );
+            }
+          }
         }
       }
     }

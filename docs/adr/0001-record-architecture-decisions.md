@@ -1,3 +1,7 @@
+---
+description: Record architectural decisions in docs/adr/ and separate hook payload schema from harness identity.
+---
+
 # ADR 0001: Record Architecture Decisions and Dual-Protocol Hook Architecture
 
 ## Status

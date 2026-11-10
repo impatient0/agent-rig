@@ -1,3 +1,7 @@
+---
+description: Two-gear execution model separating interactive pairing from autonomous dispatch with isolated worker subagents.
+---
+
 # ADR 0002: Two-Gear Execution Model and Isolated Worker Subagent
 
 ## Status

@@ -37,6 +37,14 @@ Inspect each file under `docs/` (especially ADRs under [`docs/adr/0001-record-ar
 
 ---
 
+## Step 4 — Frontmatter Descriptions & Subdirectory Collections
+
+1. Ensure permanent documentation files under `docs/` provide a concise, single-sentence frontmatter `description` (`--- ... description: ... ---`) so the generated documentation index in `AGENTS.md` explains each document's purpose without opening it.
+2. When a topic directory under `docs/` grows to contain multiple related documents, organize it as a collection by placing a `README.md` with `collection: true` and a `description` in its frontmatter.
+   The parent index will emit a single entry pointing to that `README.md`, which automatically maintains its own local documentation index block covering member documents and sub-collections.
+
+---
+
 ## Output Format
 
 Return a documentation audit report using this exact structure:

@@ -17,6 +17,9 @@ Execute candidate tasks under **Gear 2 (Autonomous Dispatch)** through a **Tech 
 
 ## Step 1 — Ground & Triage (The `Open Decisions = 0` Boundary)
 
+Before spawning any subagents, verify that the root checkout is on `main` (or `master`) with a clean working tree (`git status --short`).
+Because harness worktree sharing (such as `Workspace: "share"`) copies uncommitted working-tree edits from the root checkout into every spawned Worker worktree, halt and prompt the user if uncommitted changes exist (or commit pending [`docs/backlog.md`](../../docs/backlog.md) edits on `main` first if authorized).
+
 Read the candidate items (from [`docs/backlog.md`](../../docs/backlog.md) or the user's prompt) and inspect the live codebase files they touch.
 Explore the codebase **only** until high-level ambiguity is cleared and zero open product, UX, or architectural decisions remain.
 Partition every candidate item into one of two buckets:
@@ -45,10 +48,14 @@ Do not try to "make the Worker's life easier" by pre-solving local implementatio
 Messy local discovery, edge-case wiring, and test fixture authoring belong to the Worker;
 if the Worker genuinely hits an architectural fork or unexpected wall, the 5 Stop Triggers exist to escalate back to the Tech Lead.
 
-**Parallel Wave Dispatch Over Conflict Aversion:**
-Do not serialize slices into separate waves or linear branch stacks merely because they touch the same files (such as shared CLI entry points, `README.md`, or shared test files).
-Sequence Slice B into a later wave **only** when Slice B functionally depends on a runtime contract, helper, or module introduced by Slice A.
-Otherwise, dispatch up to **3 Bucket 1 slices concurrently** off `main` in the same turn and rely on the **On-Hold in Worktree** lifecycle (`git merge main` inside the Worker's worktree) to resolve textual merge collisions when landing on `main`.
+**Parallel Wave Dispatch vs. Anticipated Structural Conflicts:**
+Do not serialize slices into separate waves merely because they touch independent regions of the same file (such as separate CLI subcommands, separate sections of `README.md`, or separate test cases in a shared test file).
+However, sequence Slice B behind Slice A (into the next wave or a linear branch stack) when:
+1. Slice B functionally depends on a runtime contract, helper, or module introduced by Slice A.
+2. Slice A performs a structural or code-motion refactor (moving, extracting, renaming, or rewriting the exact functions or code blocks that Slice B must modify), where running in parallel would force Worker B to implement against an obsolete layout and manually re-port its changes during conflict resolution.
+3. The backlog item or user explicitly specifies an execution order.
+
+For genuinely independent slices (including those with only incidental, localized file overlap), dispatch up to **3 Bucket 1 slices concurrently** off `main` in the same turn and rely on the **On-Hold in Worktree** lifecycle (`git merge main` inside the Worker's worktree) to resolve minor textual collisions when landing on `main`.
 In the same turn (or while Workers run in the background), present the exact, code-grounded questions for Bucket 2 to the user.
 
 ---

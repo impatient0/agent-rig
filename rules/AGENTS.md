@@ -45,7 +45,7 @@ Work is structured into two explicit, user-selected operational gears while pres
    Invoked explicitly when the user requests `/dispatch`, "sweep the backlog", or runs a multi-slice implementation plan.
    The main session operates as a **Tech Lead Orchestrator**:
    it grounds candidate items only until the `Open Decisions = 0` boundary, partitions tasks into **Bucket 1 (Dispatch Now)** and **Bucket 2 (Ask User First)**, dispatches isolated **Worker** subagents governed by [`agents/worker.md`](../agents/worker.md) in linked worktrees, and audits each completed Worker branch with a fresh **Verifier** subagent.
-   The Tech Lead must stop investigating as soon as high-level ambiguity is cleared rather than pre-solving local implementation details or writing code in Task Briefs, must dispatch functionally independent slices concurrently rather than serializing them out of file-conflict aversion, and updates the backlog (`docs/`) directly on `main` after a wave is merged rather than delegating backlog edits to Workers.
+   The Tech Lead must stop investigating as soon as high-level ambiguity is cleared rather than pre-solving local implementation details or writing code in Task Briefs, must verify a clean `main` working tree before spawning subagents, must dispatch independent slices concurrently while sequencing slices that have functional dependencies or anticipated structural/code-motion conflicts, and updates the backlog (`docs/`) directly on `main` after a wave is merged rather than delegating backlog edits to Workers.
 
 ### Human-Gated Boundaries (UI & Domain Contracts)
 

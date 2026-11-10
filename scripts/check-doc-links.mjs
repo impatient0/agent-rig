@@ -26,6 +26,9 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import {
   buildDocsIndexBlock,
+  buildCollectionDocsIndexBlock,
+  findCollectionDirs,
+  updateDocManagedDocsBlock,
   extractManagedDocsBlock,
   extractManagedAgentsBlock,
   mergeManagedAgentsFile,
@@ -308,6 +311,32 @@ if (existsSync('docs') && statSync('docs').isDirectory()) {
     } else {
       if (isOwnRepo) {
         errors.push('AGENTS.md: missing in repository root — required for documentation index and agent conventions');
+      }
+    }
+  }
+
+  const colDirs = findCollectionDirs(path.join(targetRoot, 'docs'));
+  for (const cDir of colDirs) {
+    const relReadme = path.relative(targetRoot, path.join(cDir, 'README.md')).replace(/\\/g, '/');
+    const readmePath = path.join(cDir, 'README.md');
+    if (existsSync(readmePath)) {
+      const expectedColBlock = buildCollectionDocsIndexBlock(cDir, targetRoot);
+      const colContent = readFileSync(readmePath, 'utf8');
+      const { block: currentColBlock, hasBlock: colHasBlock } = extractManagedDocsBlock(colContent);
+      if (expectedColBlock) {
+        if (!colHasBlock || currentColBlock.trim() !== expectedColBlock.trim()) {
+          if (fix) {
+            const updated = updateDocManagedDocsBlock(colContent, expectedColBlock);
+            writeFileSync(readmePath, updated, 'utf8');
+            console.log(`check-doc-links: updated documentation index in ${relReadme}`);
+            const normRel = path.normalize(relReadme);
+            parsed.set(normRel, parseDoc(normRel));
+          } else {
+            errors.push(
+              `${relReadme}: documentation index is missing or out of date — run \`rig check-docs --fix\` or \`rig update\` to refresh it`,
+            );
+          }
+        }
       }
     }
   }

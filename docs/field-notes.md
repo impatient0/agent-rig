@@ -1,3 +1,7 @@
+---
+description: Empirical rationale and failure-mode measurements for every mechanism in agent-rig.
+---
+
 # Field Notes: Why Each Mechanism Exists
 
 Every guard, skill, and linter in `agent-rig` was created only after a written prompt rule failed in a real session and the failure mode was measured.

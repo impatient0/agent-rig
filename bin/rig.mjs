@@ -356,6 +356,44 @@ export function extractManagedAgentsBlock(content) {
   return { block, before, after, hasBlock: true };
 }
 
+export function parseDocFrontmatter(content) {
+  if (typeof content !== 'string') return {};
+  const cleaned = content.replace(/^\uFEFF/, '');
+  const match = cleaned.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return {};
+  const raw = match[1];
+  const result = {};
+  const lines = raw.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const keyMatch = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+    if (!keyMatch) continue;
+    const key = keyMatch[1];
+    let val = keyMatch[2].trim();
+    if (/^true\b/i.test(val)) {
+      result[key] = true;
+      continue;
+    }
+    if (/^false\b/i.test(val)) {
+      result[key] = false;
+      continue;
+    }
+    if (val === '>' || val === '>-' || val === '|' || val === '|-') {
+      const collected = [];
+      while (i + 1 < lines.length && /^\s+/.test(lines[i + 1])) {
+        i++;
+        collected.push(lines[i].trim());
+      }
+      val = collected.join(' ').trim();
+    }
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    result[key] = val.trim();
+  }
+  return result;
+}
+
 export function parseAdrStatus(filePath) {
   if (!existsSync(filePath)) return null;
   let content = '';
@@ -383,7 +421,12 @@ export function parseAdrStatus(filePath) {
   if (statusTag) {
     statusTag = statusTag.replace(/\.+$/, '').trim();
   }
-  return { title, rawStatus, statusTag };
+  const fm = parseDocFrontmatter(content);
+  const res = { title, rawStatus, statusTag };
+  if (fm.description) {
+    res.description = fm.description;
+  }
+  return res;
 }
 
 export function isEphemeralDoc(filePath, content) {
@@ -392,6 +435,8 @@ export function isEphemeralDoc(filePath, content) {
     return true;
   }
   if (typeof content === 'string') {
+    const fm = parseDocFrontmatter(content);
+    if (fm.ephemeral === true) return true;
     if (/^---\n[\s\S]*?\bephemeral:\s*true\b[\s\S]*?\n---/m.test(content)) return true;
     if (/<!--\s*ephemeral\s*-->/i.test(content)) return true;
     if (/delete this file (?:when|after|once)\b/i.test(content)) return true;
@@ -399,7 +444,199 @@ export function isEphemeralDoc(filePath, content) {
   return false;
 }
 
-export function buildDocsIndexBlock(repoRoot = process.cwd()) {
+export function isCollectionDir(dirPath) {
+  if (!dirPath || !existsSync(dirPath)) return false;
+  try {
+    if (!statSync(dirPath).isDirectory()) return false;
+    const readmePath = path.join(dirPath, 'README.md');
+    if (!existsSync(readmePath) || !statSync(readmePath).isFile()) return false;
+    const content = readFileSync(readmePath, 'utf8');
+    const fm = parseDocFrontmatter(content);
+    return fm.collection === true;
+  } catch {
+    return false;
+  }
+}
+
+export function findCollectionDirs(docsDir) {
+  if (!docsDir || !existsSync(docsDir)) return [];
+  const results = [];
+  function scan(currentDir) {
+    try {
+      const entries = readdirSync(currentDir).sort();
+      for (const entry of entries) {
+        if (entry === 'epics') continue;
+        const fullPath = path.join(currentDir, entry);
+        try {
+          if (statSync(fullPath).isDirectory()) {
+            if (isCollectionDir(fullPath)) {
+              results.push(fullPath);
+            }
+            scan(fullPath);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  scan(docsDir);
+  return results;
+}
+
+export function buildCollectionDocsIndexBlock(collectionDir, repoRoot = process.cwd()) {
+  const absCollectionDir = path.isAbsolute(collectionDir) ? collectionDir : path.resolve(repoRoot, collectionDir);
+  if (!existsSync(absCollectionDir)) return '';
+  try {
+    if (!statSync(absCollectionDir).isDirectory()) return '';
+  } catch {
+    return '';
+  }
+
+  const items = [];
+
+  // 1. Immediate markdown files in collectionDir (excluding README.md)
+  try {
+    const topFiles = readdirSync(absCollectionDir)
+      .filter((f) => f.endsWith('.md') && f !== 'README.md' && statSync(path.join(absCollectionDir, f)).isFile())
+      .sort();
+    for (const f of topFiles) {
+      const fullPath = path.join(absCollectionDir, f);
+      const content = readFileSync(fullPath, 'utf8');
+      const relForEphemeral = path.relative(repoRoot, fullPath).replace(/\\/g, '/');
+      if (isEphemeralDoc(relForEphemeral, content)) continue;
+      const fm = parseDocFrontmatter(content);
+      const h1Match = content.match(/^\s*#\s+(.+)$/m);
+      const title = h1Match ? h1Match[1].trim() : f;
+      items.push({
+        relPath: f,
+        title,
+        statusTag: null,
+        description: fm.description || null,
+      });
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2. ADR files in adr/ if present
+  const adrDir = path.join(absCollectionDir, 'adr');
+  if (existsSync(adrDir)) {
+    if (isCollectionDir(adrDir)) {
+      try {
+        const readmePath = path.join(adrDir, 'README.md');
+        const content = readFileSync(readmePath, 'utf8');
+        const fm = parseDocFrontmatter(content);
+        const h1Match = content.match(/^\s*#\s+(.+)$/m);
+        const title = h1Match ? h1Match[1].trim() : 'adr';
+        items.push({
+          relPath: 'adr/README.md',
+          title,
+          statusTag: null,
+          description: fm.description || null,
+        });
+      } catch {
+        // ignore
+      }
+    } else {
+      try {
+        const adrFiles = readdirSync(adrDir)
+          .filter((f) => f.endsWith('.md') && statSync(path.join(adrDir, f)).isFile())
+          .sort();
+        for (const f of adrFiles) {
+          const fullPath = path.join(adrDir, f);
+          const { title, statusTag, description = null } = parseAdrStatus(fullPath) || {};
+          items.push({
+            relPath: `adr/${f}`,
+            title: title || f,
+            statusTag: statusTag || null,
+            description: description || null,
+          });
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  // 3. Subdirectories in collectionDir (excluding epics and adr)
+  try {
+    const subEntries = readdirSync(absCollectionDir)
+      .filter((entry) => {
+        if (entry === 'adr' || entry === 'epics') return false;
+        const subPath = path.join(absCollectionDir, entry);
+        return statSync(subPath).isDirectory();
+      })
+      .sort();
+
+    function walkColSubdir(subRel) {
+      const subDir = path.join(absCollectionDir, subRel);
+      if (isCollectionDir(subDir)) {
+        const readmePath = path.join(subDir, 'README.md');
+        const content = readFileSync(readmePath, 'utf8');
+        const fm = parseDocFrontmatter(content);
+        const h1Match = content.match(/^\s*#\s+(.+)$/m);
+        const title = h1Match ? h1Match[1].trim() : path.basename(subDir);
+        items.push({
+          relPath: path.join(subRel, 'README.md').replace(/\\/g, '/'),
+          title,
+          statusTag: null,
+          description: fm.description || null,
+        });
+        return;
+      }
+      for (const entry of readdirSync(subDir).sort()) {
+        const fullPath = path.join(subDir, entry);
+        const rel = path.join(subRel, entry).replace(/\\/g, '/');
+        const st = statSync(fullPath);
+        if (st.isDirectory()) {
+          walkColSubdir(rel);
+        } else if (st.isFile() && entry.endsWith('.md')) {
+          const content = readFileSync(fullPath, 'utf8');
+          const relForEphemeral = path.relative(repoRoot, fullPath).replace(/\\/g, '/');
+          if (isEphemeralDoc(relForEphemeral, content)) continue;
+          const fm = parseDocFrontmatter(content);
+          const h1Match = content.match(/^\s*#\s+(.+)$/m);
+          const title = h1Match ? h1Match[1].trim() : entry;
+          items.push({ relPath: rel, title, statusTag: null, description: fm.description || null });
+        }
+      }
+    }
+
+    for (const sub of subEntries) {
+      walkColSubdir(sub);
+    }
+  } catch {
+    // ignore
+  }
+
+  if (items.length === 0) return '';
+
+  const lines = [
+    MANAGED_DOCS_START,
+    MANAGED_DOCS_HEADER,
+    '## Documentation Index',
+    '',
+  ];
+  for (const item of items) {
+    const tag = item.statusTag ? ` (${item.statusTag})` : '';
+    const desc = item.description ? ` — ${item.description}` : '';
+    lines.push(`- [\`${item.relPath}\`](${item.relPath}) — ${item.title}${tag}${desc}`);
+  }
+  lines.push(MANAGED_DOCS_END);
+  return lines.join('\n');
+}
+
+export function buildDocsIndexBlock(repoRoot = process.cwd(), targetCollectionRel = null) {
+  if (targetCollectionRel) {
+    const colDir = path.isAbsolute(targetCollectionRel)
+      ? targetCollectionRel
+      : path.resolve(repoRoot, targetCollectionRel);
+    return buildCollectionDocsIndexBlock(colDir, repoRoot);
+  }
+
   const docsDir = path.join(repoRoot, 'docs');
   if (!existsSync(docsDir)) return '';
   try {
@@ -419,9 +656,10 @@ export function buildDocsIndexBlock(repoRoot = process.cwd()) {
       const fullPath = path.join(docsDir, f);
       const content = readFileSync(fullPath, 'utf8');
       if (isEphemeralDoc(`docs/${f}`, content)) continue;
+      const fm = parseDocFrontmatter(content);
       const h1Match = content.match(/^\s*#\s+(.+)$/m);
       const title = h1Match ? h1Match[1].trim() : f;
-      items.push({ relPath: `docs/${f}`, title, statusTag: null });
+      items.push({ relPath: `docs/${f}`, title, statusTag: null, description: fm.description || null });
     }
   } catch {
     // ignore
@@ -430,17 +668,30 @@ export function buildDocsIndexBlock(repoRoot = process.cwd()) {
   // 2. ADR files in docs/adr
   const adrDir = path.join(docsDir, 'adr');
   if (existsSync(adrDir)) {
-    try {
-      const adrFiles = readdirSync(adrDir)
-        .filter((f) => f.endsWith('.md') && statSync(path.join(adrDir, f)).isFile())
-        .sort();
-      for (const f of adrFiles) {
-        const fullPath = path.join(adrDir, f);
-        const { title, statusTag } = parseAdrStatus(fullPath) || {};
-        items.push({ relPath: `docs/adr/${f}`, title: title || f, statusTag: statusTag || null });
+    if (isCollectionDir(adrDir)) {
+      try {
+        const readmePath = path.join(adrDir, 'README.md');
+        const content = readFileSync(readmePath, 'utf8');
+        const fm = parseDocFrontmatter(content);
+        const h1Match = content.match(/^\s*#\s+(.+)$/m);
+        const title = h1Match ? h1Match[1].trim() : 'adr';
+        items.push({ relPath: 'docs/adr/README.md', title, statusTag: null, description: fm.description || null });
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
+    } else {
+      try {
+        const adrFiles = readdirSync(adrDir)
+          .filter((f) => f.endsWith('.md') && statSync(path.join(adrDir, f)).isFile())
+          .sort();
+        for (const f of adrFiles) {
+          const fullPath = path.join(adrDir, f);
+          const { title, statusTag, description = null } = parseAdrStatus(fullPath) || {};
+          items.push({ relPath: `docs/adr/${f}`, title: title || f, statusTag: statusTag || null, description: description || null });
+        }
+      } catch {
+        // ignore
+      }
     }
   }
 
@@ -456,6 +707,20 @@ export function buildDocsIndexBlock(repoRoot = process.cwd()) {
 
     function walkSubdir(subRel) {
       const subDir = path.join(repoRoot, subRel);
+      if (isCollectionDir(subDir)) {
+        const readmePath = path.join(subDir, 'README.md');
+        const content = readFileSync(readmePath, 'utf8');
+        const fm = parseDocFrontmatter(content);
+        const h1Match = content.match(/^\s*#\s+(.+)$/m);
+        const title = h1Match ? h1Match[1].trim() : path.basename(subDir);
+        items.push({
+          relPath: path.join(subRel, 'README.md').replace(/\\/g, '/'),
+          title,
+          statusTag: null,
+          description: fm.description || null,
+        });
+        return;
+      }
       for (const entry of readdirSync(subDir).sort()) {
         const fullPath = path.join(subDir, entry);
         const rel = path.join(subRel, entry).replace(/\\/g, '/');
@@ -465,9 +730,10 @@ export function buildDocsIndexBlock(repoRoot = process.cwd()) {
         } else if (st.isFile() && entry.endsWith('.md')) {
           const content = readFileSync(fullPath, 'utf8');
           if (isEphemeralDoc(rel, content)) continue;
+          const fm = parseDocFrontmatter(content);
           const h1Match = content.match(/^\s*#\s+(.+)$/m);
           const title = h1Match ? h1Match[1].trim() : entry;
-          items.push({ relPath: rel, title, statusTag: null });
+          items.push({ relPath: rel, title, statusTag: null, description: fm.description || null });
         }
       }
     }
@@ -489,10 +755,26 @@ export function buildDocsIndexBlock(repoRoot = process.cwd()) {
   ];
   for (const item of items) {
     const tag = item.statusTag ? ` (${item.statusTag})` : '';
-    lines.push(`- [\`${item.relPath}\`](${item.relPath}) — ${item.title}${tag}`);
+    const desc = item.description ? ` — ${item.description}` : '';
+    lines.push(`- [\`${item.relPath}\`](${item.relPath}) — ${item.title}${tag}${desc}`);
   }
   lines.push(MANAGED_DOCS_END);
   return lines.join('\n');
+}
+
+export function updateDocManagedDocsBlock(content, newBlock) {
+  const { hasBlock, before, after } = extractManagedDocsBlock(content);
+  if (hasBlock) {
+    if (!newBlock) {
+      const b = before.trimEnd();
+      const a = after.trim();
+      return b && a ? `${b}\n\n${a}\n` : b ? `${b}\n` : a ? `${a}\n` : '';
+    }
+    return before + newBlock + after;
+  }
+  if (!newBlock) return content;
+  const trimmed = (content || '').trimEnd();
+  return trimmed ? `${trimmed}\n\n${newBlock}\n` : `${newBlock}\n`;
 }
 
 export function extractManagedDocsBlock(content) {
@@ -1655,6 +1937,31 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
     }
   }
 
+  const docsDir = path.join(dir, 'docs');
+  if (existsSync(docsDir)) {
+    try {
+      if (statSync(docsDir).isDirectory()) {
+        const colDirs = findCollectionDirs(docsDir);
+        for (const cDir of colDirs) {
+          const readmePath = path.join(cDir, 'README.md');
+          if (existsSync(readmePath)) {
+            const existing = readFileSync(readmePath, 'utf8');
+            const expectedBlock = buildCollectionDocsIndexBlock(cDir, dir);
+            if (expectedBlock) {
+              const updated = updateDocManagedDocsBlock(existing, expectedBlock);
+              if (updated !== existing) {
+                writeFileSync(readmePath, updated, 'utf8');
+                copied.push(readmePath);
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   // If the repo was initialized with --self-contained, refresh static rig assets without touching AGENTS.md or docs/
   const isSelfContained = isSelfContainedRepo(dir);
 
@@ -2717,6 +3024,31 @@ export function initRepo(
   writeFileSync(agentsPath, mergedAgents, 'utf8');
   copied.push(agentsPath);
 
+  const initDocsDir = path.join(dir, 'docs');
+  if (existsSync(initDocsDir)) {
+    try {
+      if (statSync(initDocsDir).isDirectory()) {
+        const colDirs = findCollectionDirs(initDocsDir);
+        for (const cDir of colDirs) {
+          const readmePath = path.join(cDir, 'README.md');
+          if (existsSync(readmePath)) {
+            const existing = readFileSync(readmePath, 'utf8');
+            const expectedBlock = buildCollectionDocsIndexBlock(cDir, dir);
+            if (expectedBlock) {
+              const updated = updateDocManagedDocsBlock(existing, expectedBlock);
+              if (updated !== existing) {
+                writeFileSync(readmePath, updated, 'utf8');
+                copied.push(readmePath);
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   if (homeDir !== false) {
     writeRigState(homeDir || homedir(), { initializedRepos: [mainCheckout] });
   }
@@ -3038,6 +3370,51 @@ export function runPreCommitHook(targetDir = process.cwd()) {
                 'The block between <!-- AGENT-RIG:DOCS:START --> and <!-- AGENT-RIG:DOCS:END --> is managed by agent-rig.\n' +
                 "Run 'rig update' or 'rig check-docs --fix' to refresh it, or restore the block from HEAD.\n",
             };
+          }
+        }
+      }
+
+      for (const line of stagedLines) {
+        const tabIdx = line.indexOf('\t');
+        if (tabIdx === -1) continue;
+        const status = line.slice(0, tabIdx).trim();
+        if (status === 'D') continue;
+        const stagedFile = line.slice(tabIdx + 1).trim().replace(/\\/g, '/');
+        if (stagedFile !== 'AGENTS.md' && stagedFile.endsWith('README.md') && stagedFile.startsWith('docs/')) {
+          const colShow = git('show', `:${stagedFile}`);
+          if (colShow.status === 0) {
+            const { block: stagedDocsBlock, hasBlock: stagedHasDocsBlock } = extractManagedDocsBlock(colShow.stdout);
+            if (stagedHasDocsBlock) {
+              let docsMatches = false;
+              const headShow = git('show', `HEAD:${stagedFile}`);
+              if (headShow.status === 0) {
+                const { block: headDocsBlock, hasBlock: headHasDocsBlock } = extractManagedDocsBlock(headShow.stdout);
+                if (headHasDocsBlock && headDocsBlock.trim() === stagedDocsBlock.trim()) {
+                  docsMatches = true;
+                }
+              }
+              if (!docsMatches) {
+                try {
+                  const colDir = path.dirname(path.join(repoRoot, stagedFile));
+                  const canonicalDocsBlock = buildCollectionDocsIndexBlock(colDir, repoRoot);
+                  if (canonicalDocsBlock.trim() === stagedDocsBlock.trim()) {
+                    docsMatches = true;
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+              if (!docsMatches) {
+                return {
+                  status: 1,
+                  stdout: '',
+                  stderr:
+                    `pre-commit: refusing commit with modified agent-rig documentation index in ${stagedFile}.\n` +
+                    'The block between <!-- AGENT-RIG:DOCS:START --> and <!-- AGENT-RIG:DOCS:END --> is managed by agent-rig.\n' +
+                    "Run 'rig update' or 'rig check-docs --fix' to refresh it, or restore the block from HEAD.\n",
+                };
+              }
+            }
           }
         }
       }

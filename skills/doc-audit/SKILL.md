@@ -33,3 +33,11 @@ Inspect each file under `docs/` (especially ADRs under [`docs/adr/0001-record-ar
 1. Search for rules or architectural claims stated in more than one document;
    keep the canonical statement in one place and link to it from the others.
 2. Verify every behavioral claim in `README.md`, `AGENTS.md`, and `docs/` against the current implementation files on disk.
+
+---
+
+## Step 4 — Frontmatter Descriptions & Subdirectory Collections
+
+1. Ensure permanent documentation files under `docs/` provide a concise, single-sentence frontmatter `description` (`--- ... description: ... ---`) so the generated documentation index in `AGENTS.md` explains each document's purpose without opening it.
+2. When a topic directory under `docs/` grows to contain multiple related documents, organize it as a collection by placing a `README.md` with `collection: true` and a `description` in its frontmatter.
+   The parent index will emit a single entry pointing to that `README.md`, which automatically maintains its own local documentation index block covering member documents and sub-collections.

@@ -110,9 +110,9 @@ Every Markdown file in a rigged repository follows two mechanical invariants enf
 ## Documentation Index
 
 - [`docs/backlog.md`](docs/backlog.md) — Backlog (`agent-rig`)
-- [`docs/field-notes.md`](docs/field-notes.md) — Field Notes: Why Each Mechanism Exists
-- [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) — ADR 0001: Record Architecture Decisions and Dual-Protocol Hook Architecture
-- [`docs/adr/0002-two-gear-execution-and-worker-subagent.md`](docs/adr/0002-two-gear-execution-and-worker-subagent.md) — ADR 0002: Two-Gear Execution Model and Isolated Worker Subagent
+- [`docs/field-notes.md`](docs/field-notes.md) — Field Notes: Why Each Mechanism Exists — Empirical rationale and failure-mode measurements for every mechanism in agent-rig.
+- [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) — ADR 0001: Record Architecture Decisions and Dual-Protocol Hook Architecture — Record architectural decisions in docs/adr/ and separate hook payload schema from harness identity.
+- [`docs/adr/0002-two-gear-execution-and-worker-subagent.md`](docs/adr/0002-two-gear-execution-and-worker-subagent.md) — ADR 0002: Two-Gear Execution Model and Isolated Worker Subagent — Two-gear execution model separating interactive pairing from autonomous dispatch with isolated worker subagents.
 <!-- AGENT-RIG:DOCS:END -->
 
 # Project Context (`agent-rig`)

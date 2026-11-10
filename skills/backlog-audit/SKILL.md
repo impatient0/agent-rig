@@ -31,11 +31,11 @@ Every active item in [`docs/backlog.md`](../../docs/backlog.md) belongs in exact
 2. **`Ready, unblocked`** — Clear scope and acceptance criteria;
    can be picked up by a Worker subagent at any time without human input.
 3. **`Gated on an in-flight milestone`** — Clear scope, but blocked until a named feature or refactor lands;
-   must state the exact unblocking condition.
+   MUST state the exact unblocking condition.
 4. **`Needs a decision`** — Blocked on an explicit product, UX, or architectural question;
-   must state the concrete question to ask the user.
+   MUST state the concrete question to ask the user.
 5. **`Waiting on an external trigger`** — Blocked on an upstream release, real-world usage data, or a measured bottleneck;
-   must state the trigger metric or event.
+   MUST state the trigger metric or event.
 6. **`Not sanctioned`** — Recorded so the idea is not forgotten, but explicitly out of scope unless priorities change.
 
 ---

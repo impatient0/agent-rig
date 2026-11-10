@@ -35,7 +35,7 @@ Because the repository's root checkout stays attached to `main` as a merge-only 
    ```bash
    git -C <root> merge --abort
    ```
-   Never edit conflict files or resolve merges in the root checkout;
+   The orchestrator MUST NOT edit conflict files or resolve merges in the root checkout;
    the main checkout edit guard refuses code modifications there, and the orchestrator lacks line-level slice context.
    All conflict resolution is owned by the authoring Worker whose incoming branch caused the conflict.
    Task that Worker inside its live worktree to run `git merge main`, resolve conflicting files using its direct domain context of the slice, verify tests, and commit the merge.
@@ -63,7 +63,7 @@ git -C <root> branch -d "$BRANCH"
    ```bash
    git -C <root> worktree remove <worktree-path>
    ```
-   *(Always use `git worktree remove`, never `rm -rf`, so symlinked `node_modules` are not accidentally traversed or deleted).*
+   *(Cleanup MUST use `git worktree remove`, and MUST NOT use `rm -rf`, so symlinked `node_modules` are not accidentally traversed or deleted).*
 3. **Delete the merged feature branch:**
    ```bash
    git -C <root> branch -d "$BRANCH"

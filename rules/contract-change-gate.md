@@ -3,7 +3,7 @@
 ## Core Principle
 
 Public interfaces, persistence schemas, wire protocols, and state-machine invariants form the structural spine of a repository and require explicit human approval before modification.
-An isolated Worker subagent in [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md) must never invent, alter, or weaken a system contract to make a local slice or test pass.
+An isolated Worker subagent in [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md) MUST NOT invent, alter, or weaken a system contract to make a local slice or test pass.
 
 ---
 
@@ -36,17 +36,17 @@ When collaborating directly with the user in the main session:
 
 During `/dispatch` triage and Worker execution:
 - **Triage (Gate A):**
-  If a candidate item requires designing a new governed contract or altering an existing one without an already-approved specification, the Tech Lead must place it in **Bucket 2 (Ask User First)**.
+  If a candidate item requires designing a new governed contract or altering an existing one without an already-approved specification, the Tech Lead MUST place it in **Bucket 2 (Ask User First)**.
 - **Authorized Contract Execution:**
-  A Worker subagent may create or modify a governed contract file **only** when the grounded Task Brief explicitly includes the approved signature, schema definition, or ADR section reference.
+  A Worker subagent MAY create or modify a governed contract file ONLY when the grounded Task Brief explicitly includes the approved signature, schema definition, or ADR section reference.
 - **Worker Stop Trigger #1:**
-  If a Worker discovers mid-slice that completing its task requires touching any governed contract not explicitly authorized in the Task Brief, it must halt immediately and report the exact file, symbol, and required change back to the Tech Lead.
+  If a Worker discovers mid-slice that completing its task requires touching any governed contract not explicitly authorized in the Task Brief, it MUST halt immediately and report the exact file, symbol, and required change back to the Tech Lead.
 
 ---
 
 ## Cold Verifier Audit Check ([`agents/verifier.md`](../agents/verifier.md))
 
-When auditing a diff under Check 3 (**Human-Gated Boundary Compliance**), the Cold Verifier must fail the branch (`VERDICT: FAIL`) if any diff hunk modifies a governed contract file, public signature, or dependency manifest without an explicit authorization in the grounded Task Brief.
+When auditing a diff under Check 3 (**Human-Gated Boundary Compliance**), the Cold Verifier MUST fail the branch (`VERDICT: FAIL`) if any diff hunk modifies a governed contract file, public signature, or dependency manifest without an explicit authorization in the grounded Task Brief.
 
 ---
 

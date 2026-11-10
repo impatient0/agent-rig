@@ -74,9 +74,10 @@ test('integration: pre-commit hook rejects manual edits to AGENTS.md managed blo
 
     // 1. Manually tamper inside the managed block
     const tampered = originalContent.replace(
-      'Never speculate about code',
+      'Agents MUST NOT speculate about code',
       'Always speculate wildly about code',
     );
+    assert.notEqual(tampered, originalContent);
     writeFileSync(agentsPath, tampered, 'utf8');
     gitCmd(repo, env, 'add', 'AGENTS.md');
 

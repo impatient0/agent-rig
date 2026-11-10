@@ -10,7 +10,7 @@ description: >-
 
 # Secure Credential Handoff (`secure-credential-handoff`)
 
-Never ask the user to paste a secret, password, or API key into the chat window, and never pass plaintext credentials on a command line where they are recorded in session transcripts.
+The agent MUST NOT ask the user to paste a secret, password, or API key into the chat window, and MUST NOT pass plaintext credentials on a command line where they are recorded in session transcripts.
 
 ---
 
@@ -26,7 +26,7 @@ Never ask the user to paste a secret, password, or API key into the chat window,
    ```bash
    set -a && source .env.local && set +a && ./run-command-using-env
    ```
-   Never run `cat`, `env`, `printenv`, or `set -x` while secrets are loaded.
+   Commands executed with loaded secrets MUST NOT run `cat`, `env`, `printenv`, or `set -x`.
 
 ---
 

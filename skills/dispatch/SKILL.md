@@ -17,6 +17,9 @@ Execute candidate tasks under **Gear 2 (Autonomous Dispatch)** through a **Tech 
 
 ## Step 1 — Ground & Triage (The `Open Decisions = 0` Boundary)
 
+Before spawning any subagents, the Tech Lead MUST verify that the root checkout is on `main` (or `master`) with a clean working tree (`git status --short`).
+Because harness worktree sharing (such as `Workspace: "share"`) copies uncommitted working-tree edits from the root checkout into every spawned Worker worktree, the Tech Lead MUST halt and prompt the user if uncommitted changes exist (or commit pending [`docs/backlog.md`](../../docs/backlog.md) edits on `main` first if authorized).
+
 Read the candidate items (from [`docs/backlog.md`](../../docs/backlog.md) or the user's prompt) and inspect the live codebase files they touch.
 Explore the codebase **only** until high-level ambiguity is cleared and zero open product, UX, or architectural decisions remain.
 Partition every candidate item into one of two buckets:
@@ -40,15 +43,19 @@ The Tech Lead is **not** responsible for proving line-level root causes, tracing
 Under [`agents/worker.md`](../../agents/worker.md), that line-level epistemic hygiene belongs strictly to the Worker inside its isolated worktree.
 
 **When to stop reading and delegate (Anti-Micromanagement):**
-The moment remaining investigation is purely linear and deterministic (e.g., tracing internal helper line numbers, private subroutine branches, or local call sites inside a known module), the Tech Lead **must stop reading code**, construct the inline Task Brief, and dispatch the Worker.
-Do not try to "make the Worker's life easier" by pre-solving local implementation mechanics, auditing every downstream call site, or preemptively smoothing out speed bumps before delegation.
+The moment remaining investigation is purely linear and deterministic (e.g., tracing internal helper line numbers, private subroutine branches, or local call sites inside a known module), the Tech Lead MUST stop reading code, construct the inline Task Brief, and dispatch the Worker.
+The Tech Lead MUST NOT pre-solve local implementation mechanics, audit every downstream call site, or preemptively smooth out speed bumps before delegation.
 Messy local discovery, edge-case wiring, and test fixture authoring belong to the Worker;
 if the Worker genuinely hits an architectural fork or unexpected wall, the 5 Stop Triggers exist to escalate back to the Tech Lead.
 
-**Parallel Wave Dispatch Over Conflict Aversion:**
-Do not serialize slices into separate waves or linear branch stacks merely because they touch the same files (such as shared CLI entry points, `README.md`, or shared test files).
-Sequence Slice B into a later wave **only** when Slice B functionally depends on a runtime contract, helper, or module introduced by Slice A.
-Otherwise, dispatch up to **3 Bucket 1 slices concurrently** off `main` in the same turn and rely on the **On-Hold in Worktree** lifecycle (`git merge main` inside the Worker's worktree) to resolve textual merge collisions when landing on `main`.
+**Parallel Wave Dispatch vs. Anticipated Structural Conflicts:**
+The Tech Lead SHOULD NOT serialize slices into separate waves merely because they touch independent regions of the same file (such as separate CLI subcommands, separate sections of `README.md`, or separate test cases in a shared test file).
+However, the Tech Lead MUST sequence Slice B behind Slice A (into the next wave or a linear branch stack) when:
+1. Slice B functionally depends on a runtime contract, helper, or module introduced by Slice A.
+2. Slice A performs a structural or code-motion refactor (moving, extracting, renaming, or rewriting the exact functions or code blocks that Slice B must modify), where running in parallel would force Worker B to implement against an obsolete layout and manually re-port its changes during conflict resolution.
+3. The backlog item or user explicitly specifies an execution order.
+
+For genuinely independent slices (including those with only incidental, localized file overlap), the Tech Lead SHOULD dispatch up to **3 Bucket 1 slices concurrently** off `main` in the same turn and rely on the **On-Hold in Worktree** lifecycle (`git merge main` inside the Worker's worktree) to resolve minor textual collisions when landing on `main`.
 In the same turn (or while Workers run in the background), present the exact, code-grounded questions for Bucket 2 to the user.
 
 ---
@@ -68,9 +75,9 @@ Record the following fields:
 - **Invariants & acceptance criteria:**
   Citing the governing ADR or spec section.
   State **what** behavior and invariants must hold, not **how** to write the code:
-  do not paste implementation code blocks, shell script bodies, or line-by-line edit recipes into the brief.
+  the Tech Lead MUST NOT paste implementation code blocks, shell script bodies, or line-by-line edit recipes into the brief.
 - **Backlog isolation:**
-  Workers must never edit [`docs/backlog.md`](../../docs/backlog.md) inside feature worktrees;
+  Workers MUST NOT edit [`docs/backlog.md`](../../docs/backlog.md) inside feature worktrees;
   only the Tech Lead updates [`docs/backlog.md`](../../docs/backlog.md) directly on `main` after a wave is merged.
 - **Verification command:**
   Exact test and linter command the Worker must pass.
@@ -105,7 +112,7 @@ Workers follow a strict five-stage lifecycle:
 3. **Report:**
    Sends completion message with commit SHA and diff summary to Tech Lead.
 4. **On-Hold in Worktree:**
-   The Worker must remain alive and idle in its worktree until its branch is merged into `main`.
+   The Worker MUST remain alive and idle in its worktree until its branch is merged into `main`.
    If a subsequent merge collision occurs during `merge-to-main`, the Tech Lead messages this Worker to merge `main` and resolve conflicts in its native context.
 5. **Terminate:**
    The Worker is suspended or terminated only after its branch has successfully landed in `main`.
@@ -119,12 +126,12 @@ If any stop trigger fires, the Worker halts immediately in its worktree and repo
 
 ## Step 4 — Cold Verifier Subagent (Executor != Verifier)
 
-When a Worker reports completion, the Tech Lead **must not** trust the Worker's summary or review the diff inside the Worker's context.
+When a Worker reports completion, the Tech Lead MUST NOT trust the Worker's summary or review the diff inside the Worker's context.
 Spawn a fresh **Verifier** subagent in execution tier `verifier` (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`) following the exact prompt and checklist in [`agents/verifier.md`](../../agents/verifier.md).
-The Verifier must have command execution permissions enabled so it runs `git log`, `git diff`, and the verification command directly in the target worktree.
-Instruct the Verifier strictly in prompt not to edit files, stage changes, or create commits.
-Do not act as an execution proxy;
-pass the Verifier **only**:
+The Verifier MUST have command execution permissions enabled so it runs `git log`, `git diff`, and the verification command directly in the target worktree.
+The Tech Lead MUST instruct the Verifier strictly in prompt not to edit files, stage changes, or create commits.
+The Tech Lead MUST NOT act as an execution proxy;
+pass the Verifier ONLY:
 1. The grounded task brief from Step 2 inline in its invocation prompt (base commit SHA, Core files, acceptance criteria, and verification command).
 2. The target worktree path.
 

@@ -134,6 +134,10 @@ test('pre-commit allows initial commit on an unborn repository', () => {
     copyFileSync(RIG_BIN, path.join(unbornDir, '.rig/bin/rig.mjs'));
     chmodSync(path.join(unbornDir, '.rig/bin/rig.mjs'), 0o755);
 
+    mkdirSync(path.join(unbornDir, '.rig/scripts'), { recursive: true });
+    copyFileSync(CHECK_DOC_LINKS, path.join(unbornDir, '.rig/scripts/check-doc-links.mjs'));
+    copyFileSync(REFLOW_DOCS, path.join(unbornDir, '.rig/scripts/reflow-docs.mjs'));
+
     git(unbornDir, 'config', 'core.hooksPath', '.rig/hooks');
 
     writeFileSync(path.join(unbornDir, 'README.md'), '# Unborn\n');
@@ -210,6 +214,10 @@ test('pre-commit shim invokes vendored .rig/bin/rig.mjs when rig is not in PATH'
     mkdirSync(path.join(root, '.rig/bin'), { recursive: true });
     copyFileSync(RIG_BIN, path.join(root, '.rig/bin/rig.mjs'));
     chmodSync(path.join(root, '.rig/bin/rig.mjs'), 0o755);
+
+    mkdirSync(path.join(root, '.rig/scripts'), { recursive: true });
+    copyFileSync(CHECK_DOC_LINKS, path.join(root, '.rig/scripts/check-doc-links.mjs'));
+    copyFileSync(REFLOW_DOCS, path.join(root, '.rig/scripts/reflow-docs.mjs'));
 
     git(root, 'config', 'core.hooksPath', '.rig/hooks');
 

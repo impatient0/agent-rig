@@ -1,7 +1,8 @@
 ---
 name: merge-to-main
 description: >-
-  Use when the user asks to merge a worktree branch into main. Merges a worktree
+  Use when the user invokes /merge-to-main, asks to "merge to main", "merge
+  branch", "land worktree", or finalize a verified slice. Merges a worktree
   branch into main from the attached root checkout, verifies the uncommitted
   merge with the full test suite, commits, and removes the worktree.
 ---
@@ -94,3 +95,29 @@ Merging intermediate branches individually is unnecessary because the tip branch
    git -C <root> branch -d "$BRANCH_2"
    ```
    *(Intermediate branch deletions succeed immediately because all commits in the stack are reachable from the new merge commit on `main`).*
+
+---
+
+## Output Format
+
+Return a merge completion report using this exact structure:
+
+```markdown
+## Merge to Main Report
+
+- **Merged Branch:** `<type>/<slug>` (or `<tip-branch>` for linear stacks)
+- **Target Branch:** `main`
+- **Merge Commit SHA:** `<sha>`
+- **Verification Gate:** PASS | FAIL
+
+### Stack Branches Landed
+- `<type>/<slug>` (or list of all constituent branches landed in linear stack)
+
+### Clean-Up Summary
+- **Worktree Removed:** `<worktree-path>` (REMOVED | RETAINED)
+- **Branch Deleted:** `<type>/<slug>` (DELETED | RETAINED)
+- **Root Checkout State:** Clean on `main` (`HEAD` at `<sha>`)
+
+### Next Steps
+- Prune merged backlog items in `docs/backlog.md` on `main`.
+```

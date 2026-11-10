@@ -1,11 +1,11 @@
 ---
 name: wrap-up
 description: >-
-  Use at the end of a coding session or when the user says "/wrap-up" or asks
-  to wrap up. Verifies git/worktree cleanliness and test gates, routes
-  undocumented decisions and deferred work to commits, ADRs, docs/backlog.md, or
-  memory, checks cold-session doc reachability, and triages finish-now vs.
-  defer items.
+  Use at the end of a coding session or when the user invokes /wrap-up, says
+  "wrap up", "end session", "finish session", or requests a session checkpoint.
+  Verifies git/worktree cleanliness and test gates, routes undocumented decisions
+  and deferred work to commits, ADRs, docs/backlog.md, or memory, checks
+  cold-session doc reachability, and triages finish-now vs. defer items.
 ---
 
 # End-of-Session Checkpoint (`wrap-up`)
@@ -55,3 +55,29 @@ Present a short closing summary to the user separating:
   Uncommitted changes, missing doc links, unmerged worktree branches ready for [`skills/merge-to-main/SKILL.md`](../merge-to-main/SKILL.md) (now carrying all committed documentation updates).
 - **Recorded & safe to defer:**
   Items captured in [`docs/backlog.md`](../../docs/backlog.md) or ADRs with their exact file links.
+
+---
+
+## Output Format
+
+Return an end-of-session wrap-up report using this exact structure:
+
+```markdown
+## Session Wrap-Up Report
+
+- **Working Tree State:** CLEAN | DIRTY
+- **Active Worktrees:** <count> active (<paths or none>)
+- **Test & Doc Gate:** PASS | FAIL
+
+### Routed Session Knowledge
+- **ADRs Created / Updated:** None (or `docs/adr/<file>.md — <summary>`)
+- **Backlog Items Queued:** None (or `<item title> in docs/backlog.md (<tier>)`)
+- **Invariants / Comments Added:** None (or `<file>:<line> — <summary>`)
+- **Workflow Rules Proposed:** None (or `rules/AGENTS.md — <summary>`)
+
+### Finish Now (< 2 minutes)
+- None (or `<actionable immediate item, e.g. merge branch <branch> via skills/merge-to-main/SKILL.md>`)
+
+### Safe to Defer
+- None (or `<deferred item title> — recorded in <path>`)
+```

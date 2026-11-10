@@ -1,10 +1,11 @@
 ---
 name: backlog-audit
 description: >-
-  Use when auditing, sorting, or grooming docs/backlog.md. Classifies Unranked
-  items into actionability tiers, checks existing ADRs so previously rejected
-  ideas are not re-queued, and re-validates existing tiers against codebase
-  drift.
+  Use when the user invokes /backlog-audit, asks to "audit backlog", "groom
+  backlog", "sort backlog", or tier backlog items in docs/backlog.md. Classifies
+  Unranked items into six actionability tiers, checks existing ADRs so
+  previously rejected ideas are not re-queued, and re-validates existing tiers
+  against codebase drift.
 ---
 
 # Backlog Actionability Audit (`backlog-audit`)
@@ -42,3 +43,34 @@ Every active item in [`docs/backlog.md`](../../docs/backlog.md) belongs in exact
 ## Step 3 — Normalize Format & Verify Links
 
 Run `scripts/reflow-docs.mjs` and `scripts/check-doc-links.mjs` (or `rig reflow-docs` and `rig check-docs`) after editing [`docs/backlog.md`](../../docs/backlog.md).
+
+---
+
+## Output Format
+
+Return a backlog audit report using this exact structure:
+
+```markdown
+## Backlog Audit Report
+
+- **Backlog Path:** `docs/backlog.md`
+- **Mechanical Gate:** PASS | FAIL
+- **Unranked Items Remaining:** 0
+
+### Tier Summary
+- **Do next:** <count> items
+- **Ready, unblocked:** <count> items
+- **Gated on an in-flight milestone:** <count> items
+- **Needs a decision:** <count> items
+- **Waiting on an external trigger:** <count> items
+- **Not sanctioned:** <count> items
+
+### Pruned & Rejected Items
+- None (or `<item title> — rejected per ADR <number> / already implemented in <path>`)
+
+### Triage & Classification Changes
+- `<item title>`: moved from `<source-tier>` to `<dest-tier>` — `<rationale>`
+
+### User Decisions Needed
+- None (or `<item title>`: `<concrete question to ask user>`)
+```

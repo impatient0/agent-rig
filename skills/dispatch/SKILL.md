@@ -1,11 +1,12 @@
 ---
 name: dispatch
 description: >-
-  Use when asked to sweep ready items from the backlog, execute a multi-slice
-  implementation plan, or run tasks autonomously. Triages candidate items into
-  Dispatch Now vs. Ask User First, dispatches isolated Worker subagents in git
-  worktrees under five stop triggers, and requires a cold read-only Verifier
-  subagent (Executor != Verifier) before accepting any diff.
+  Use when the user invokes /dispatch, asks to "sweep the backlog", "execute
+  implementation plan", "run tasks autonomously", or dispatch multi-task waves.
+  Triages candidate items into Dispatch Now vs. Ask User First, dispatches
+  isolated Worker subagents in git worktrees under five stop triggers, and
+  requires a cold read-only Verifier subagent (Executor != Verifier) before
+  accepting any diff.
 ---
 
 # Subagent-First Task Dispatch (`dispatch`)
@@ -141,3 +142,32 @@ After at most **3 completed slices**, pause and present a concise attribution re
 Workers remain on hold in their worktrees until each slice is merged into `main` via [`skills/merge-to-main/SKILL.md`](../merge-to-main/SKILL.md);
 only after a slice is committed to `main` is its worktree removed and its Worker subagent terminated.
 Once the wave is merged to `main`, the Tech Lead prunes the completed items from [`docs/backlog.md`](../../docs/backlog.md) directly on `main`.
+
+---
+
+## Output Format
+
+Return a wave execution report using this exact structure:
+
+```markdown
+## Dispatch Wave Report: Wave <number>
+
+- **Status:** COMPLETE | BLOCKED | PARTIAL
+- **Slices Dispatched:** <count>
+- **Cold Verifier Verdict:** PASS | FAIL
+
+### Completed Slices
+- `<slice-name>`: branch `<type>/<slug>` (`<commit-sha>`) — verified by Cold Verifier
+
+### Bucket 2 & Blocked Slices
+- `<slice-name>`: `<file>:<line> — <exact question, architectural fork, or human gate needed>` (or `None`)
+
+### Consolidated Unmandated Calls
+| Slice | Commit | Choice & Rationale | Citation |
+| :--- | :--- | :--- | :--- |
+| `<slug>` | `<sha>` | <choice — rationale or `none`> | `<file>:<line>` |
+
+### Recommended Next Steps
+- Merge verified branches into `main` via `skills/merge-to-main/SKILL.md`.
+- Prune completed items from `docs/backlog.md` directly on `main`.
+```

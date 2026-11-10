@@ -1,10 +1,11 @@
 ---
 name: rig-update
 description: >-
-  Use when updating agent-rig global harness plugins, repository assets, hooks,
-  or vendored skills. Inspects pending updates, validates that target
-  repositories are clean on main, applies rig update --repo or rig update --all
-  with automatic main-branch asset commits, and runs the verification gate.
+  Use when the user invokes /rig-update, asks to "update agent-rig", "run rig
+  update", "refresh rig assets", or update harness plugins, hooks, and vendored
+  skills. Inspects pending updates, validates that target repositories are
+  clean on main, applies rig update --repo or rig update --all with automatic
+  main-branch asset commits, and runs the verification gate.
 ---
 
 # Global Harness & Clean-Trunk Repository Update (`rig-update`)
@@ -61,3 +62,29 @@ In stealth-initialized repositories (`rig init --stealth`), `rig update` refresh
    rig reflow-docs <target-dir> --check
    ```
    *(If the repository defines a test suite such as `npm test`, run it in `<target-dir>` and confirm exit status `0`).*
+
+---
+
+## Output Format
+
+Return a rig update report using this exact structure:
+
+```markdown
+## Rig Update Report
+
+- **Scope:** `--all` | `--repo <path>` | Global Harness Only
+- **Global Harnesses Synced:** <list of harnesses or `None`>
+- **Verification Gate:** PASS | FAIL
+
+### Repositories Updated
+| Repository | Branch | Status | Commit SHA |
+| :--- | :--- | :--- | :--- |
+| `<path>` | `main` | UPDATED | `<sha>` |
+
+### Repositories Skipped (Dirty or Non-Main)
+- None (or `<path>`: `<reason, e.g. dirty working tree or on feature branch>`)
+
+### Verification Details
+- **Doc Linters:** PASS | FAIL (`rig check-docs`, `rig reflow-docs --check`)
+- **Project Test Suite:** PASS | FAIL | NOT CONFIGURED
+```

@@ -1,10 +1,11 @@
 ---
 name: secure-credential-handoff
 description: >-
-  Use when a command requires an API token, password, or secret that is not yet
-  in the environment. Guides the user to write the secret to a gitignored mode-
-  0600 file so the plaintext credential never appears in the chat transcript or
-  command arguments.
+  Use when the user invokes /secure-credential-handoff, or when a command
+  requires an API token, password, or secret not yet in the environment (e.g.
+  "enter API key", "provide secret", "set password"). Guides the user to write
+  the secret to a gitignored mode-0600 file so the plaintext credential never
+  appears in the chat transcript or command arguments.
 ---
 
 # Secure Credential Handoff (`secure-credential-handoff`)
@@ -26,3 +27,30 @@ Never ask the user to paste a secret, password, or API key into the chat window,
    set -a && source .env.local && set +a && ./run-command-using-env
    ```
    Never run `cat`, `env`, `printenv`, or `set -x` while secrets are loaded.
+
+---
+
+## Output Format
+
+Return a credential handoff report using this exact structure:
+
+```markdown
+## Secure Credential Handoff Report
+
+- **Credential File Path:** `<path>` (e.g. `.env.local` or `~/.config/<project>/.env.secrets`)
+- **File Permissions:** `0600` (PASS | FAIL)
+- **Gitignore Status:** IGNORED | EXTERNAL (PASS | FAIL)
+- **Status:** WAITING FOR USER INPUT | READY
+
+### Required Environment Variables
+- `<VAR_NAME_1>`: <description of purpose, e.g. API token>
+- `<VAR_NAME_2>`: <description of purpose, e.g. database password>
+
+### Instructions for User
+1. Open `<path>` in your editor or terminal.
+2. Populate the required variables above with your actual secrets and save the file.
+3. Confirm in chat once saved (do NOT paste secret values into chat).
+
+### Subshell Execution Command
+- Run commands using: `set -a && source <path> && set +a && <command>`
+```

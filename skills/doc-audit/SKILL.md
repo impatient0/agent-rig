@@ -1,10 +1,11 @@
 ---
 name: doc-audit
 description: >-
-  Use when auditing documentation for bloat, duplication, stale code claims, or
-  mixed concerns. Identifies files that mix stable architectural decisions with
-  chronological slice logs, finds duplicated claims across docs, and verifies
-  cited paths against live code.
+  Use when the user invokes /doc-audit, asks to "audit docs", "audit
+  documentation", "check doc hygiene", or verify markdown graph consistency.
+  Audits documentation for bloat, duplication, stale code claims, or mixed
+  concerns, checks mechanical link and format gates, and grounds claims against
+  live code.
 ---
 
 # Documentation Graph & Hygiene Audit (`doc-audit`)
@@ -33,3 +34,29 @@ Inspect each file under `docs/` (especially ADRs under [`docs/adr/0001-record-ar
 1. Search for rules or architectural claims stated in more than one document;
    keep the canonical statement in one place and link to it from the others.
 2. Verify every behavioral claim in `README.md`, `AGENTS.md`, and `docs/` against the current implementation files on disk.
+
+---
+
+## Output Format
+
+Return a documentation audit report using this exact structure:
+
+```markdown
+## Documentation Audit Report
+
+- **Mechanical Gate:** PASS | FAIL
+- **Link & Anchor Resolution:** PASS | FAIL
+- **One Sentence Per Line:** PASS | FAIL
+
+### Mixed Lifecycle Findings
+- None (or `<file>:<line> — <chronological log mixed into stable decision>`)
+
+### Duplicate Claims
+- None (or `<file>:<line> — duplicate claim, canonical in <canonical-file>:<line>`)
+
+### Stale Code Claims & Missing Paths
+- None (or `<file>:<line> — claims <claim>, but live code at <path> shows <actual>`)
+
+### Remediation & Actions Taken
+- `<action taken or proposed>`
+```

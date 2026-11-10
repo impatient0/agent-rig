@@ -1,11 +1,12 @@
 ---
 name: rig-onboard
 description: >-
-  Use when bringing an existing repository with its own history, agent files
-  (CLAUDE.md, GEMINI.md, .cursorrules), decision logs, or backlog under
-  agent-rig conventions. Runs rig init in a worktree, ports project facts into
-  AGENTS.md, converts legacy docs into ADRs with doc-audit, re-tiers the
-  backlog last, and verifies that no dual-convention artifact remains.
+  Use when the user invokes /rig-onboard, asks to "onboard repository",
+  "onboard to agent-rig", "migrate to agent-rig", or port legacy agent files
+  (CLAUDE.md, GEMINI.md, .cursorrules, decision logs, backlog) under agent-rig
+  conventions. Runs rig init in a worktree, ports project facts into AGENTS.md,
+  converts legacy docs into ADRs with doc-audit, re-tiers the backlog last, and
+  verifies that no dual-convention artifact remains.
 ---
 
 # Onboard an Existing Repository (`rig-onboard`)
@@ -100,3 +101,36 @@ All of the following must hold before handing over:
 1. Commit each step atomically with Conventional Commits and `Unmandated-call:` trailers (for example, how decisions were grouped into ADRs, or which backlog items were judged finished).
 2. Spawn a fresh Verifier per [`agents/verifier.md`](../../agents/verifier.md) with command execution enabled to run verification commands live in the worktree, passing the inventory from Step 1 as the brief, base commit SHA, and target worktree path.
 3. Present the attribution table, and merge via [`skills/merge-to-main/SKILL.md`](../merge-to-main/SKILL.md) only when the user asks.
+
+---
+
+## Output Format
+
+Return an onboarding completion report using this exact structure:
+
+```markdown
+## Onboarding Report: <repository-name>
+
+- **Target Directory:** `<path>`
+- **Worktree / Branch:** `.worktrees/rig-init` (`chore/rig-init`)
+- **Dual-Convention Check:** PASS | FAIL
+- **Cold Verifier Verdict:** PASS | FAIL
+
+### Scaffolding & Legacy Cleanup
+- **Legacy Agent Files Removed:** `<files or None>`
+- **Project Facts Ported:** `# Project Context` in `AGENTS.md`
+- **ADRs Created / Migrated:** `<list of ADRs>`
+- **Backlog Initialized:** `docs/backlog.md` (<count> items tiered)
+
+### Verification Gates
+- **Project Test Suite:** PASS | FAIL
+- **Doc Link & Reflow Linters:** PASS | FAIL (`rig check-docs`, `rig reflow-docs --check`)
+
+### Attribution & Unmandated Calls
+| Commit | Choice & Rationale | Citation |
+| :--- | :--- | :--- |
+| `<sha>` | <choice — rationale or `none`> | `<file>:<line>` |
+
+### Next Steps
+- Merge `chore/rig-init` into `main` via `skills/merge-to-main/SKILL.md` when requested.
+```

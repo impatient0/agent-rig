@@ -1,10 +1,11 @@
 ---
 name: doc-audit
 description: >-
-  Use when auditing documentation for bloat, duplication, stale code claims, or
-  mixed concerns. Identifies files that mix stable architectural decisions with
-  chronological slice logs, finds duplicated claims across docs, and verifies
-  cited paths against live code.
+  Use when the user invokes /doc-audit, asks to "audit docs", "audit
+  documentation", "check doc hygiene", or verify markdown graph consistency.
+  Audits documentation for bloat, duplication, stale code claims, or mixed
+  concerns, checks mechanical link and format gates, and grounds claims against
+  live code.
 ---
 
 # Documentation Graph & Hygiene Audit (`doc-audit`)
@@ -41,3 +42,29 @@ Inspect each file under `docs/` (especially ADRs under [`docs/adr/0001-record-ar
 1. Ensure permanent documentation files under `docs/` provide a concise, single-sentence frontmatter `description` (`--- ... description: ... ---`) so the generated documentation index in `AGENTS.md` explains each document's purpose without opening it.
 2. When a topic directory under `docs/` grows to contain multiple related documents, organize it as a collection by placing a `README.md` with `collection: true` and a `description` in its frontmatter.
    The parent index will emit a single entry pointing to that `README.md`, which automatically maintains its own local documentation index block covering member documents and sub-collections.
+
+---
+
+## Output Format
+
+Return a documentation audit report using this exact structure:
+
+```markdown
+## Documentation Audit Report
+
+- **Mechanical Gate:** PASS | FAIL
+- **Link & Anchor Resolution:** PASS | FAIL
+- **One Sentence Per Line:** PASS | FAIL
+
+### Mixed Lifecycle Findings
+- None (or `<file>:<line> — <chronological log mixed into stable decision>`)
+
+### Duplicate Claims
+- None (or `<file>:<line> — duplicate claim, canonical in <canonical-file>:<line>`)
+
+### Stale Code Claims & Missing Paths
+- None (or `<file>:<line> — claims <claim>, but live code at <path> shows <actual>`)
+
+### Remediation & Actions Taken
+- `<action taken or proposed>`
+```

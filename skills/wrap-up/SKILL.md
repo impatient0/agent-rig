@@ -20,7 +20,7 @@ Explicitly sequence all conversation archaeology and documentation updates insid
 1. Run `git status --short` and `git worktree list`.
    - Flag any uncommitted edits, untracked scratch files, or orphaned worktrees.
 2. Run the project's test suite and documentation linters (`scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs --check` if present, or `rig check-docs` and `rig reflow-docs --check`).
-   - Do not declare wrap-up complete while tests or doc checks are failing.
+   - The agent MUST NOT declare wrap-up complete while tests or doc checks are failing.
 
 ---
 
@@ -31,7 +31,7 @@ Attempting to edit rules (such as [`rules/AGENTS.md`](../../rules/AGENTS.md)) or
 Scan the session from the first turn to the last for four categories of knowledge that would otherwise vanish when the conversation closes:
 
 1. **Architectural decisions & rejected alternatives:**
-   - If the session settled a durable design choice or ruled out a plausible approach, record it in an ADR under [`docs/adr/0001-record-architecture-decisions.md`](../../docs/adr/0001-record-architecture-decisions.md) (or the relevant ADR file) so future sessions do not re-litigate it.
+   - If the session settled a durable design choice or ruled out a plausible approach, the agent MUST record it in an ADR under [`docs/adr/0001-record-architecture-decisions.md`](../../docs/adr/0001-record-architecture-decisions.md) (or the relevant ADR file) so future sessions do not re-litigate it.
 2. **Deliberate non-changes & deferred follow-ups:**
    - Route out-of-scope improvements, known edge cases, and follow-up tasks to [`docs/backlog.md`](../../docs/backlog.md) under `Unranked` (or run [`skills/backlog-audit/SKILL.md`](../backlog-audit/SKILL.md) to tier them immediately).
 3. **Code-level invariants:**

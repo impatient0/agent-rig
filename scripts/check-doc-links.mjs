@@ -21,21 +21,221 @@
 //
 // Usage: node scripts/check-doc-links.mjs [target-dir] [--fix]
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import {
-  buildDocsIndexBlock,
-  extractManagedDocsBlock,
-  extractManagedAgentsBlock,
-  mergeManagedAgentsFile,
-} from '../bin/rig.mjs';
+import { pathToFileURL } from 'node:url';
 
-const args = process.argv.slice(2);
-const fix = args.includes('--fix');
-const targetArg = args.find((a) => !a.startsWith('-'));
-const targetRoot = targetArg ? path.resolve(targetArg) : process.cwd();
-process.chdir(targetRoot);
+export const MANAGED_AGENTS_START = '<!-- AGENT-RIG:START -->';
+export const MANAGED_AGENTS_END = '<!-- AGENT-RIG:END -->';
+export const MANAGED_AGENTS_HEADER = '<!-- Managed by `rig init` / `rig update`. Do not edit between AGENT-RIG:START and AGENT-RIG:END. -->';
+
+export const MANAGED_DOCS_START = '<!-- AGENT-RIG:DOCS:START -->';
+export const MANAGED_DOCS_END = '<!-- AGENT-RIG:DOCS:END -->';
+export const MANAGED_DOCS_HEADER = '<!-- Managed by `rig update` / `rig check-docs`. Do not edit between AGENT-RIG:DOCS:START and AGENT-RIG:DOCS:END. -->';
+
+export function extractManagedAgentsBlock(content) {
+  if (typeof content !== 'string') return { block: null, before: '', after: '', hasBlock: false };
+  const startIdx = content.indexOf(MANAGED_AGENTS_START);
+  if (startIdx === -1) return { block: null, before: content, after: '', hasBlock: false };
+  const endIdx = content.indexOf(MANAGED_AGENTS_END, startIdx + MANAGED_AGENTS_START.length);
+  if (endIdx === -1) return { block: null, before: content, after: '', hasBlock: false };
+  const fullEnd = endIdx + MANAGED_AGENTS_END.length;
+  const block = content.slice(startIdx, fullEnd);
+  const before = content.slice(0, startIdx);
+  const after = content.slice(fullEnd);
+  return { block, before, after, hasBlock: true };
+}
+
+export function parseAdrStatus(filePath) {
+  if (!existsSync(filePath)) return null;
+  let content = '';
+  try {
+    content = readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+  const h1Match = content.match(/^\s*#\s+(.+)$/m);
+  const title = h1Match ? h1Match[1].trim() : path.basename(filePath, '.md');
+  const statusMatch = content.match(/^\s*##\s+Status\s*\n+([^\n]+)/m);
+  const rawStatus = statusMatch ? statusMatch[1].trim() : '';
+
+  let statusTag = null;
+  if (/^superseded\b/i.test(rawStatus)) {
+    const byMatch = rawStatus.match(/by\s+(\[?ADR\s*\d+[^\]\n]*\]?)/i) || rawStatus.match(/by\s+([^.\n]+)/i);
+    statusTag = byMatch ? `Superseded by ${byMatch[1].replace(/[[\]]/g, '').trim()}` : 'Superseded';
+  } else if (/^deprecated\b/i.test(rawStatus)) {
+    statusTag = 'Deprecated';
+  } else if (/^proposed\b/i.test(rawStatus)) {
+    statusTag = 'Proposed';
+  } else if (/^rejected\b/i.test(rawStatus)) {
+    statusTag = 'Rejected';
+  }
+  if (statusTag) {
+    statusTag = statusTag.replace(/\.+$/, '').trim();
+  }
+  return { title, rawStatus, statusTag };
+}
+
+export function isEphemeralDoc(filePath, content) {
+  const norm = filePath.replace(/\\/g, '/');
+  if (norm.includes('/docs/epics/') || norm.startsWith('docs/epics/')) {
+    return true;
+  }
+  if (typeof content === 'string') {
+    if (/^---\n[\s\S]*?\bephemeral:\s*true\b[\s\S]*?\n---/m.test(content)) return true;
+    if (/<!--\s*ephemeral\s*-->/i.test(content)) return true;
+    if (/delete this file (?:when|after|once)\b/i.test(content)) return true;
+  }
+  return false;
+}
+
+export function buildDocsIndexBlock(repoRoot = process.cwd()) {
+  const docsDir = path.join(repoRoot, 'docs');
+  if (!existsSync(docsDir)) return '';
+  try {
+    if (!statSync(docsDir).isDirectory()) return '';
+  } catch {
+    return '';
+  }
+
+  const items = [];
+
+  // 1. Top-level markdown files in docs
+  try {
+    const topFiles = readdirSync(docsDir)
+      .filter((f) => f.endsWith('.md') && statSync(path.join(docsDir, f)).isFile())
+      .sort();
+    for (const f of topFiles) {
+      const fullPath = path.join(docsDir, f);
+      const content = readFileSync(fullPath, 'utf8');
+      if (isEphemeralDoc(`docs/${f}`, content)) continue;
+      const h1Match = content.match(/^\s*#\s+(.+)$/m);
+      const title = h1Match ? h1Match[1].trim() : f;
+      items.push({ relPath: `docs/${f}`, title, statusTag: null });
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2. ADR files in docs/adr
+  const adrDir = path.join(docsDir, 'adr');
+  if (existsSync(adrDir)) {
+    try {
+      const adrFiles = readdirSync(adrDir)
+        .filter((f) => f.endsWith('.md') && statSync(path.join(adrDir, f)).isFile())
+        .sort();
+      for (const f of adrFiles) {
+        const fullPath = path.join(adrDir, f);
+        const { title, statusTag } = parseAdrStatus(fullPath) || {};
+        items.push({ relPath: `docs/adr/${f}`, title: title || f, statusTag: statusTag || null });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3. Other permanent subdirectories under docs/ (excluding epics and adr)
+  try {
+    const subEntries = readdirSync(docsDir)
+      .filter((entry) => {
+        if (entry === 'adr' || entry === 'epics') return false;
+        const subPath = path.join(docsDir, entry);
+        return statSync(subPath).isDirectory();
+      })
+      .sort();
+
+    function walkSubdir(subRel) {
+      const subDir = path.join(repoRoot, subRel);
+      for (const entry of readdirSync(subDir).sort()) {
+        const fullPath = path.join(subDir, entry);
+        const rel = path.join(subRel, entry).replace(/\\/g, '/');
+        const st = statSync(fullPath);
+        if (st.isDirectory()) {
+          walkSubdir(rel);
+        } else if (st.isFile() && entry.endsWith('.md')) {
+          const content = readFileSync(fullPath, 'utf8');
+          if (isEphemeralDoc(rel, content)) continue;
+          const h1Match = content.match(/^\s*#\s+(.+)$/m);
+          const title = h1Match ? h1Match[1].trim() : entry;
+          items.push({ relPath: rel, title, statusTag: null });
+        }
+      }
+    }
+
+    for (const sub of subEntries) {
+      walkSubdir(`docs/${sub}`);
+    }
+  } catch {
+    // ignore
+  }
+
+  if (items.length === 0) return '';
+
+  const lines = [
+    MANAGED_DOCS_START,
+    MANAGED_DOCS_HEADER,
+    '## Documentation Index',
+    '',
+  ];
+  for (const item of items) {
+    const tag = item.statusTag ? ` (${item.statusTag})` : '';
+    lines.push(`- [\`${item.relPath}\`](${item.relPath}) — ${item.title}${tag}`);
+  }
+  lines.push(MANAGED_DOCS_END);
+  return lines.join('\n');
+}
+
+export function extractManagedDocsBlock(content) {
+  if (typeof content !== 'string') return { block: null, before: '', after: '', hasBlock: false };
+  const startIdx = content.indexOf(MANAGED_DOCS_START);
+  if (startIdx === -1) return { block: null, before: content, after: '', hasBlock: false };
+  const endIdx = content.indexOf(MANAGED_DOCS_END, startIdx + MANAGED_DOCS_START.length);
+  if (endIdx === -1) return { block: null, before: content, after: '', hasBlock: false };
+  const fullEnd = endIdx + MANAGED_DOCS_END.length;
+  const block = content.slice(startIdx, fullEnd);
+  const before = content.slice(0, startIdx);
+  const after = content.slice(fullEnd);
+  return { block, before, after, hasBlock: true };
+}
+
+export function mergeManagedAgentsFile(existingContent, managedBlock, defaultProjectContext = '', docsIndexBlock = undefined) {
+  const normRules = managedBlock ? managedBlock.trim() : '';
+
+  // 1. Extract rules block if present
+  const { hasBlock: hasRules, before: beforeRules, after: afterRules } = extractManagedAgentsBlock(existingContent || '');
+  let remainder = hasRules
+    ? (beforeRules.trim() ? beforeRules.trim() + '\n\n' : '') + afterRules.trim()
+    : (existingContent || '').trim();
+
+  // 2. Extract docs index block from remainder if present
+  const { hasBlock: hasDocs, before: beforeDocs, after: afterDocs, block: existingDocsBlock } = extractManagedDocsBlock(remainder);
+  let userContext = hasDocs
+    ? (beforeDocs.trim() ? beforeDocs.trim() + '\n\n' : '') + afterDocs.trim()
+    : remainder;
+  userContext = userContext.trim();
+
+  if (!userContext && defaultProjectContext) {
+    userContext = defaultProjectContext.trim();
+  }
+
+  // 3. Determine effective docs block
+  let effectiveDocs = '';
+  if (docsIndexBlock !== undefined) {
+    effectiveDocs = docsIndexBlock ? docsIndexBlock.trim() : '';
+  } else if (hasDocs) {
+    effectiveDocs = existingDocsBlock.trim();
+  }
+
+  // 4. Assemble in canonical order
+  const parts = [];
+  if (hasRules && beforeRules.trim()) parts.push(beforeRules.trim());
+  if (normRules) parts.push(normRules);
+  if (effectiveDocs) parts.push(effectiveDocs);
+  if (userContext) parts.push(userContext);
+
+  return parts.join('\n\n') + '\n';
+}
 
 const DEFAULTS = {
   docRoots: [
@@ -100,9 +300,6 @@ function loadConfig() {
   }
 }
 
-const CFG = loadConfig();
-const DOC_ROOTS = CFG.docRoots;
-
 const isEntryPoint = (f) =>
   f === 'AGENTS.md' ||
   f === 'CLAUDE.md' ||
@@ -150,7 +347,7 @@ function slugify(headingText) {
     .replace(/ /g, '-');
 }
 
-function parseDoc(file) {
+function parseDoc(file, cfg = DEFAULTS) {
   const lines = readFileSync(file, 'utf8').split('\n');
   const slugs = new Set();
   const slugCounts = new Map();
@@ -159,7 +356,7 @@ function parseDoc(file) {
   const repoPaths = [];
   const externalUrls = [];
 
-  const prefixAlt = CFG.repoPathPrefixes.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const prefixAlt = (cfg?.repoPathPrefixes ?? DEFAULTS.repoPathPrefixes).map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   const repoPathRe = new RegExp(`^(?:${prefixAlt})\\/\\S+$`);
   const docPrefixRe = /^(?:docs|skills|rules|\.claude|\.agents)\//;
 
@@ -242,235 +439,258 @@ function parseDoc(file) {
   return { slugs, links, bareRefs, repoPaths, externalUrls };
 }
 
-const files = DOC_ROOTS.flatMap((r) => walk(r));
-const parsed = new Map(files.map((f) => [path.normalize(f), parseDoc(f)]));
+export function runCli(argv = process.argv.slice(2)) {
+  const fix = argv.includes('--fix');
+  const targetArg = argv.find((a) => !a.startsWith('-'));
+  const targetRoot = targetArg ? path.resolve(targetArg) : process.cwd();
+  process.chdir(targetRoot);
 
-function slugsFor(targetFile) {
-  if (!parsed.has(targetFile) && existsSync(targetFile) && targetFile.endsWith('.md')) {
-    parsed.set(targetFile, parseDoc(targetFile));
+  const CFG = loadConfig();
+  const DOC_ROOTS = CFG.docRoots;
+
+  const files = DOC_ROOTS.flatMap((r) => walk(r));
+  const parsed = new Map(files.map((f) => [path.normalize(f), parseDoc(f, CFG)]));
+
+  function slugsFor(targetFile) {
+    if (!parsed.has(targetFile) && existsSync(targetFile) && targetFile.endsWith('.md')) {
+      parsed.set(targetFile, parseDoc(targetFile, CFG));
+    }
+    return parsed.get(targetFile)?.slugs;
   }
-  return parsed.get(targetFile)?.slugs;
-}
 
-const errors = [];
+  const errors = [];
 
-const gitTracked = (() => {
-  const r = spawnSync('git', ['ls-files'], { encoding: 'utf8' });
-  if (r.status !== 0) return null;
-  return new Set(r.stdout.split('\n').filter(Boolean).map(path.normalize));
-})();
+  const gitTracked = (() => {
+    const r = spawnSync('git', ['ls-files'], { encoding: 'utf8' });
+    if (r.status !== 0) return null;
+    return new Set(r.stdout.split('\n').filter(Boolean).map(path.normalize));
+  })();
 
-const isOwnRepo = (() => {
-  try {
-    const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
-    return pkg.name === 'agent-rig';
-  } catch {
-    return false;
-  }
-})();
+  const isOwnRepo = (() => {
+    try {
+      const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+      return pkg.name === 'agent-rig';
+    } catch {
+      return false;
+    }
+  })();
 
-const isStealthRepo = (() => {
-  try {
-    const r = spawnSync('git', ['check-ignore', '-q', 'AGENTS.md']);
-    return r.status === 0;
-  } catch {
-    return false;
-  }
-})();
+  const isStealthRepo = (() => {
+    try {
+      const r = spawnSync('git', ['check-ignore', '-q', 'AGENTS.md']);
+      return r.status === 0;
+    } catch {
+      return false;
+    }
+  })();
 
-if (existsSync('docs') && statSync('docs').isDirectory()) {
-  const expectedBlock = buildDocsIndexBlock(targetRoot);
-  if (expectedBlock) {
-    if (existsSync('AGENTS.md')) {
-      const agentsContent = readFileSync('AGENTS.md', 'utf8');
-      const isRigged =
-        agentsContent.includes('<!-- AGENT-RIG:START -->') ||
-        agentsContent.includes('<!-- AGENT-RIG:DOCS:START -->') ||
-        isOwnRepo;
-      if (isRigged) {
-        const { block: currentDocsBlock, hasBlock } = extractManagedDocsBlock(agentsContent);
-        if (!hasBlock || currentDocsBlock.trim() !== expectedBlock.trim()) {
-          if (fix) {
-            const { block: rulesBlock } = extractManagedAgentsBlock(agentsContent);
-            const updated = mergeManagedAgentsFile(agentsContent, rulesBlock || '', '', expectedBlock);
-            writeFileSync('AGENTS.md', updated, 'utf8');
-            console.log('check-doc-links: updated documentation index in AGENTS.md');
-            if (parsed.has('AGENTS.md')) {
-              parsed.set('AGENTS.md', parseDoc('AGENTS.md'));
+  if (existsSync('docs') && statSync('docs').isDirectory()) {
+    const expectedBlock = buildDocsIndexBlock(targetRoot);
+    if (expectedBlock) {
+      if (existsSync('AGENTS.md')) {
+        const agentsContent = readFileSync('AGENTS.md', 'utf8');
+        const isRigged =
+          agentsContent.includes('<!-- AGENT-RIG:START -->') ||
+          agentsContent.includes('<!-- AGENT-RIG:DOCS:START -->') ||
+          isOwnRepo;
+        if (isRigged) {
+          const { block: currentDocsBlock, hasBlock } = extractManagedDocsBlock(agentsContent);
+          if (!hasBlock || currentDocsBlock.trim() !== expectedBlock.trim()) {
+            if (fix) {
+              const { block: rulesBlock } = extractManagedAgentsBlock(agentsContent);
+              const updated = mergeManagedAgentsFile(agentsContent, rulesBlock || '', '', expectedBlock);
+              writeFileSync('AGENTS.md', updated, 'utf8');
+              console.log('check-doc-links: updated documentation index in AGENTS.md');
+              if (parsed.has('AGENTS.md')) {
+                parsed.set('AGENTS.md', parseDoc('AGENTS.md', CFG));
+              }
+            } else {
+              errors.push(
+                'AGENTS.md: documentation index is missing or out of date — run `rig check-docs --fix` or `rig update` to refresh it',
+              );
             }
-          } else {
-            errors.push(
-              'AGENTS.md: documentation index is missing or out of date — run `rig check-docs --fix` or `rig update` to refresh it',
-            );
           }
         }
-      }
-    } else {
-      if (isOwnRepo) {
-        errors.push('AGENTS.md: missing in repository root — required for documentation index and agent conventions');
-      }
-    }
-  }
-}
-
-function isCommitted(p) {
-  if (!existsSync(p)) return false;
-  if (isStealthRepo) {
-    const r = spawnSync('git', ['check-ignore', '-q', p]);
-    if (r.status === 0) return true;
-  }
-  if (!gitTracked || gitTracked.size === 0) return true;
-  if (gitTracked.has(p)) return true;
-  const prefix = p.endsWith(path.sep) ? p : p + path.sep;
-  for (const t of gitTracked) if (t.startsWith(prefix)) return true;
-  return false;
-}
-
-for (const [file, { links, bareRefs, repoPaths, externalUrls }] of parsed) {
-  for (const { line, targetFile, fragment, raw, inManagedBlock } of links) {
-    if (!existsSync(targetFile)) {
-      if (inManagedBlock && !isOwnRepo) {
-        continue;
-      }
-      errors.push(`${file}:${line}: broken link (${raw}) — ${targetFile} does not exist`);
-      continue;
-    }
-    if (!isCommitted(targetFile)) {
-      if (inManagedBlock && !isOwnRepo) {
-        continue;
-      }
-      errors.push(`${file}:${line}: link target is untracked/gitignored (${raw}) — ${targetFile} is not in git`);
-      continue;
-    }
-    if (fragment) {
-      const targetSlugs = slugsFor(targetFile);
-      if (targetSlugs && !targetSlugs.has(fragment.toLowerCase())) {
-        errors.push(`${file}:${line}: broken anchor (${raw}) — #${fragment} not found in ${targetFile}`);
-      }
-    }
-  }
-  for (const { line, raw, reason } of bareRefs) {
-    errors.push(`${file}:${line}: ${raw} — ${reason}`);
-  }
-  for (const { line, raw, targetPath, inManagedBlock } of repoPaths) {
-    if (!existsSync(targetPath)) {
-      if (inManagedBlock && !isOwnRepo) {
-        continue;
-      }
-      const baseName = path.basename(targetPath);
-      const dotIdx = baseName.lastIndexOf('.');
-      if (dotIdx > 0) {
-        const symbol = baseName.slice(dotIdx + 1);
-        const candidateBase = path.join(path.dirname(targetPath), baseName.slice(0, dotIdx));
-        if (
-          !COMMON_EXTS.has(symbol.toLowerCase()) &&
-          /^[A-Za-z_][A-Za-z0-9_]*$/.test(symbol) &&
-          existsSync(candidateBase) &&
-          isCommitted(candidateBase)
-        ) {
-          continue;
+      } else {
+        if (isOwnRepo) {
+          errors.push('AGENTS.md: missing in repository root — required for documentation index and agent conventions');
         }
       }
-      errors.push(
-        `${file}:${line}: ${raw} — ${targetPath} does not exist (strike through as ~~${raw}~~ if deliberately removed)`,
-      );
-    } else if (!isCommitted(targetPath)) {
-      if (inManagedBlock && !isOwnRepo) {
-        continue;
-      }
-      errors.push(`${file}:${line}: ${raw} — ${targetPath} is untracked/gitignored`);
     }
   }
-  for (const { line, url, heading } of externalUrls) {
-    if (/claude\.ai\/code\/artifact\//i.test(url)) {
-      if (!heading || !/^(references|visual record)\b/i.test(heading)) {
-        errors.push(
-          `${file}:${line}: Artifact URL (${url}) in section "${heading ?? '(top)'}" — keep Artifact links in a trailing "## References" / "### Visual record" section only`,
-        );
-      }
+
+  function isCommitted(p) {
+    if (!existsSync(p)) return false;
+    if (isStealthRepo) {
+      const r = spawnSync('git', ['check-ignore', '-q', p]);
+      if (r.status === 0) return true;
     }
+    if (!gitTracked || gitTracked.size === 0) return true;
+    if (gitTracked.has(p)) return true;
+    const prefix = p.endsWith(path.sep) ? p : p + path.sep;
+    for (const t of gitTracked) if (t.startsWith(prefix)) return true;
+    return false;
   }
-}
 
-const reachable = new Set();
-const queue = [...parsed.keys()].filter(isEntryPoint);
-for (const ep of queue) reachable.add(ep);
-
-while (queue.length > 0) {
-  const cur = queue.shift();
-  const doc = parsed.get(cur);
-  if (!doc) continue;
-  for (const { targetFile } of doc.links) {
-    if (parsed.has(targetFile) && !reachable.has(targetFile)) {
-      reachable.add(targetFile);
-      queue.push(targetFile);
-    }
-  }
-}
-
-for (const file of parsed.keys()) {
-  if (file === 'README.md') continue;
-  if (!reachable.has(file)) {
-    errors.push(`${file}: orphan — not reachable from AGENTS.md, CLAUDE.md, any SKILL.md, or rules/`);
-  }
-}
-
-for (const file of parsed.keys()) {
-  const bytes = statSync(file).size;
-  if (file.startsWith(`docs${path.sep}epics${path.sep}`)) {
-    if (bytes > CFG.epicMaxBytes) {
-      errors.push(
-        `${file}: ${bytes} B exceeds the ${CFG.epicMaxBytes} B epic-index cap — move durable contracts into an ADR and delete completed slice prose`,
-      );
-    }
-    const text = readFileSync(file, 'utf8');
-    if (!/delete this file/i.test(text)) {
-      errors.push(`${file}: epic index must state its own deletion condition ("Delete this file when…")`);
-    }
-  }
-  if (file.startsWith(`docs${path.sep}adr${path.sep}`)) {
-    if (bytes > CFG.adrMaxBytes) {
-      errors.push(
-        `${file}: ${bytes} B exceeds the ${CFG.adrMaxBytes} B ADR cap — move chronological slice logs to docs/implementation-notes/`,
-      );
-    }
-  }
-}
-
-const codeFiles = CFG.codeRoots.flatMap((r) => walkCode(r));
-const DOC_REF_RE = /\b((?:docs|skills|rules|\.claude|\.agents)\/[A-Za-z0-9_./*-]+?\.md)(?:#([A-Za-z0-9_-]+))?(?![A-Za-z0-9_/-])/g;
-
-for (const file of codeFiles) {
-  const lines = readFileSync(file, 'utf8').split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!/(?:\/\/|#|\/\*|\*|<!--|--)/.test(line)) continue;
-    if (/check-doc-links:ignore/.test(line)) continue;
-    for (const m of line.matchAll(DOC_REF_RE)) {
-      const [raw, relPath, fragment] = m;
-      if (/[*?]/.test(relPath)) {
-        errors.push(`${file}:${i + 1}: comment cites glob path (${raw}) — name the specific file`);
-        continue;
-      }
-      const targetFile = path.normalize(relPath);
+  for (const [file, { links, bareRefs, repoPaths, externalUrls }] of parsed) {
+    for (const { line, targetFile, fragment, raw, inManagedBlock } of links) {
       if (!existsSync(targetFile)) {
-        errors.push(`${file}:${i + 1}: comment cites missing doc (${raw}) — ${targetFile} does not exist`);
+        if (inManagedBlock && !isOwnRepo) {
+          continue;
+        }
+        errors.push(`${file}:${line}: broken link (${raw}) — ${targetFile} does not exist`);
+        continue;
+      }
+      if (!isCommitted(targetFile)) {
+        if (inManagedBlock && !isOwnRepo) {
+          continue;
+        }
+        errors.push(`${file}:${line}: link target is untracked/gitignored (${raw}) — ${targetFile} is not in git`);
         continue;
       }
       if (fragment) {
         const targetSlugs = slugsFor(targetFile);
         if (targetSlugs && !targetSlugs.has(fragment.toLowerCase())) {
-          errors.push(`${file}:${i + 1}: comment cites broken anchor (${raw}) — #${fragment} not found in ${targetFile}`);
+          errors.push(`${file}:${line}: broken anchor (${raw}) — #${fragment} not found in ${targetFile}`);
+        }
+      }
+    }
+    for (const { line, raw, reason } of bareRefs) {
+      errors.push(`${file}:${line}: ${raw} — ${reason}`);
+    }
+    for (const { line, raw, targetPath, inManagedBlock } of repoPaths) {
+      if (!existsSync(targetPath)) {
+        if (inManagedBlock && !isOwnRepo) {
+          continue;
+        }
+        const baseName = path.basename(targetPath);
+        const dotIdx = baseName.lastIndexOf('.');
+        if (dotIdx > 0) {
+          const symbol = baseName.slice(dotIdx + 1);
+          const candidateBase = path.join(path.dirname(targetPath), baseName.slice(0, dotIdx));
+          if (
+            !COMMON_EXTS.has(symbol.toLowerCase()) &&
+            /^[A-Za-z_][A-Za-z0-9_]*$/.test(symbol) &&
+            existsSync(candidateBase) &&
+            isCommitted(candidateBase)
+          ) {
+            continue;
+          }
+        }
+        errors.push(
+          `${file}:${line}: ${raw} — ${targetPath} does not exist (strike through as ~~${raw}~~ if deliberately removed)`,
+        );
+      } else if (!isCommitted(targetPath)) {
+        if (inManagedBlock && !isOwnRepo) {
+          continue;
+        }
+        errors.push(`${file}:${line}: ${raw} — ${targetPath} is untracked/gitignored`);
+      }
+    }
+    for (const { line, url, heading } of externalUrls) {
+      if (/claude\.ai\/code\/artifact\//i.test(url)) {
+        if (!heading || !/^(references|visual record)\b/i.test(heading)) {
+          errors.push(
+            `${file}:${line}: Artifact URL (${url}) in section "${heading ?? '(top)'}" — keep Artifact links in a trailing "## References" / "### Visual record" section only`,
+          );
         }
       }
     }
   }
+
+  const reachable = new Set();
+  const queue = [...parsed.keys()].filter(isEntryPoint);
+  for (const ep of queue) reachable.add(ep);
+
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    const doc = parsed.get(cur);
+    if (!doc) continue;
+    for (const { targetFile } of doc.links) {
+      if (parsed.has(targetFile) && !reachable.has(targetFile)) {
+        reachable.add(targetFile);
+        queue.push(targetFile);
+      }
+    }
+  }
+
+  for (const file of parsed.keys()) {
+    if (file === 'README.md') continue;
+    if (!reachable.has(file)) {
+      errors.push(`${file}: orphan — not reachable from AGENTS.md, CLAUDE.md, any SKILL.md, or rules/`);
+    }
+  }
+
+  for (const file of parsed.keys()) {
+    const bytes = statSync(file).size;
+    if (file.startsWith(`docs${path.sep}epics${path.sep}`)) {
+      if (bytes > CFG.epicMaxBytes) {
+        errors.push(
+          `${file}: ${bytes} B exceeds the ${CFG.epicMaxBytes} B epic-index cap — move durable contracts into an ADR and delete completed slice prose`,
+        );
+      }
+      const text = readFileSync(file, 'utf8');
+      if (!/delete this file/i.test(text)) {
+        errors.push(`${file}: epic index must state its own deletion condition ("Delete this file when…")`);
+      }
+    }
+    if (file.startsWith(`docs${path.sep}adr${path.sep}`)) {
+      if (bytes > CFG.adrMaxBytes) {
+        errors.push(
+          `${file}: ${bytes} B exceeds the ${CFG.adrMaxBytes} B ADR cap — move chronological slice logs to docs/implementation-notes/`,
+        );
+      }
+    }
+  }
+
+  const codeFiles = CFG.codeRoots.flatMap((r) => walkCode(r));
+  const DOC_REF_RE = /\b((?:docs|skills|rules|\.claude|\.agents)\/[A-Za-z0-9_./*-]+?\.md)(?:#([A-Za-z0-9_-]+))?(?![A-Za-z0-9_/-])/g;
+
+  for (const file of codeFiles) {
+    const lines = readFileSync(file, 'utf8').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!/(?:\/\/|#|\/\*|\*|<!--|--)/.test(line)) continue;
+      if (/check-doc-links:ignore/.test(line)) continue;
+      for (const m of line.matchAll(DOC_REF_RE)) {
+        const [raw, relPath, fragment] = m;
+        if (/[*?]/.test(relPath)) {
+          errors.push(`${file}:${i + 1}: comment cites glob path (${raw}) — name the specific file`);
+          continue;
+        }
+        const targetFile = path.normalize(relPath);
+        if (!existsSync(targetFile)) {
+          errors.push(`${file}:${i + 1}: comment cites missing doc (${raw}) — ${targetFile} does not exist`);
+          continue;
+        }
+        if (fragment) {
+          const targetSlugs = slugsFor(targetFile);
+          if (targetSlugs && !targetSlugs.has(fragment.toLowerCase())) {
+            errors.push(`${file}:${i + 1}: comment cites broken anchor (${raw}) — #${fragment} not found in ${targetFile}`);
+          }
+        }
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    console.error(`check-doc-links: ${errors.length} problem(s):\n`);
+    for (const e of errors) console.error(`  ${e}`);
+    process.exit(1);
+  }
+
+  console.log(`check-doc-links: ${parsed.size} docs, all internal links resolve. OK.`);
 }
 
-if (errors.length > 0) {
-  console.error(`check-doc-links: ${errors.length} problem(s):\n`);
-  for (const e of errors) console.error(`  ${e}`);
-  process.exit(1);
+function isMainScript() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
 }
 
-console.log(`check-doc-links: ${parsed.size} docs, all internal links resolve. OK.`);
+if (isMainScript()) {
+  runCli();
+}

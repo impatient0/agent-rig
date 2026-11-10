@@ -4,7 +4,15 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Do next
 
-- None currently queued.
+- **Decouple `scripts/check-doc-links.mjs` from `bin/rig.mjs` so it is 100% standalone:**
+  `scripts/check-doc-links.mjs` currently imports four pure Markdown-block string helpers (`buildDocsIndexBlock`, `extractManagedDocsBlock`, `extractManagedAgentsBlock`, `mergeManagedAgentsFile`) from `../bin/rig.mjs`.
+  Unlike `scripts/reflow-docs.mjs` (which imports only Node built-ins), `scripts/check-doc-links.mjs` cannot execute when copied or vendored without `bin/rig.mjs` at `../bin/rig.mjs`, requiring `rig init` to always vendor `bin/rig.mjs` into `.rig/bin/rig.mjs` alongside `.rig/scripts/check-doc-links.mjs`.
+  Inlining those pure string helpers into `scripts/check-doc-links.mjs` (and re-exporting or sharing them cleanly with `bin/rig.mjs`) makes both documentation linters zero-dependency, standalone scripts that only import Node built-ins (`node:fs`, `node:child_process`, `node:path`).
+
+- **Add explicit `## Output Format` templates and trigger-rich descriptions to core `SKILL.md` files:**
+  [`agents/verifier.md`](../agents/verifier.md) defines a strict `## Required Output Format` Markdown template (`## Verification Report ... VERDICT: PASS | FAIL`), which prevents inconsistent or prose-heavy agent responses.
+  However, core skills under `skills/` ([`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md), [`skills/doc-audit/SKILL.md`](../skills/doc-audit/SKILL.md), [`skills/backlog-audit/SKILL.md`](../skills/backlog-audit/SKILL.md), [`skills/wrap-up/SKILL.md`](../skills/wrap-up/SKILL.md), [`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md), [`skills/rig-update/SKILL.md`](../skills/rig-update/SKILL.md), [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md), and [`skills/secure-credential-handoff/SKILL.md`](../skills/secure-credential-handoff/SKILL.md)) describe their final reporting steps in prose without canonical Markdown output templates, and several frontmatter `description` fields can be sharpened with explicit trigger phrases.
+  Adding deterministic `## Output Format` sections and concrete trigger phrases across `skills/` standardizes agent deliverables across sessions and harnesses.
 
 ## Ready, unblocked
 

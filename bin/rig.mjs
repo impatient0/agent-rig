@@ -2872,7 +2872,7 @@ export function ejectRepo(targetDir = process.cwd(), { homeDir = homedir() } = {
   };
 }
 
-export function statusRepo(targetDir = process.cwd()) {
+export function statusRepo(targetDir = process.cwd(), { homeDir = homedir(), rigRoot = RIG_ROOT } = {}) {
   const dir = path.resolve(targetDir);
   const skillDirs = [
     path.join(dir, 'skills'),
@@ -2881,17 +2881,17 @@ export function statusRepo(targetDir = process.cwd()) {
     path.join(dir, '.codex/skills'),
     path.join(dir, '.cursor/skills'),
   ];
-  const skillSet = new Set();
+  const localSkillSet = new Set();
   for (const sd of skillDirs) {
     if (existsSync(sd)) {
       try {
-        for (const s of listSkills(sd)) skillSet.add(s);
+        for (const s of listSkills(sd)) localSkillSet.add(s);
       } catch {
         // ignore
       }
     }
   }
-  const skillsPresent = [...skillSet];
+  const skillsLocal = [...localSkillSet].sort();
 
   const hookDirs = [
     path.join(dir, '.rig/hooks'),
@@ -2901,19 +2901,19 @@ export function statusRepo(targetDir = process.cwd()) {
     path.join(dir, '.codex/hooks'),
     path.join(dir, '.cursor/hooks'),
   ];
-  const hookSet = new Set();
+  const localHookSet = new Set();
   for (const hd of hookDirs) {
     if (existsSync(hd)) {
       try {
         for (const h of readdirSync(hd)) {
-          if (h.startsWith('guard-')) hookSet.add(h);
+          if (h.startsWith('guard-')) localHookSet.add(h);
         }
       } catch {
         // ignore
       }
     }
   }
-  const hooksPresent = [...hookSet];
+  const hooksLocal = [...localHookSet].sort();
 
   let gitHooksPath = null;
   if (existsSync(path.join(dir, '.git'))) {
@@ -2921,14 +2921,72 @@ export function statusRepo(targetDir = process.cwd()) {
     if (res.status === 0) gitHooksPath = res.stdout.trim();
   }
 
+  const preCommitCandidates = [
+    path.join(dir, '.rig/hooks/pre-commit'),
+    path.join(dir, 'scripts/git-hooks/pre-commit'),
+    path.join(dir, '.git/hooks/pre-commit'),
+  ];
+  const activePreCommit = preCommitCandidates.find((c) => existsSync(c));
+  const gitPreCommit = activePreCommit ? path.relative(dir, activePreCommit).replace(/\\/g, '/') : null;
+
+  const selfContained = isSelfContainedRepo(dir);
+  const isRigged =
+    selfContained ||
+    existsSync(path.join(dir, 'AGENTS.md')) ||
+    existsSync(path.join(dir, '.rig')) ||
+    Boolean(gitHooksPath);
+
+  let mode = 'unrigged';
+  if (selfContained) {
+    mode = 'self-contained';
+  } else if (isRigged) {
+    mode = 'attached';
+  }
+
+  const state = readRigState(homeDir);
+  let globalSkills = (state.installedSkills || []).slice().sort();
+  if (globalSkills.length === 0 && existsSync(path.join(rigRoot, 'skills'))) {
+    globalSkills = listSkills(path.join(rigRoot, 'skills'));
+  }
+
+  const standardGuards = [
+    'guard-main-checkout-edits.mjs',
+    'guard-remote-mutation.mjs',
+    'guard-symlinked-node-modules.mjs',
+  ];
+  let hooksGlobal = [];
+  const hasGlobalHarness =
+    (state.installedHarnesses && state.installedHarnesses.length > 0) ||
+    existsSync(path.join(homeDir, '.gemini/config/plugins/agent-rig/hooks.json')) ||
+    existsSync(path.join(homeDir, '.claude/hooks')) ||
+    existsSync(path.join(rigRoot, 'hooks'));
+  if (hasGlobalHarness) {
+    hooksGlobal = [...standardGuards];
+  }
+
+  const skillsEffective = mode === 'unrigged' ? skillsLocal : [...new Set([...skillsLocal, ...globalSkills])].sort();
+  const hooksEffective = mode === 'unrigged' ? hooksLocal : [...new Set([...hooksLocal, ...hooksGlobal])].sort();
+
   return {
     dir,
+    mode,
     hasAgentsMd: existsSync(path.join(dir, 'AGENTS.md')),
     hasBacklog: existsSync(path.join(dir, 'docs/backlog.md')),
-    skillsPresent,
-    hooksPresent,
     gitHooksPath,
     existingHookManager: detectExistingHookManager(dir),
+    skills: {
+      effective: skillsEffective,
+      local: skillsLocal,
+      global: globalSkills,
+    },
+    hooks: {
+      gitPreCommit,
+      effectiveGuards: hooksEffective,
+      local: hooksLocal,
+      global: hooksGlobal,
+    },
+    skillsPresent: skillsEffective,
+    hooksPresent: hooksEffective,
   };
 }
 
@@ -3431,7 +3489,9 @@ async function main() {
 
   if (cmd === 'status') {
     const pos = args.slice(1).find((a) => !a.startsWith('-')) ?? process.cwd();
-    console.log(JSON.stringify(statusRepo(pos), null, 2));
+    const homeIdx = args.indexOf('--home');
+    const homeDir = homeIdx !== -1 && args[homeIdx + 1] ? path.resolve(args[homeIdx + 1]) : homedir();
+    console.log(JSON.stringify(statusRepo(pos, { homeDir, rigRoot: RIG_ROOT }), null, 2));
     return;
   }
 

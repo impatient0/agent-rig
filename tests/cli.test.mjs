@@ -512,9 +512,15 @@ test('self-contained initRepo bundles skills, subagents, rules, hooks, and linte
 
     initRepo(dir, { selfContained: true, worktrees: true, harness: 'claude', homeDir: false });
     const st = statusRepo(dir);
+    assert.equal(st.mode, 'self-contained');
+    assert.equal(st.skills.local.length, listSkills(path.join(RIG_ROOT, 'skills')).length);
+    assert.equal(st.skills.effective.length, listSkills(path.join(RIG_ROOT, 'skills')).length);
     assert.equal(st.skillsPresent.length, listSkills(path.join(RIG_ROOT, 'skills')).length);
     assert.ok(st.skillsPresent.includes('rig-onboard'));
+    assert.equal(st.hooks.local.length, 3);
+    assert.equal(st.hooks.effectiveGuards.length, 3);
     assert.equal(st.hooksPresent.length, 3);
+    assert.equal(st.hooks.gitPreCommit, '.rig/hooks/pre-commit');
     assert.ok(existsSync(path.join(dir, '.claude/agents/verifier.md')));
     assert.ok(existsSync(path.join(dir, '.claude/agents/worker.md')));
     assert.ok(existsSync(path.join(dir, '.claude/rules/contract-change-gate.md')));
@@ -1874,6 +1880,95 @@ test('rig handles foreign system, editor, and metadata files without throwing EN
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
     rmSync(fakeRigRoot, { recursive: true, force: true });
+  }
+});
+
+test('statusRepo reports mode (attached vs self-contained vs unrigged) with local and global asset breakdown', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-status-home-'));
+  const fakeRigRoot = mkdtempSync(path.join(tmpdir(), 'rig-status-rig-root-'));
+  const attachedRepo = mkdtempSync(path.join(tmpdir(), 'rig-status-attached-'));
+  const unriggedRepo = mkdtempSync(path.join(tmpdir(), 'rig-status-unrigged-'));
+
+  try {
+    // 1. Unrigged repository
+    const unriggedStatus = statusRepo(unriggedRepo, { homeDir: fakeHome, rigRoot: fakeRigRoot });
+    assert.equal(unriggedStatus.mode, 'unrigged');
+    assert.equal(unriggedStatus.hasAgentsMd, false);
+    assert.equal(unriggedStatus.skills.effective.length, 0);
+    assert.equal(unriggedStatus.skills.local.length, 0);
+    assert.equal(unriggedStatus.skills.global.length, 0);
+    assert.equal(unriggedStatus.skillsPresent.length, 0);
+    assert.equal(unriggedStatus.hooks.effectiveGuards.length, 0);
+    assert.equal(unriggedStatus.hooks.local.length, 0);
+    assert.equal(unriggedStatus.hooks.global.length, 0);
+    assert.equal(unriggedStatus.hooksPresent.length, 0);
+    assert.equal(unriggedStatus.hooks.gitPreCommit, null);
+
+    // 2. Set up fake global harness with skills and hooks
+    mkdirSync(path.join(fakeRigRoot, 'skills', 'dispatch'), { recursive: true });
+    writeFileSync(path.join(fakeRigRoot, 'skills', 'dispatch', 'SKILL.md'), '# dispatch');
+    mkdirSync(path.join(fakeRigRoot, 'skills', 'wrap-up'), { recursive: true });
+    writeFileSync(path.join(fakeRigRoot, 'skills', 'wrap-up', 'SKILL.md'), '# wrap-up');
+    mkdirSync(path.join(fakeRigRoot, 'hooks'), { recursive: true });
+    writeFileSync(path.join(fakeRigRoot, 'hooks', 'guard-main-checkout-edits.mjs'), '// hook');
+
+    installRig({
+      harness: 'antigravity',
+      homeDir: fakeHome,
+      rigRoot: fakeRigRoot,
+    });
+
+    // 3. Attached repository (lightweight)
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: attachedRepo });
+    writeFileSync(path.join(attachedRepo, 'AGENTS.md'), '# Attached Repo\n');
+    attachRepo(attachedRepo, { homeDir: fakeHome });
+
+    const attachedStatus = statusRepo(attachedRepo, { homeDir: fakeHome, rigRoot: fakeRigRoot });
+    assert.equal(attachedStatus.mode, 'attached');
+    assert.equal(attachedStatus.hasAgentsMd, true);
+    assert.deepEqual(attachedStatus.skills.local, []);
+    assert.deepEqual(attachedStatus.skills.global, ['dispatch', 'wrap-up']);
+    assert.deepEqual(attachedStatus.skills.effective, ['dispatch', 'wrap-up']);
+    assert.deepEqual(attachedStatus.skillsPresent, ['dispatch', 'wrap-up']);
+    assert.deepEqual(attachedStatus.hooks.local, []);
+    assert.deepEqual(attachedStatus.hooks.global, [
+      'guard-main-checkout-edits.mjs',
+      'guard-remote-mutation.mjs',
+      'guard-symlinked-node-modules.mjs',
+    ]);
+    assert.deepEqual(attachedStatus.hooks.effectiveGuards, [
+      'guard-main-checkout-edits.mjs',
+      'guard-remote-mutation.mjs',
+      'guard-symlinked-node-modules.mjs',
+    ]);
+    assert.deepEqual(attachedStatus.hooksPresent, [
+      'guard-main-checkout-edits.mjs',
+      'guard-remote-mutation.mjs',
+      'guard-symlinked-node-modules.mjs',
+    ]);
+    assert.equal(attachedStatus.hooks.gitPreCommit, '.rig/hooks/pre-commit');
+
+    // 4. Test CLI output invocation with --home
+    const cliRes = spawnSync(
+      process.execPath,
+      [path.join(RIG_ROOT, 'bin/rig.mjs'), 'status', attachedRepo, '--home', fakeHome],
+      { encoding: 'utf8' },
+    );
+    assert.equal(cliRes.status, 0, cliRes.stderr);
+    const parsedCli = JSON.parse(cliRes.stdout.trim());
+    assert.equal(parsedCli.mode, 'attached');
+    assert.deepEqual(parsedCli.skills.effective, ['dispatch', 'wrap-up']);
+    assert.deepEqual(parsedCli.skillsPresent, ['dispatch', 'wrap-up']);
+    assert.deepEqual(parsedCli.hooks.effectiveGuards, [
+      'guard-main-checkout-edits.mjs',
+      'guard-remote-mutation.mjs',
+      'guard-symlinked-node-modules.mjs',
+    ]);
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(fakeRigRoot, { recursive: true, force: true });
+    rmSync(attachedRepo, { recursive: true, force: true });
+    rmSync(unriggedRepo, { recursive: true, force: true });
   }
 });
 

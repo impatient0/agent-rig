@@ -25,7 +25,7 @@ Fix any broken relative links, missing `#fragment` anchors, orphaned files under
 
 Inspect each file under `docs/` (especially ADRs under [`docs/adr/0001-record-architecture-decisions.md`](../../docs/adr/0001-record-architecture-decisions.md)) for mixed lifecycles:
 - **Stable invariants & decisions** belong in ADRs or `AGENTS.md`.
-- **Chronological implementation diaries** ("Slice 1 did X, Slice 2 changed Y") belong in commit history or `docs/implementation-notes/`, and MUST NOT be appended indefinitely to an ADR.
+- **Chronological implementation diaries** ("Slice 1 did X, Slice 2 changed Y") belong in commit history or `docs/implementation-notes/`, never appended indefinitely to an ADR.
 
 ---
 

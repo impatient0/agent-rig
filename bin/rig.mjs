@@ -1473,7 +1473,9 @@ export function validateRepoCleanForUpdate(targetDir) {
     };
   }
 
-  const status = spawnSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' });
+  // Untracked files do not block rig updates since explicit pathspec staging only stages
+  // copied/removed rig assets. Only uncommitted tracked changes or staged changes block update.
+  const status = spawnSync('git', ['-C', dir, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' });
   if (status.status === 0 && status.stdout.trim().length > 0) {
     return {
       ok: false,

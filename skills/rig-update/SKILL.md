@@ -29,7 +29,7 @@ In stealth-initialized repositories (`rig init --stealth`), `rig update` refresh
    ```bash
    git -C <target-dir> status --short
    ```
-   *(If a repository is on a non-`main` branch or has uncommitted changes, `rig update --repo` and `rig update --all` safely skip it with a warning rather than mutating disk).*
+   *(If a repository is on a non-`main` branch or has uncommitted tracked or staged changes, `rig update --repo` and `rig update --all` safely skip it with a warning rather than mutating disk; untracked files do not block updates).*
 
 ---
 
@@ -45,7 +45,7 @@ In stealth-initialized repositories (`rig init --stealth`), `rig update` refresh
    ```
    *(This refreshes `.rig/` hooks, the demarcated block in `AGENTS.md`, and any `--self-contained` vendored skills, agents, rules, and hooks, then automatically commits `chore(rig): update agent-rig repository assets` with `Unmandated-call: none` directly on `main`).*
 2. **Confirm clean post-update status:**
-   Verify that the asset refresh was committed cleanly and no untracked or unstaged changes remain:
+   Verify that the asset refresh was committed cleanly and no unstaged tracked changes remain:
    ```bash
    git -C <target-dir> status --short
    git -C <target-dir> log -1

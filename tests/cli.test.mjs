@@ -1302,16 +1302,34 @@ test('validateRepoCleanForUpdate and isSelfContainedRepo validate safety invaria
     assert.equal(cleanMain.ok, true);
     assert.equal(cleanMain.branch, 'main');
 
-    // 4. Dirty working tree
+    // 4. Untracked files (such as .DS_Store or general untracked files) do not block update
+    writeFileSync(path.join(dir, '.DS_Store'), 'mock ds_store');
     writeFileSync(path.join(dir, 'uncommitted.txt'), 'dirty\n');
-    const dirtyRes = validateRepoCleanForUpdate(dir);
-    assert.equal(dirtyRes.ok, false);
-    assert.equal(dirtyRes.reason, 'dirty');
-    assert.match(dirtyRes.message, /working tree has uncommitted changes/);
+    const untrackedRes = validateRepoCleanForUpdate(dir);
+    assert.equal(untrackedRes.ok, true);
+    assert.equal(untrackedRes.branch, 'main');
 
-    // Commit file so it's clean again
-    spawnSync('git', ['-C', dir, 'add', '-A']);
+    // 5. Staged new file makes working tree dirty
+    spawnSync('git', ['-C', dir, 'add', 'uncommitted.txt']);
+    const stagedDirtyRes = validateRepoCleanForUpdate(dir);
+    assert.equal(stagedDirtyRes.ok, false);
+    assert.equal(stagedDirtyRes.reason, 'dirty');
+    assert.match(stagedDirtyRes.message, /working tree has uncommitted changes/);
+
+    // Commit file so index is clean again
     spawnSync('git', ['-C', dir, 'commit', '-m', 'chore: add uncommitted']);
+
+    // 6. Unstaged tracked modification makes working tree dirty
+    writeFileSync(path.join(dir, 'uncommitted.txt'), 'modified tracked content\n');
+    const modifiedDirtyRes = validateRepoCleanForUpdate(dir);
+    assert.equal(modifiedDirtyRes.ok, false);
+    assert.equal(modifiedDirtyRes.reason, 'dirty');
+    assert.match(modifiedDirtyRes.message, /working tree has uncommitted changes/);
+
+    // Restore tracked file so it is clean again
+    spawnSync('git', ['-C', dir, 'checkout', '--', 'uncommitted.txt']);
+    const cleanAgain = validateRepoCleanForUpdate(dir);
+    assert.equal(cleanAgain.ok, true);
 
     // 5. Non-main branch
     spawnSync('git', ['-C', dir, 'checkout', '-b', 'feature/test']);
@@ -1390,6 +1408,7 @@ test('updateRig selective execution: allRepos and repoDir update clean repos and
       spawnSync('git', ['-C', r, 'config', 'user.email', 'test@example.com']);
       spawnSync('git', ['-C', r, 'config', 'user.name', 'Test']);
       initRepo(r, { selfContained: false, worktrees: true, homeDir: fakeHome });
+      writeFileSync(path.join(r, 'tracked.txt'), 'initial content\n');
       spawnSync('git', ['-C', r, 'add', '-A']);
       spawnSync('git', ['-C', r, 'commit', '-m', 'chore: initial']);
     }
@@ -1397,12 +1416,13 @@ test('updateRig selective execution: allRepos and repoDir update clean repos and
     // Put branchRepo on a feature branch
     spawnSync('git', ['-C', branchRepo, 'checkout', '-b', 'feature/test']);
 
-    // Make dirtyRepo dirty
-    writeFileSync(path.join(dirtyRepo, 'dirty.txt'), 'dirty content\n');
+    // Make dirtyRepo dirty with uncommitted tracked changes
+    writeFileSync(path.join(dirtyRepo, 'tracked.txt'), 'dirty uncommitted work\n');
 
-    // Introduce an outdated hook in cleanRepo to trigger pending
+    // Introduce an outdated hook in cleanRepo to trigger pending, plus untracked .DS_Store
+    writeFileSync(path.join(cleanRepo, '.DS_Store'), 'mock ds_store');
     writeFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), '#!/bin/sh\n# outdated\n');
-    spawnSync('git', ['-C', cleanRepo, 'add', '-A']);
+    spawnSync('git', ['-C', cleanRepo, 'add', '.rig/hooks/pre-commit']);
     spawnSync('git', ['-C', cleanRepo, 'commit', '-m', 'chore: outdated hook']);
 
     // 1. Default updateRig: inspects all 3, mutates none, returns notice
@@ -1438,8 +1458,10 @@ test('updateRig selective execution: allRepos and repoDir update clean repos and
     assert.doesNotMatch(readFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated/);
     assert.equal(targetCleanRes.updatedRepos[0].committed, true);
     assert.ok(targetCleanRes.updatedRepos[0].commitSha);
-    const cleanStatus = spawnSync('git', ['-C', cleanRepo, 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
+    const cleanStatus = spawnSync('git', ['-C', cleanRepo, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).stdout.trim();
     assert.equal(cleanStatus, '');
+    const fullStatus = spawnSync('git', ['-C', cleanRepo, 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(fullStatus, '?? .DS_Store');
     const lastCommitMsg = spawnSync('git', ['-C', cleanRepo, 'log', '-1', '--pretty=%B'], { encoding: 'utf8' }).stdout.trim();
     assert.match(lastCommitMsg, /chore\(rig\): update agent-rig repository assets/);
     assert.match(lastCommitMsg, /Unmandated-call: none/);
@@ -1454,7 +1476,7 @@ test('updateRig selective execution: allRepos and repoDir update clean repos and
     // 5. updateRig with allRepos: true -> cleanRepo updated and auto-committed, branchRepo and dirtyRepo skipped
     // Outdate cleanRepo again to re-test allRepos
     writeFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), '#!/bin/sh\n# outdated again\n');
-    spawnSync('git', ['-C', cleanRepo, 'add', '-A']);
+    spawnSync('git', ['-C', cleanRepo, 'add', '.rig/hooks/pre-commit']);
     spawnSync('git', ['-C', cleanRepo, 'commit', '-m', 'chore: outdated hook again']);
 
     const allRes = updateRig({ homeDir: fakeHome, allRepos: true });
@@ -1462,8 +1484,10 @@ test('updateRig selective execution: allRepos and repoDir update clean repos and
     assert.equal(allRes.updatedRepos[0].dir, cleanRepo);
     assert.equal(allRes.updatedRepos[0].committed, true);
     assert.ok(allRes.updatedRepos[0].commitSha);
-    const allCleanStatus = spawnSync('git', ['-C', cleanRepo, 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
+    const allCleanStatus = spawnSync('git', ['-C', cleanRepo, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).stdout.trim();
     assert.equal(allCleanStatus, '');
+    const allFullStatus = spawnSync('git', ['-C', cleanRepo, 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(allFullStatus, '?? .DS_Store');
     assert.equal(allRes.skippedRepos.length, 2);
     assert.ok(allRes.skippedRepos.some((s) => s.dir === branchRepo && s.reason === 'non-main-branch'));
     assert.ok(allRes.skippedRepos.some((s) => s.dir === dirtyRepo && s.reason === 'dirty'));
@@ -1730,6 +1754,7 @@ test('CLI rig update --all and rig update --repo update clean repos on main and 
       git(r, 'config', 'user.email', 'test@example.com');
       git(r, 'config', 'user.name', 'Test');
       initRepo(r, { selfContained: false, worktrees: true, homeDir: fakeHome });
+      writeFileSync(path.join(r, 'tracked.txt'), 'initial content\n');
       git(r, 'add', '-A');
       git(r, 'commit', '-qm', 'chore: initial');
 
@@ -1742,8 +1767,11 @@ test('CLI rig update --all and rig update --repo update clean repos on main and 
     // Put branchRepo on feature branch
     git(branchRepo, 'checkout', '-b', 'feature/isolated-branch');
 
-    // Make dirtyRepo dirty with uncommitted changes
-    writeFileSync(path.join(dirtyRepo, 'uncommitted.txt'), 'dirty uncommitted work\n');
+    // Make dirtyRepo dirty with uncommitted tracked changes
+    writeFileSync(path.join(dirtyRepo, 'tracked.txt'), 'dirty uncommitted work\n');
+
+    // cleanRepo has an untracked .DS_Store file which must not block update
+    writeFileSync(path.join(cleanRepo, '.DS_Store'), 'mock macos metadata');
 
     // 1. CLI rig update --repo targeting dirtyRepo
     const dirtyRes = runRig('update', '--repo', dirtyRepo, '--home', fakeHome);
@@ -1761,7 +1789,8 @@ test('CLI rig update --all and rig update --repo update clean repos on main and 
     const cleanRes = runRig('update', '--repo', cleanRepo, '--home', fakeHome);
     assert.match(cleanRes.stdout, /rig update: synced/);
     assert.doesNotMatch(readFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated shim/);
-    assert.equal(git(cleanRepo, 'status', '--porcelain').stdout.trim(), '');
+    assert.equal(git(cleanRepo, 'status', '--porcelain', '--untracked-files=no').stdout.trim(), '');
+    assert.equal(git(cleanRepo, 'status', '--porcelain').stdout.trim(), '?? .DS_Store');
     const cleanCommitMsg = git(cleanRepo, 'log', '-1', '--pretty=%B').stdout.trim();
     assert.match(cleanCommitMsg, /chore\(rig\): update agent-rig repository assets/);
     assert.match(cleanCommitMsg, /Unmandated-call: none/);
@@ -1769,7 +1798,7 @@ test('CLI rig update --all and rig update --repo update clean repos on main and 
     // 4. CLI rig update --all
     // Make cleanRepo outdated again so we can test --all
     writeFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), '#!/bin/sh\n# outdated again\n');
-    git(cleanRepo, 'add', '-A');
+    git(cleanRepo, 'add', '.rig/hooks/pre-commit');
     git(cleanRepo, 'commit', '-qm', 'chore: outdated again');
 
     const allRes = runRig('update', '--all', '--home', fakeHome);
@@ -1779,7 +1808,8 @@ test('CLI rig update --all and rig update --repo update clean repos on main and 
 
     // cleanRepo updated and auto-committed, dirtyRepo and branchRepo still untouched
     assert.doesNotMatch(readFileSync(path.join(cleanRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated again/);
-    assert.equal(git(cleanRepo, 'status', '--porcelain').stdout.trim(), '');
+    assert.equal(git(cleanRepo, 'status', '--porcelain', '--untracked-files=no').stdout.trim(), '');
+    assert.equal(git(cleanRepo, 'status', '--porcelain').stdout.trim(), '?? .DS_Store');
     const allCommitMsg = git(cleanRepo, 'log', '-1', '--pretty=%B').stdout.trim();
     assert.match(allCommitMsg, /chore\(rig\): update agent-rig repository assets/);
     assert.match(readFileSync(path.join(dirtyRepo, '.rig/hooks/pre-commit'), 'utf8'), /# outdated shim/);

@@ -46,6 +46,8 @@ import {
   validateRepoCleanForUpdate,
   checkRepoPendingUpdates,
   VENDORED_RIG_FILES,
+  listSkills,
+  isIgnoredFsEntry,
 } from '../bin/rig.mjs';
 import { isRiggedRepo } from '../hooks/guard-main-checkout-edits.mjs';
 
@@ -510,7 +512,7 @@ test('self-contained initRepo bundles skills, subagents, rules, hooks, and linte
 
     initRepo(dir, { selfContained: true, worktrees: true, harness: 'claude', homeDir: false });
     const st = statusRepo(dir);
-    assert.equal(st.skillsPresent.length, readdirSync(path.join(RIG_ROOT, 'skills')).length);
+    assert.equal(st.skillsPresent.length, listSkills(path.join(RIG_ROOT, 'skills')).length);
     assert.ok(st.skillsPresent.includes('rig-onboard'));
     assert.equal(st.hooksPresent.length, 3);
     assert.ok(existsSync(path.join(dir, '.claude/agents/verifier.md')));
@@ -1783,5 +1785,97 @@ test('CLI rig update --all and rig update --repo update clean repos on main and 
     rmSync(branchRepo, { recursive: true, force: true });
   }
 });
+
+test('rig handles foreign system, editor, and metadata files without throwing ENOTDIR or EISDIR', () => {
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-home-foreign-'));
+  const fakeRigRoot = mkdtempSync(path.join(tmpdir(), 'rig-root-foreign-'));
+
+  try {
+    // Scaffold minimal rig structure in fakeRigRoot
+    mkdirSync(path.join(fakeRigRoot, 'templates'), { recursive: true });
+    copyFileSync(path.join(RIG_ROOT, 'templates/models.json'), path.join(fakeRigRoot, 'templates/models.json'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/rig-config.default.json'), path.join(fakeRigRoot, 'templates/rig-config.default.json'));
+    copyFileSync(path.join(RIG_ROOT, 'plugin.json'), path.join(fakeRigRoot, 'plugin.json'));
+
+    mkdirSync(path.join(fakeRigRoot, 'skills/dispatch'), { recursive: true });
+    writeFileSync(path.join(fakeRigRoot, 'skills/dispatch/SKILL.md'), '# Dispatch\n');
+    mkdirSync(path.join(fakeRigRoot, 'skills/wrap-up'), { recursive: true });
+    writeFileSync(path.join(fakeRigRoot, 'skills/wrap-up/SKILL.md'), '# Wrap up\n');
+
+    // Plant foreign system files in skills/
+    writeFileSync(path.join(fakeRigRoot, 'skills/.DS_Store'), 'macos metadata');
+    writeFileSync(path.join(fakeRigRoot, 'skills/.directory'), 'kde metadata');
+    writeFileSync(path.join(fakeRigRoot, 'skills/desktop.ini'), 'windows metadata');
+    writeFileSync(path.join(fakeRigRoot, 'skills/Thumbs.db'), 'windows thumbnails');
+    writeFileSync(path.join(fakeRigRoot, 'skills/notes.txt'), 'not a skill\n');
+
+    // Plant editor artifacts inside skill directories
+    writeFileSync(path.join(fakeRigRoot, 'skills/dispatch/.DS_Store'), 'nested macos metadata');
+    writeFileSync(path.join(fakeRigRoot, 'skills/dispatch/SKILL.md~'), 'backup');
+    writeFileSync(path.join(fakeRigRoot, 'skills/dispatch/.SKILL.md.swp'), 'vim swap');
+
+    // Plant rules and agents with foreign artifacts
+    mkdirSync(path.join(fakeRigRoot, 'rules'), { recursive: true });
+    writeFileSync(path.join(fakeRigRoot, 'rules/contract-change-gate.md'), '# Contract Gate\n');
+    writeFileSync(path.join(fakeRigRoot, 'rules/.DS_Store'), 'macos metadata');
+    writeFileSync(path.join(fakeRigRoot, 'rules/.directory'), 'kde metadata');
+    writeFileSync(path.join(fakeRigRoot, 'rules/contract-change-gate.md~'), 'backup');
+
+    mkdirSync(path.join(fakeRigRoot, 'agents'), { recursive: true });
+    writeFileSync(path.join(fakeRigRoot, 'agents/verifier.md'), '# Verifier\n');
+    writeFileSync(path.join(fakeRigRoot, 'agents/.DS_Store'), 'macos metadata');
+    writeFileSync(path.join(fakeRigRoot, 'agents/verifier.md~'), 'backup');
+
+    // 1. Verify listSkills filters all non-skill and foreign entries
+    const skills = listSkills(path.join(fakeRigRoot, 'skills'));
+    assert.deepEqual(skills, ['dispatch', 'wrap-up']);
+
+    // 2. Verify isIgnoredFsEntry
+    assert.equal(isIgnoredFsEntry('.DS_Store'), true);
+    assert.equal(isIgnoredFsEntry('.directory'), true);
+    assert.equal(isIgnoredFsEntry('desktop.ini'), true);
+    assert.equal(isIgnoredFsEntry('Thumbs.db'), true);
+    assert.equal(isIgnoredFsEntry('SKILL.md~'), true);
+    assert.equal(isIgnoredFsEntry('#SKILL.md#'), true);
+    assert.equal(isIgnoredFsEntry('SKILL.md.swp'), true);
+    assert.equal(isIgnoredFsEntry('SKILL.md.orig'), true);
+    assert.equal(isIgnoredFsEntry('SKILL.md'), false);
+    assert.equal(isIgnoredFsEntry('dispatch'), false);
+
+    // 3. installRig must succeed without ENOTDIR / EISDIR
+    mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
+    const res = installRig({
+      homeDir: fakeHome,
+      harnesses: ['antigravity'],
+      force: false,
+      rigRoot: fakeRigRoot,
+    });
+    assert.ok(res);
+
+    // Verify installed plugin does not contain foreign artifacts
+    const installedSkills = readdirSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/skills'));
+    assert.deepEqual(installedSkills.sort(), ['dispatch', 'wrap-up']);
+    assert.equal(existsSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/skills/.DS_Store')), false);
+    assert.equal(existsSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/skills/dispatch/.DS_Store')), false);
+    assert.equal(existsSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/skills/dispatch/SKILL.md~')), false);
+
+    const installedRules = readdirSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules'));
+    assert.deepEqual(installedRules, ['contract-change-gate.md']);
+
+    const installedAgents = readdirSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/agents'));
+    assert.deepEqual(installedAgents, ['verifier.md']);
+
+    // 4. updateRig must also succeed cleanly with foreign metadata/editor files
+    const updateRes = updateRig({
+      homeDir: fakeHome,
+      rigRoot: fakeRigRoot,
+    });
+    assert.ok(updateRes);
+  } finally {
+    rmSync(fakeHome, { recursive: true, force: true });
+    rmSync(fakeRigRoot, { recursive: true, force: true });
+  }
+});
+
 
 

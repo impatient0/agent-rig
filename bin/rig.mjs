@@ -375,18 +375,59 @@ export function buildManagedAgentsBlock(resolvedProfile, { rigRoot = RIG_ROOT, i
 }
 
 
+export function isIgnoredFsEntry(entry) {
+  if (typeof entry !== 'string' || entry.length === 0) return true;
+  if (entry.startsWith('.')) return true;
+  if (entry.endsWith('~')) return true;
+  if (entry.startsWith('#') && entry.endsWith('#')) return true;
+  if (entry.endsWith('.swp') || entry.endsWith('.swo') || entry.endsWith('.swn')) return true;
+  if (entry.endsWith('.orig') || entry.endsWith('.rej')) return true;
+  if (entry === 'desktop.ini' || entry === 'Thumbs.db') return true;
+  return false;
+}
+
+export function listSkills(skillsDir) {
+  if (!skillsDir || !existsSync(skillsDir)) return [];
+  try {
+    return readdirSync(skillsDir)
+      .filter((entry) => {
+        if (isIgnoredFsEntry(entry)) return false;
+        try {
+          return statSync(path.join(skillsDir, entry)).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 export function copyOrHydrateDir(
   srcDir,
   destDir,
   resolvedProfile,
   { hydrated = [], isGlobal = false, harness = null, isDotHarness = false } = {},
 ) {
+  if (!existsSync(srcDir)) return;
+  try {
+    if (!statSync(srcDir).isDirectory()) return;
+  } catch {
+    return;
+  }
   if (isSymlink(destDir)) rmSync(destDir, { recursive: true, force: true });
   mkdirSync(destDir, { recursive: true });
   for (const entry of readdirSync(srcDir)) {
+    if (isIgnoredFsEntry(entry)) continue;
     const srcEntry = path.join(srcDir, entry);
     const destEntry = path.join(destDir, entry);
-    const stat = lstatSync(srcEntry);
+    let stat;
+    try {
+      stat = lstatSync(srcEntry);
+    } catch {
+      continue;
+    }
     if (stat.isDirectory()) {
       copyOrHydrateDir(srcEntry, destEntry, resolvedProfile, { hydrated, isGlobal, harness, isDotHarness });
     } else if (stat.isFile()) {
@@ -503,6 +544,7 @@ function pruneRigSymlinks(dir, { rigRoot = RIG_ROOT, pruned = [] } = {}) {
 function pruneMissingRigEntries(installedDir, validNames, { pruned = [] } = {}) {
   if (!existsSync(installedDir)) return pruned;
   for (const entry of readdirSync(installedDir)) {
+    if (isIgnoredFsEntry(entry)) continue;
     if (!validNames.includes(entry)) {
       const full = path.join(installedDir, entry);
       rmSync(full, { recursive: true, force: true });
@@ -781,9 +823,16 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
   const rulesDestDir = path.join(pluginDir, 'rules');
   mkdirSync(rulesDestDir, { recursive: true });
   for (const rule of readdirSync(rulesSrcDir)) {
-    if (rule === 'AGENTS.md') continue;
+    if (rule === 'AGENTS.md' || isIgnoredFsEntry(rule)) continue;
     const src = path.join(rulesSrcDir, rule);
     const dest = path.join(rulesDestDir, rule);
+    let stat;
+    try {
+      stat = statSync(src);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
     if (rule.endsWith('.md')) {
       writeHydratedFile(src, dest, resolvedProfile, { isGlobal: true, harness: 'antigravity' });
       hydrated.push(dest);
@@ -800,7 +849,7 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
   const skillsSrcDir = path.join(rigRoot, 'skills');
   const skillsDestDir = path.join(pluginDir, 'skills');
   mkdirSync(skillsDestDir, { recursive: true });
-  const rigSkills = readdirSync(skillsSrcDir);
+  const rigSkills = listSkills(skillsSrcDir);
   for (const skill of rigSkills) {
     copyOrHydrateDir(path.join(skillsSrcDir, skill), path.join(skillsDestDir, skill), resolvedProfile, { hydrated, isGlobal: true, harness: 'antigravity' });
   }
@@ -811,8 +860,16 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
     const agentsDestDir = path.join(pluginDir, 'agents');
     mkdirSync(agentsDestDir, { recursive: true });
     for (const agent of readdirSync(agentsSrcDir)) {
+      if (isIgnoredFsEntry(agent)) continue;
       const src = path.join(agentsSrcDir, agent);
       const dest = path.join(agentsDestDir, agent);
+      let stat;
+      try {
+        stat = statSync(src);
+      } catch {
+        continue;
+      }
+      if (!stat.isFile()) continue;
       if (agent.endsWith('.md')) {
         writeHydratedFile(src, dest, resolvedProfile, { isGlobal: true, harness: 'antigravity' });
         hydrated.push(dest);
@@ -856,15 +913,23 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
   }
 
   const skillsDir = path.join(rigRoot, 'skills');
-  for (const skill of readdirSync(skillsDir)) {
+  for (const skill of listSkills(skillsDir)) {
     copyOrHydrateDir(path.join(skillsDir, skill), path.join(claudeDir, 'skills', skill), resolvedProfile, { hydrated, isGlobal: true, harness: 'claude' });
   }
 
   const agentsDir = path.join(rigRoot, 'agents');
   if (existsSync(agentsDir)) {
     for (const agent of readdirSync(agentsDir)) {
+      if (isIgnoredFsEntry(agent)) continue;
       const src = path.join(agentsDir, agent);
       const dest = path.join(claudeDir, 'agents', agent);
+      let stat;
+      try {
+        stat = statSync(src);
+      } catch {
+        continue;
+      }
+      if (!stat.isFile()) continue;
       if (agent.endsWith('.md')) {
         writeHydratedFile(src, dest, resolvedProfile, { isGlobal: true, harness: 'claude' });
         hydrated.push(dest);
@@ -879,9 +944,16 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
   mkdirSync(claudeRulesDir, { recursive: true });
   if (existsSync(rulesDir)) {
     for (const rule of readdirSync(rulesDir)) {
-      if (rule === 'AGENTS.md') continue;
+      if (rule === 'AGENTS.md' || isIgnoredFsEntry(rule)) continue;
       const src = path.join(rulesDir, rule);
       const dest = path.join(claudeRulesDir, rule);
+      let stat;
+      try {
+        stat = statSync(src);
+      } catch {
+        continue;
+      }
+      if (!stat.isFile()) continue;
       if (rule.endsWith('.md')) {
         writeHydratedFile(src, dest, resolvedProfile, { isGlobal: true, harness: 'claude' });
         hydrated.push(dest);
@@ -959,7 +1031,7 @@ function installForCodex(homeDir, { force = false, hydrated = [], skipped = [], 
 
   const resolvedProfile = resolveProfile('codex', { rigRoot });
   const skillsDir = path.join(rigRoot, 'skills');
-  for (const skill of readdirSync(skillsDir)) {
+  for (const skill of listSkills(skillsDir)) {
     copyOrHydrateDir(path.join(skillsDir, skill), path.join(codexDir, 'skills', skill), resolvedProfile, { hydrated, isGlobal: true, harness: 'codex' });
   }
   const codexAgentsMd = path.join(codexDir, 'AGENTS.md');
@@ -994,7 +1066,7 @@ function installForCursor(homeDir, { force = false, hydrated = [], skipped = [],
 
   const resolvedProfile = resolveProfile('cursor', { rigRoot });
   const skillsDir = path.join(rigRoot, 'skills');
-  for (const skill of readdirSync(skillsDir)) {
+  for (const skill of listSkills(skillsDir)) {
     copyOrHydrateDir(path.join(skillsDir, skill), path.join(cursorDir, 'skills', skill), resolvedProfile, { hydrated, isGlobal: true, harness: 'cursor' });
   }
   const cursorAgentsMd = path.join(cursorDir, 'rules', 'AGENTS.md');
@@ -1034,7 +1106,7 @@ export function installRig({
 
   const state = readRigState(homeDir);
   const resolvedNodeBin = nodeBin || state.nodeBin || resolveNodeBinary();
-  const currentSkills = existsSync(path.join(rigRoot, 'skills')) ? readdirSync(path.join(rigRoot, 'skills')) : [];
+  const currentSkills = listSkills(path.join(rigRoot, 'skills'));
   const obsoleteSkills = (state.installedSkills || []).filter((s) => !currentSkills.includes(s));
 
   const hydrated = [];
@@ -1124,6 +1196,11 @@ export function isSelfContainedRepo(targetDir) {
 
 function checkFilePending(srcPath, destPath, resolvedProfile = null, options = {}) {
   if (!existsSync(srcPath)) return false;
+  try {
+    if (!statSync(srcPath).isFile()) return false;
+  } catch {
+    return false;
+  }
   if (!existsSync(destPath) || isSymlink(destPath)) return true;
   if (srcPath.endsWith('.md') && resolvedProfile) {
     const expected = getHydratedFileContent(srcPath, destPath, resolvedProfile, options);
@@ -1146,10 +1223,21 @@ function checkFilePending(srcPath, destPath, resolvedProfile = null, options = {
 
 function checkDirPending(srcDir, destDir, resolvedProfile, options, pendingFiles) {
   if (!existsSync(srcDir)) return;
+  try {
+    if (!statSync(srcDir).isDirectory()) return;
+  } catch {
+    return;
+  }
   for (const entry of readdirSync(srcDir)) {
+    if (isIgnoredFsEntry(entry)) continue;
     const srcEntry = path.join(srcDir, entry);
     const destEntry = path.join(destDir, entry);
-    const stat = lstatSync(srcEntry);
+    let stat;
+    try {
+      stat = lstatSync(srcEntry);
+    } catch {
+      continue;
+    }
     if (stat.isDirectory()) {
       checkDirPending(srcEntry, destEntry, resolvedProfile, options, pendingFiles);
     } else if (stat.isFile()) {
@@ -1251,7 +1339,7 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
         const resolvedProfile = resolveProfile(tHarness, { rigRoot });
         const skillsDir = path.join(rigRoot, 'skills');
         if (existsSync(skillsDir)) {
-          for (const skill of readdirSync(skillsDir)) {
+          for (const skill of listSkills(skillsDir)) {
             checkDirPending(
               path.join(skillsDir, skill),
               path.join(dotDir, 'skills', skill),
@@ -1264,6 +1352,7 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
         const agentsDir = path.join(rigRoot, 'agents');
         if (existsSync(agentsDir)) {
           for (const agent of readdirSync(agentsDir)) {
+            if (isIgnoredFsEntry(agent)) continue;
             const src = path.join(rigRoot, 'agents', agent);
             const dest = path.join(dotDir, 'agents', agent);
             if (checkFilePending(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true })) {
@@ -1274,6 +1363,7 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
         const rulesDir = path.join(rigRoot, 'rules');
         if (existsSync(rulesDir)) {
           for (const rule of readdirSync(rulesDir)) {
+            if (isIgnoredFsEntry(rule)) continue;
             const src = path.join(rulesDir, rule);
             const dest = path.join(dotDir, 'rules', rule);
             if (checkFilePending(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true })) {
@@ -1300,7 +1390,7 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
       const resolvedProfile = resolveProfile(tHarness, { rigRoot });
       const skillsDir = path.join(rigRoot, 'skills');
       if (existsSync(skillsDir)) {
-        for (const skill of readdirSync(skillsDir)) {
+        for (const skill of listSkills(skillsDir)) {
           checkDirPending(
             path.join(skillsDir, skill),
             path.join(dir, 'skills', skill),
@@ -1313,6 +1403,7 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
       const agentsDir = path.join(rigRoot, 'agents');
       if (existsSync(agentsDir)) {
         for (const agent of readdirSync(agentsDir)) {
+          if (isIgnoredFsEntry(agent)) continue;
           const src = path.join(rigRoot, 'agents', agent);
           const dest = path.join(dir, 'agents', agent);
           if (checkFilePending(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness })) {
@@ -1323,6 +1414,7 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
       const rulesDir = path.join(rigRoot, 'rules');
       if (existsSync(rulesDir)) {
         for (const rule of readdirSync(rulesDir)) {
+          if (isIgnoredFsEntry(rule)) continue;
           const src = path.join(rigRoot, 'rules', rule);
           const dest = path.join(dir, 'rules', rule);
           if (checkFilePending(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness })) {
@@ -1585,7 +1677,7 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
         const dotDir = path.join(dir, dotDirName);
         const resolvedProfile = resolveProfile(tHarness, { rigRoot });
         const skillsDir = path.join(rigRoot, 'skills');
-        for (const skill of readdirSync(skillsDir)) {
+        for (const skill of listSkills(skillsDir)) {
           copyOrHydrateDir(path.join(skillsDir, skill), path.join(dotDir, 'skills', skill), resolvedProfile, {
             hydrated: copied,
             isGlobal: false,
@@ -1595,8 +1687,16 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
         }
         if (existsSync(path.join(rigRoot, 'agents'))) {
           for (const agent of readdirSync(path.join(rigRoot, 'agents'))) {
+            if (isIgnoredFsEntry(agent)) continue;
             const src = path.join(rigRoot, 'agents', agent);
             const dest = path.join(dotDir, 'agents', agent);
+            let stat;
+            try {
+              stat = statSync(src);
+            } catch {
+              continue;
+            }
+            if (!stat.isFile()) continue;
             if (agent.endsWith('.md')) {
               writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true });
               copied.push(dest);
@@ -1607,8 +1707,16 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
         }
         if (existsSync(path.join(rigRoot, 'rules'))) {
           for (const rule of readdirSync(path.join(rigRoot, 'rules'))) {
+            if (isIgnoredFsEntry(rule)) continue;
             const src = path.join(rigRoot, 'rules', rule);
             const dest = path.join(dotDir, 'rules', rule);
+            let stat;
+            try {
+              stat = statSync(src);
+            } catch {
+              continue;
+            }
+            if (!stat.isFile()) continue;
             if (rule.endsWith('.md')) {
               writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true });
               copied.push(dest);
@@ -1637,7 +1745,7 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
       const tHarness = harness || detectRepoHarness(dir) || 'claude';
       const resolvedProfile = resolveProfile(tHarness, { rigRoot });
       const skillsDir = path.join(rigRoot, 'skills');
-      for (const skill of readdirSync(skillsDir)) {
+      for (const skill of listSkills(skillsDir)) {
         copyOrHydrateDir(path.join(skillsDir, skill), path.join(dir, 'skills', skill), resolvedProfile, {
           hydrated: copied,
           isGlobal: false,
@@ -1646,8 +1754,16 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
       }
       if (existsSync(path.join(rigRoot, 'agents'))) {
         for (const agent of readdirSync(path.join(rigRoot, 'agents'))) {
+          if (isIgnoredFsEntry(agent)) continue;
           const src = path.join(rigRoot, 'agents', agent);
           const dest = path.join(dir, 'agents', agent);
+          let stat;
+          try {
+            stat = statSync(src);
+          } catch {
+            continue;
+          }
+          if (!stat.isFile()) continue;
           if (agent.endsWith('.md')) {
             writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness });
             copied.push(dest);
@@ -1658,8 +1774,16 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
       }
       if (existsSync(path.join(rigRoot, 'rules'))) {
         for (const rule of readdirSync(path.join(rigRoot, 'rules'))) {
+          if (isIgnoredFsEntry(rule)) continue;
           const src = path.join(rigRoot, 'rules', rule);
           const dest = path.join(dir, 'rules', rule);
+          let stat;
+          try {
+            stat = statSync(src);
+          } catch {
+            continue;
+          }
+          if (!stat.isFile()) continue;
           if (rule.endsWith('.md')) {
             writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness });
             copied.push(dest);
@@ -2422,7 +2546,7 @@ export function initRepo(
       const dotDir = path.join(dir, dotDirName);
       const resolvedProfile = resolveProfile(tHarness, { rigRoot });
       const skillsDir = path.join(rigRoot, 'skills');
-      for (const skill of readdirSync(skillsDir)) {
+      for (const skill of listSkills(skillsDir)) {
         copyOrHydrateDir(path.join(skillsDir, skill), path.join(dotDir, 'skills', skill), resolvedProfile, {
           hydrated: copied,
           isGlobal: false,
@@ -2433,8 +2557,16 @@ export function initRepo(
       const agentsDir = path.join(rigRoot, 'agents');
       if (existsSync(agentsDir)) {
         for (const agent of readdirSync(agentsDir)) {
+          if (isIgnoredFsEntry(agent)) continue;
           const src = path.join(agentsDir, agent);
           const dest = path.join(dotDir, 'agents', agent);
+          let stat;
+          try {
+            stat = statSync(src);
+          } catch {
+            continue;
+          }
+          if (!stat.isFile()) continue;
           if (agent.endsWith('.md')) {
             writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true });
             copied.push(dest);
@@ -2446,8 +2578,16 @@ export function initRepo(
       const rulesDir = path.join(rigRoot, 'rules');
       if (existsSync(rulesDir)) {
         for (const rule of readdirSync(rulesDir)) {
+          if (isIgnoredFsEntry(rule)) continue;
           const src = path.join(rulesDir, rule);
           const dest = path.join(dotDir, 'rules', rule);
+          let stat;
+          try {
+            stat = statSync(src);
+          } catch {
+            continue;
+          }
+          if (!stat.isFile()) continue;
           if (rule.endsWith('.md')) {
             writeHydratedFile(src, dest, resolvedProfile, { isGlobal: false, harness: tHarness, isDotHarness: true });
             copied.push(dest);
@@ -2745,7 +2885,7 @@ export function statusRepo(targetDir = process.cwd()) {
   for (const sd of skillDirs) {
     if (existsSync(sd)) {
       try {
-        for (const s of readdirSync(sd)) skillSet.add(s);
+        for (const s of listSkills(sd)) skillSet.add(s);
       } catch {
         // ignore
       }

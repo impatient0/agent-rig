@@ -207,10 +207,10 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     assert.ok(existsSync(path.join(agyPluginDir, 'rules/contract-change-gate.md')));
     assert.ok(existsSync(path.join(agyPluginDir, 'rules/ui-change-gate.md')));
     const agyVerifier = readFileSync(path.join(agyPluginDir, 'agents/verifier.md'), 'utf8');
-    assert.match(agyVerifier, /gemini-3-8-flash/);
+    assert.match(agyVerifier, /gemini-4-hydrogen/);
     assert.equal(agyVerifier.includes('{{'), false);
     const agyWorker = readFileSync(path.join(agyPluginDir, 'agents/worker.md'), 'utf8');
-    assert.match(agyWorker, /gemini-3-8-flash/);
+    assert.match(agyWorker, /gemini-4-hydrogen/);
     assert.equal(agyWorker.includes('{{'), false);
     assert.ok(existsSync(path.join(agyPluginDir, 'rules/contract-change-gate.md')));
     const pluginsJson = JSON.parse(readFileSync(path.join(fakeHome, '.gemini/config/plugins.json'), 'utf8'));
@@ -577,11 +577,15 @@ test('loadCatalog, resolveSubagentModel, resolveProfile, and hydrateText enforce
   const catalog = loadCatalog(RIG_ROOT);
   assert.ok(catalog.harnesses.antigravity);
   assert.ok(catalog.harnesses.claude);
+  assert.ok(catalog.models['gemini-4-carbon']);
   assert.ok(catalog.models['gemini-4-argon']);
+  assert.ok(catalog.models['gemini-4-hydrogen']);
   assert.ok(catalog.models['claude-opus-5-5']);
 
   // Builtin model mappings
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-carbon', null, { rigRoot: RIG_ROOT }), 'pro');
   assert.equal(resolveSubagentModel('antigravity', 'gemini-4-argon', null, { rigRoot: RIG_ROOT }), 'pro');
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-hydrogen', null, { rigRoot: RIG_ROOT }), 'flash');
   assert.equal(resolveSubagentModel('antigravity', 'gemini-3-8-flash', null, { rigRoot: RIG_ROOT }), 'flash');
   assert.equal(resolveSubagentModel('claude', 'claude-opus-5-5', null, { rigRoot: RIG_ROOT }), 'opus');
   assert.equal(resolveSubagentModel('claude', 'claude-sonnet-5-5', null, { rigRoot: RIG_ROOT }), 'sonnet');
@@ -608,15 +612,16 @@ test('loadCatalog, resolveSubagentModel, resolveProfile, and hydrateText enforce
   // Profile resolution
   const profile = resolveProfile('antigravity', { rigRoot: RIG_ROOT });
   assert.equal(profile.harness, 'antigravity');
-  assert.equal(profile.profileName, 'antigravity-budget');
+  assert.equal(profile.profileName, 'antigravity-pro');
   assert.deepEqual(Object.keys(profile.roles).sort(), ['architect', 'utility', 'verifier', 'worker']);
-  assert.equal(profile.roles.worker.model, 'gemini-3-8-flash');
+  assert.equal(profile.roles.worker.model, 'gemini-4-hydrogen');
   assert.equal(profile.roles.worker.subagentModel, 'flash');
+  assert.equal(profile.roles.utility.subagentModel, 'flash_lite');
 
   // Hydration replaces all placeholders
   const sampleTemplate = 'Profile: {{RIG_PROFILE}} for {{RIG_HARNESS}}. Worker: {{SUBAGENT_MODEL_WORKER}} ({{MODEL_WORKER}}, {{EFFORT_WORKER}}). Verifier: {{SUBAGENT_MODEL_VERIFIER}}.';
   const hydrated = hydrateText(sampleTemplate, profile);
-  assert.equal(hydrated, 'Profile: antigravity-budget for antigravity. Worker: flash (gemini-3-8-flash, high). Verifier: flash.');
+  assert.equal(hydrated, 'Profile: antigravity-pro for antigravity. Worker: flash (gemini-4-hydrogen, high). Verifier: flash.');
 
   // Hydration fails on unresolved token
   assert.throws(
@@ -651,20 +656,20 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
 
     // Initial inspection
     const initialProfiles = listProfiles(fakeRig);
-    assert.equal(initialProfiles.activeProfiles.antigravity, 'antigravity-budget');
-    assert.equal(initialProfiles.profiles['antigravity-budget'].isActive, true);
+    assert.equal(initialProfiles.activeProfiles.antigravity, 'antigravity-pro');
+    assert.equal(initialProfiles.profiles['antigravity-pro'].isActive, true);
 
     const resolvedWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig });
-    assert.equal(resolvedWorker.model, 'gemini-3-8-flash');
+    assert.equal(resolvedWorker.model, 'gemini-4-hydrogen');
     assert.equal(resolvedWorker.subagentModel, 'flash');
 
-    // Switch profile to antigravity-pro
-    useProfile('antigravity-pro', { rigRoot: fakeRig, homeDir: fakeHome });
+    // Switch profile to antigravity-ultra
+    useProfile('antigravity-ultra', { rigRoot: fakeRig, homeDir: fakeHome });
     const afterUse = listProfiles(fakeRig);
-    assert.equal(afterUse.activeProfiles.antigravity, 'antigravity-pro');
+    assert.equal(afterUse.activeProfiles.antigravity, 'antigravity-ultra');
     assert.equal(existsSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules/AGENTS.md')), false);
     const hydratedWorker = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/agents/worker.md'), 'utf8');
-    assert.match(hydratedWorker, /Profile: antigravity-pro/);
+    assert.match(hydratedWorker, /Profile: antigravity-ultra/);
     assert.match(hydratedWorker, /Worker: gemini-4-argon/);
 
     // Update role in profile
@@ -814,15 +819,15 @@ test('initRepo and updateRepo accept --harness and probe target repo harness', (
     initRepo(dir, { selfContained: true, worktrees: true, harness: 'antigravity' });
     const workerContent = readFileSync(path.join(dir, '.gemini/agents/worker.md'), 'utf8');
     assert.match(workerContent, /model: flash/);
-    assert.match(workerContent, /gemini-3-8-flash/);
+    assert.match(workerContent, /gemini-4-hydrogen/);
     assert.equal(workerContent.includes('claude-sonnet-5-5'), false);
 
     const verifierContent = readFileSync(path.join(dir, '.gemini/agents/verifier.md'), 'utf8');
     assert.match(verifierContent, /model: flash/);
-    assert.match(verifierContent, /gemini-3-8-flash/);
+    assert.match(verifierContent, /gemini-4-hydrogen/);
 
     const dispatchContent = readFileSync(path.join(dir, '.gemini/skills/dispatch/SKILL.md'), 'utf8');
-    assert.match(dispatchContent, /subagent model `flash`, target `gemini-3-8-flash`/);
+    assert.match(dispatchContent, /subagent model `flash`, target `gemini-4-hydrogen`/);
 
     // Links inside self-contained repo retain relative repo structure and pass check-doc-links
     const checkLinks = runCheckDocs(dir);
@@ -841,7 +846,7 @@ test('initRepo and updateRepo accept --harness and probe target repo harness', (
     updateRepo(dir); // probes .gemini -> antigravity
     const probedWorker = readFileSync(path.join(dir, '.gemini/agents/worker.md'), 'utf8');
     assert.match(probedWorker, /model: flash/);
-    assert.match(probedWorker, /gemini-3-8-flash/);
+    assert.match(probedWorker, /gemini-4-hydrogen/);
 
     // 4. CLI end-to-end init with --harness option
     const cliDir = mkdtempSync(path.join(tmpdir(), 'rig-cli-harness-'));
@@ -862,7 +867,7 @@ test('initRepo and updateRepo accept --harness and probe target repo harness', (
       assert.equal(cliRes.status, 0, cliRes.stderr);
       const cliWorker = readFileSync(path.join(cliDir, '.gemini/agents/worker.md'), 'utf8');
       assert.match(cliWorker, /model: flash/);
-      assert.match(cliWorker, /gemini-3-8-flash/);
+      assert.match(cliWorker, /gemini-4-hydrogen/);
     } finally {
       rmSync(cliDir, { recursive: true, force: true });
       rmSync(fakeCliHome, { recursive: true, force: true });

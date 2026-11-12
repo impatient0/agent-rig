@@ -1,28 +1,28 @@
 {
   "$schema": "./templates/rig-config.schema.json",
   "activeProfiles": {
-    "antigravity": "antigravity-budget",
+    "antigravity": "antigravity-pro",
     "claude": "claude-pro",
     "codex": "codex-default",
     "cursor": "cursor-default"
   },
   "profiles": {
-    "antigravity-budget": {
-      "harness": "antigravity",
-      "roles": {
-        "architect": { "model": "gemini-4-argon", "subagentModel": "pro", "effort": "high" },
-        "worker":    { "model": "gemini-3-8-flash", "subagentModel": "flash", "effort": "high" },
-        "verifier":  { "model": "gemini-3-8-flash", "subagentModel": "flash", "effort": "medium" },
-        "utility":   { "model": "gemini-3-8-flash", "subagentModel": "flash_lite", "effort": "low" }
-      }
-    },
     "antigravity-pro": {
       "harness": "antigravity",
       "roles": {
-        "architect": { "model": "gemini-4-argon", "subagentModel": "pro", "effort": "high" },
-        "worker":    { "model": "gemini-4-argon", "subagentModel": "pro", "effort": "high" },
-        "verifier":  { "model": "gemini-3-8-flash", "subagentModel": "flash", "effort": "medium" },
-        "utility":   { "model": "gemini-3-8-flash", "subagentModel": "flash", "effort": "low" }
+        "architect": { "model": "gemini-4-argon", "effort": "high" },
+        "worker":    { "model": "gemini-4-hydrogen", "effort": "high" },
+        "verifier":  { "model": "gemini-4-hydrogen", "effort": "medium" },
+        "utility":   { "model": "gemini-4-hydrogen", "subagentModel": "flash_lite", "effort": "low" }
+      }
+    },
+    "antigravity-ultra": {
+      "harness": "antigravity",
+      "roles": {
+        "architect": { "model": "gemini-4-carbon", "effort": "high" },
+        "worker":    { "model": "gemini-4-argon", "effort": "high" },
+        "verifier":  { "model": "gemini-4-hydrogen", "effort": "medium" },
+        "utility":   { "model": "gemini-4-hydrogen", "subagentModel": "flash_lite", "effort": "low" }
       }
     },
     "claude-pro": {

@@ -97,7 +97,7 @@ rig profile
 Switch active profiles per harness (re-hydrates installed harness files immediately):
 
 ```bash
-rig profile use antigravity-pro
+rig profile use antigravity-ultra
 rig profile use claude-pro
 ```
 
@@ -136,8 +136,8 @@ You can define custom models and custom profiles in `.rig.local.json` without mo
       "roles": {
         "architect": { "model": "gemini-4-argon", "effort": "high" },
         "worker": { "model": "my-custom-model", "effort": "medium" },
-        "verifier": { "model": "gemini-3-8-flash", "effort": "medium" },
-        "utility": { "model": "gemini-3-8-flash", "effort": "low" }
+        "verifier": { "model": "gemini-4-hydrogen", "effort": "medium" },
+        "utility": { "model": "gemini-4-hydrogen", "effort": "low" }
       }
     }
   }

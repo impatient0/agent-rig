@@ -28,9 +28,19 @@
     }
   },
   "models": {
+    "gemini-4-carbon": {
+      "subagentSelector": {
+        "antigravity": "pro"
+      }
+    },
     "gemini-4-argon": {
       "subagentSelector": {
         "antigravity": "pro"
+      }
+    },
+    "gemini-4-hydrogen": {
+      "subagentSelector": {
+        "antigravity": "flash"
       }
     },
     "gemini-3-8-flash": {

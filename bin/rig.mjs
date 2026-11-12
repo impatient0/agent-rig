@@ -488,6 +488,10 @@ export function writeRigState(homeDir, patch, { replace = false } = {}) {
 }
 
 function copyFileSafe(src, dest, { force = false, copied = [], skipped = [], executable = false } = {}) {
+  if (path.resolve(src) === path.resolve(dest)) {
+    skipped.push(dest);
+    return false;
+  }
   if ((existsSync(dest) || isSymlink(dest)) && !force) {
     skipped.push(dest);
     return false;

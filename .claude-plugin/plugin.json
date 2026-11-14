@@ -6,7 +6,7 @@
     "name": "impatient0"
   },
   "repository": "https://github.com/impatient0/agent-rig",
-  "license": "MIT",
+  "license": "PolyForm-Shield-1.0.0",
   "skills": "./skills",
   "agents": "./agents",
   "hooks": "./hooks/claude-hooks.json"

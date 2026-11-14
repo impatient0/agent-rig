@@ -2,7 +2,7 @@
   "name": "agent-rig",
   "version": "0.1.0",
   "description": "Subagent-first, platform-agnostic workflow rig: multi-protocol PreToolUse guards, Triage/Worker/Verifier dispatch, worktree locks, and documentation graph linters.",
-  "license": "MIT",
+  "license": "PolyForm-Shield-1.0.0",
   "author": "impatient0",
   "repository": {
     "type": "git",

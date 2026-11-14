@@ -257,7 +257,21 @@ export function resolveSubagentModel(harness, model, explicitSubagentModel = nul
   return model;
 }
 
+export const AGENSI_PROFILE = {
+  harness: 'agensi',
+  profileName: 'agensi-neutral',
+  roles: {
+    architect: { model: 'host-model', subagentModel: 'default', effort: 'high' },
+    worker: { model: 'host-model', subagentModel: 'default', effort: 'high' },
+    verifier: { model: 'host-model', subagentModel: 'default', effort: 'medium' },
+    utility: { model: 'host-model', subagentModel: 'default', effort: 'low' },
+  },
+};
+
 export function resolveProfile(harness, { profileName = null, rigRoot = RIG_ROOT, userConfig = null } = {}) {
+  if (harness === 'agensi' || profileName === 'agensi-neutral') {
+    return { ...AGENSI_PROFILE };
+  }
   const cfg = userConfig ?? loadRigConfig(rigRoot);
   const targetProfileName = profileName || cfg.activeProfiles?.[harness];
   if (!targetProfileName) {

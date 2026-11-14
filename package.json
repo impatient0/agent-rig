@@ -49,6 +49,7 @@
     "check:hooks": "node --test tests/hookIo.test.mjs tests/guard-*.test.mjs tests/gitHooks.test.mjs",
     "check:doc-links": "node scripts/check-doc-links.mjs",
     "check:doc-format": "node scripts/reflow-docs.mjs --check",
-    "format:docs": "node scripts/reflow-docs.mjs"
+    "format:docs": "node scripts/reflow-docs.mjs",
+    "build:agensi": "node scripts/build-agensi.mjs"
   }
 }

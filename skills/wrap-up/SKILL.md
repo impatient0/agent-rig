@@ -19,7 +19,11 @@ Explicitly sequence all conversation archaeology and documentation updates insid
 
 1. Run `git status --short` and `git worktree list`.
    - Flag any uncommitted edits, untracked scratch files, or orphaned worktrees.
-2. Run the project's test suite and documentation linters (`scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs --check` if present, or `rig check-docs` and `rig reflow-docs --check`).
+<!-- RIG:IF distribution=rig -->
+2. Run the project's test suite and documentation linters (`rig check-docs` and `rig reflow-docs --check`).
+<!-- RIG:ELSE -->
+2. Run the project's test suite and documentation linters (`node scripts/check-doc-links.mjs` and `node scripts/reflow-docs.mjs --check`).
+<!-- RIG:ENDIF -->
    - Do not declare wrap-up complete while tests or doc checks are failing.
 
 ---

@@ -71,6 +71,10 @@ Stop work immediately, leave the worktree in a clean or WIP-committed state, and
 
 ## 4. Verification & Atomic Commits
 
+<!-- RIG:IF distribution=rig -->
 1. Run the exact verification command from the Task Brief (plus `rig check-docs` and `rig reflow-docs --check` if any Markdown files were touched) and confirm exit status `0`.
+<!-- RIG:ELSE -->
+1. Run the exact verification command from the Task Brief (plus `node scripts/check-doc-links.mjs` and `node scripts/reflow-docs.mjs --check` if any Markdown files were touched) and confirm exit status `0`.
+<!-- RIG:ENDIF -->
 2. Create atomic Conventional Commits (`feat(scope): ...`, `fix(scope): ...`, etc.).
 3. Every commit message must include either the required `Unmandated-call: ...` trailer or `Unmandated-call: none`.

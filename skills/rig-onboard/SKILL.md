@@ -34,7 +34,11 @@ Read, do not edit:
 4. **Live, gitignored data:**
    note every gitignored path that holds real data (databases, snapshots, credentials) and never move, delete, or rewrite it during onboarding.
 5. **Baseline gates:**
+<!-- RIG:IF distribution=rig -->
    run the project's own test, type-check, and lint commands, plus `rig check-docs` and `rig reflow-docs --check`, and record the results so later failures can be attributed.
+<!-- RIG:ELSE -->
+   run the project's own test, type-check, and lint commands, plus `node scripts/check-doc-links.mjs` and `node scripts/reflow-docs.mjs --check`, and record the results so later failures can be attributed.
+<!-- RIG:ENDIF -->
 
 **Stop and ask the user** if a legacy agent file contains a project rule that contradicts a global `agent-rig` rule (for example "single branch, no worktrees" or "commit directly on main"):
 the user decides whether the global rule wins or the project opts out (`rig init --no-worktrees`).
@@ -43,10 +47,17 @@ the user decides whether the global rule wins or the project opts out (`rig init
 
 ## Step 2 — Worktree & Mechanical Init
 
+<!-- RIG:IF distribution=rig -->
 1. Run `rig init <repo>` on the main checkout.
    In a repository with history it creates the linked worktree `.worktrees/rig-init` on `chore/rig-init`, scaffolds and stages everything there (git hooks, `.gitignore` worktree hygiene, the `AGENTS.md` stub, the backlog doc, and ADR 0001 when missing), symlinks `node_modules`, and leaves the main checkout attached to `main`.
 2. Do all remaining work inside that worktree.
 3. Commit the scaffolding as its own Conventional Commit before the semantic work.
+<!-- RIG:ELSE -->
+1. Create the linked worktree `.worktrees/rig-init` on `chore/rig-init` via `git worktree add .worktrees/rig-init -b chore/rig-init`.
+2. Add `.worktrees/` to `.gitignore` and copy starter templates from [`templates/AGENTS.md`](../../templates/AGENTS.md), [`templates/docs/backlog.md`](../../templates/docs/backlog.md), and [`templates/docs/adr/0001-record-architecture-decisions.md`](../../templates/docs/adr/0001-record-architecture-decisions.md) into the worktree.
+3. If `node_modules` exists at root, symlink it (`ln -s ../../node_modules node_modules`).
+4. Commit the scaffolding as its own Conventional Commit before the semantic work.
+<!-- RIG:ENDIF -->
 
 ---
 
@@ -75,7 +86,11 @@ Follow the "Demarcated Per-Project `AGENTS.md`" section of the `agent-rig` READM
 3. **Re-point every citation** in docs, code comments, and test titles to the ADR that now holds the fact, then delete the old files.
 4. **Ground claims against code:**
    fix statements that the code has since contradicted, strike through removed paths (`~~\`path\`~~`), and wrap bare backticked doc paths in Markdown links.
+<!-- RIG:IF distribution=rig -->
 5. Run `rig reflow-docs` and `rig check-docs` until both pass.
+<!-- RIG:ELSE -->
+5. Run `node scripts/reflow-docs.mjs` and `node scripts/check-doc-links.mjs` until both pass.
+<!-- RIG:ENDIF -->
 
 ---
 
@@ -90,7 +105,11 @@ Running it earlier would tier items against decisions that are about to move.
 
 All of the following must hold before handing over:
 1. `grep -rnI` for every legacy file name and every deleted doc path returns nothing outside git history.
+<!-- RIG:IF distribution=rig -->
 2. Every Markdown file is one sentence per line, and `rig check-docs` reports a fully reachable graph.
+<!-- RIG:ELSE -->
+2. Every Markdown file is one sentence per line, and `node scripts/check-doc-links.mjs` reports a fully reachable graph.
+<!-- RIG:ENDIF -->
 3. No doc or comment still describes the old workflow (single-branch commits, a decision diary, harness-specific modes).
 4. The project's tests and type check pass in the worktree, with the same results as the baseline from Step 1 (or better).
 
@@ -99,7 +118,11 @@ All of the following must hold before handing over:
 ## Step 7 — Cold Verifier, Then Merge Only on Request
 
 1. Commit each step atomically with Conventional Commits and `Unmandated-call:` trailers (for example, how decisions were grouped into ADRs, or which backlog items were judged finished).
+<!-- RIG:IF distribution=rig -->
 2. Spawn a fresh Verifier per [`agents/verifier.md`](../../agents/verifier.md) with command execution enabled to run verification commands live in the worktree, passing the inventory from Step 1 as the brief, base commit SHA, and target worktree path.
+<!-- RIG:ELSE -->
+2. Spawn a fresh Verifier following `./references/verifier.md` passed inline in the subagent invocation prompt with command execution enabled to run verification commands live in the worktree, passing the inventory from Step 1 as the brief, base commit SHA, and target worktree path.
+<!-- RIG:ENDIF -->
 3. Present the attribution table, and merge via [`skills/merge-to-main/SKILL.md`](../merge-to-main/SKILL.md) only when the user asks.
 
 ---

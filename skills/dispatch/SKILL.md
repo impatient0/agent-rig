@@ -88,19 +88,25 @@ Record the following fields:
 ## Step 3 — Spawn Isolated Worker Subagents
 
 Spawn one Worker subagent per independent Bucket 1 slice in its own isolated git worktree.
-If the harness provides native worktree isolation (such as subagent workspace branching), the Worker renames the initial harness-allocated branch rather than creating a second branch:
+<!-- RIG:IF harness=antigravity,claude -->
+Because the harness provides native worktree isolation (such as subagent workspace branching), the Worker renames the initial harness-allocated branch rather than creating a second branch:
 
 ```bash
 git branch -m <type>/<slug>
 ```
-
-If the harness does not provide native worktree isolation, the orchestrator or Worker creates a dedicated linked worktree under `.worktrees/<slug>` on branch `<type>/<slug>`:
+<!-- RIG:ELSE -->
+Because the harness does not provide native worktree isolation, the orchestrator or Worker creates a dedicated linked worktree under `.worktrees/<slug>` on branch `<type>/<slug>`:
 
 ```bash
 git worktree add .worktrees/<slug> -b <type>/<slug>
 ```
+<!-- RIG:ENDIF -->
 
+<!-- RIG:IF distribution=rig -->
 Workers operate in execution tier `worker` (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`) governed by [`agents/worker.md`](../../agents/worker.md).
+<!-- RIG:ELSE -->
+Workers operate in execution tier `worker` (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`) governed by `./references/worker.md` passed inline in the subagent invocation prompt.
+<!-- RIG:ENDIF -->
 
 ### Worker Lifecycle & Hold-Until-Merged
 
@@ -127,7 +133,11 @@ If any stop trigger fires, the Worker halts immediately in its worktree and repo
 ## Step 4 — Cold Verifier Subagent (Executor != Verifier)
 
 When a Worker reports completion, the Tech Lead **must not** trust the Worker's summary or review the diff inside the Worker's context.
+<!-- RIG:IF distribution=rig -->
 Spawn a fresh **Verifier** subagent in execution tier `verifier` (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`) following the exact prompt and checklist in [`agents/verifier.md`](../../agents/verifier.md).
+<!-- RIG:ELSE -->
+Spawn a fresh **Verifier** subagent in execution tier `verifier` (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`) following the exact prompt and checklist in `./references/verifier.md` passed inline in the subagent invocation prompt.
+<!-- RIG:ENDIF -->
 The Verifier must have command execution permissions enabled so it runs `git log`, `git diff`, and the verification command directly in the target worktree.
 Instruct the Verifier strictly in prompt not to edit files, stage changes, or create commits.
 Do not act as an execution proxy;

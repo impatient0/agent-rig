@@ -19,8 +19,12 @@ By default, parallel agent sessions never share a working tree:
    `hooks/guard-main-checkout-edits.mjs` blocks direct code edits and edits to the demarcated agent-rig block in `AGENTS.md`, and `.rig/hooks/pre-commit` ensures only verified merge commits, verified doc-only commits, or `.rig/` / vendored harness asset updates land on `main`.
    Standard operations (`git pull`, `git status`) work natively in the root checkout.
 2. **Work happens in a linked git worktree** on a `<type>/<slug>` branch (`feature/<slug>`, `fix/<slug>`, `docs/<slug>`, `chore/<slug>`):
+<!-- RIG:IF harness=antigravity,claude -->
    - When dispatching subagents, spawn each Worker in an isolated worktree using the harness's native worktree-isolation option (or create a worktree under `.worktrees/<slug>`).
    - When working directly in a session, enter a linked worktree via the harness's native worktree tool or `git worktree add .worktrees/<slug> -b <type>/<slug>` before editing any file.
+<!-- RIG:ELSE -->
+   - When dispatching subagents or working directly in a session, create a linked worktree under `.worktrees/<slug>` via `git worktree add .worktrees/<slug> -b <type>/<slug>` before editing any file.
+<!-- RIG:ENDIF -->
    - If the repository has a `node_modules` directory at the root, symlink it into the worktree (`ln -s ../../node_modules node_modules`) unless the branch modifies dependencies.
      `hooks/guard-symlinked-node-modules.mjs` blocks `npm`/`pnpm`/`yarn`/`bun` installs against a symlinked `node_modules`.
 3. **Merging to `main` happens only when requested by the user**:
@@ -70,6 +74,7 @@ Work is structured across four canonical execution tiers governed by the active 
 
 ---
 
+<!-- RIG:IF distribution=rig -->
 ## CLI Entry Points (`rig`)
 
 Agents can discover and run core `rig` CLI commands directly across sessions and worktrees:
@@ -81,6 +86,7 @@ Agents can discover and run core `rig` CLI commands directly across sessions and
 - `rig eject [<target-dir>]` — cleanly remove `.rig/` and unset `core.hooksPath` while preserving `AGENTS.md` and `docs/`.
 
 ---
+<!-- RIG:ENDIF -->
 
 ## Commit Discipline & Attribution Trailers
 

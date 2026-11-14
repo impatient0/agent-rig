@@ -47,7 +47,7 @@ Work is structured into two explicit, user-selected operational gears while pres
    Invoked explicitly when the user requests `/dispatch`, "sweep the backlog", or runs a multi-slice implementation plan.
    The main session operates as a **Tech Lead Orchestrator**:
    it grounds candidate items only until the `Open Decisions = 0` boundary, partitions tasks into **Bucket 1 (Dispatch Now)** and **Bucket 2 (Ask User First)**, dispatches isolated **Worker** subagents governed by [`agents/worker.md`](agents/worker.md) in linked worktrees, and audits each completed Worker branch with a fresh **Verifier** subagent.
-   The Tech Lead must stop investigating as soon as high-level ambiguity is cleared rather than pre-solving local implementation details or writing code in Task Briefs, must dispatch functionally independent slices concurrently rather than serializing them out of file-conflict aversion, and updates the backlog (`docs/`) directly on `main` after a wave is merged rather than delegating backlog edits to Workers.
+   The Tech Lead must stop investigating as soon as high-level ambiguity is cleared rather than pre-solving local implementation details or writing code in Task Briefs, must verify a clean `main` working tree before spawning subagents, must dispatch independent slices concurrently while sequencing slices that have functional dependencies or anticipated structural/code-motion conflicts, and updates the backlog (`docs/`) directly on `main` after a wave is merged rather than delegating backlog edits to Workers.
 
 ### Human-Gated Boundaries (UI & Domain Contracts)
 
@@ -59,14 +59,14 @@ Autonomous subagents may not mutate visual layouts or system contracts without p
 
 ### Execution Tiers & Subagent Model Selection
 
-Work is structured across four canonical execution tiers governed by the active profile `antigravity-budget`:
+Work is structured across four canonical execution tiers governed by the active profile `antigravity-pro`:
 - **`architect`** (`gemini-4-argon`, effort `high`):
   Main session / Tech Lead, triage, backlog auditing ([`skills/backlog-audit/SKILL.md`](skills/backlog-audit/SKILL.md)), doc auditing ([`skills/doc-audit/SKILL.md`](skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
-- **`worker`** (subagent model `flash`, target `gemini-3-8-flash`, effort `high`):
+- **`worker`** (subagent model `flash`, target `gemini-4-hydrogen`, effort `high`):
   Isolated implementation subagents running in linked worktrees governed by [`agents/worker.md`](agents/worker.md).
-- **`verifier`** (subagent model `flash`, target `gemini-3-8-flash`, effort `medium`):
+- **`verifier`** (subagent model `flash`, target `gemini-4-hydrogen`, effort `medium`):
   Cold audit subagent governed by [`agents/verifier.md`](agents/verifier.md).
-- **`utility`** (subagent model `flash_lite`, target `gemini-3-8-flash`, effort `low`):
+- **`utility`** (subagent model `flash_lite`, target `gemini-4-hydrogen`, effort `low`):
   Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md), [`skills/rig-update/SKILL.md`](skills/rig-update/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
   Whenever launching a subagent, explicitly pass the tier's resolved subagent model argument (`flash` for Workers, `flash` for Verifiers, `flash_lite` for Utility tasks) rather than defaulting to `inherit`.
 

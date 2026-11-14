@@ -78,6 +78,18 @@ export {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const RIG_ROOT = path.resolve(__dirname, '..');
 
+export function isSamePath(a, b) {
+  if (!a || !b) return false;
+  const resA = path.resolve(a);
+  const resB = path.resolve(b);
+  if (resA === resB) return true;
+  try {
+    return existsSync(resA) && existsSync(resB) && realpathSync(resA) === realpathSync(resB);
+  } catch {
+    return false;
+  }
+}
+
 export const KNOWN_HARNESSES = [
   {
     id: 'antigravity',
@@ -124,7 +136,10 @@ export function detectRepoHarness(targetDir) {
   if (!existsSync(dir)) return null;
 
   if (existsSync(path.join(dir, '.gemini'))) return 'antigravity';
-  if (existsSync(path.join(dir, '.claude')) || existsSync(path.join(dir, '.claude-plugin'))) return 'claude';
+  const hasClaudeDir = existsSync(path.join(dir, '.claude'));
+  const hasClaudePlugin = existsSync(path.join(dir, '.claude-plugin'));
+  const hasAntigravityPlugin = existsSync(path.join(dir, 'plugin.json'));
+  if (hasClaudeDir || (hasClaudePlugin && !hasAntigravityPlugin)) return 'claude';
   if (existsSync(path.join(dir, '.codex'))) return 'codex';
   if (existsSync(path.join(dir, '.cursor'))) return 'cursor';
 
@@ -488,7 +503,7 @@ export function writeRigState(homeDir, patch, { replace = false } = {}) {
 }
 
 function copyFileSafe(src, dest, { force = false, copied = [], skipped = [], executable = false } = {}) {
-  if (path.resolve(src) === path.resolve(dest)) {
+  if (isSamePath(src, dest)) {
     skipped.push(dest);
     return false;
   }
@@ -1199,6 +1214,7 @@ export function isSelfContainedRepo(targetDir) {
 }
 
 function checkFilePending(srcPath, destPath, resolvedProfile = null, options = {}) {
+  if (isSamePath(srcPath, destPath)) return false;
   if (!existsSync(srcPath)) return false;
   try {
     if (!statSync(srcPath).isFile()) return false;
@@ -1258,6 +1274,7 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
     return { dir, hasPendingUpdates: false, pendingFiles: [] };
   }
 
+  const isRigRoot = isSamePath(dir, rigRoot);
   const pendingFiles = [];
 
   const legacyPreCommit = path.join(dir, 'scripts/git-hooks/pre-commit');
@@ -1294,7 +1311,7 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
     try {
       const tHarness = harness || detectRepoHarness(dir) || 'antigravity';
       const resolvedProfile = resolveProfile(tHarness, { rigRoot });
-      const isSelf = isSelfContainedRepo(dir);
+      const isSelf = isRigRoot || isSelfContainedRepo(dir);
       const expectedBlock = buildManagedAgentsBlock(resolvedProfile, { rigRoot, isSelfContained: isSelf });
       const content = readFileSync(agentsPath, 'utf8');
       const { block, hasBlock } = extractManagedAgentsBlock(content);
@@ -1306,7 +1323,7 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
     }
   }
 
-  const isSelfContained = isSelfContainedRepo(dir);
+  const isSelfContained = !isRigRoot && isSelfContainedRepo(dir);
 
   if (isSelfContained) {
     if (existsSync(path.join(dir, '.rig/bin/rig.mjs')) || existsSync(path.join(dir, '.rig'))) {
@@ -1494,6 +1511,7 @@ export function validateRepoCleanForUpdate(targetDir) {
 
 export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, autoCommit = false, homeDir = null } = {}) {
   const dir = path.resolve(targetDir);
+  const isRigRoot = isSamePath(dir, rigRoot);
   const copied = [];
   const skipped = [];
   const removed = [];
@@ -1568,7 +1586,7 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
     try {
       const tHarness = harness || detectRepoHarness(dir) || 'antigravity';
       const resolvedProfile = resolveProfile(tHarness, { rigRoot });
-      const isSelf = isSelfContainedRepo(dir);
+      const isSelf = isRigRoot || isSelfContainedRepo(dir);
       const expectedBlock = buildManagedAgentsBlock(resolvedProfile, { rigRoot, isSelfContained: isSelf });
       const docsBlock = buildDocsIndexBlock(dir);
       const existing = readFileSync(agentsPath, 'utf8');
@@ -1608,7 +1626,7 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
   }
 
   // If the repo was initialized with --self-contained, refresh static rig assets without touching AGENTS.md or docs/
-  const isSelfContained = isSelfContainedRepo(dir);
+  const isSelfContained = !isRigRoot && isSelfContainedRepo(dir);
 
   if (isSelfContained) {
     if (existsSync(path.join(dir, '.rig/bin/rig.mjs')) || existsSync(path.join(dir, '.rig'))) {

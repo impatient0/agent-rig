@@ -1398,6 +1398,28 @@ test('checkRepoPendingUpdates detects pending updates across lightweight and sel
   }
 });
 
+test('updateRepo skips self-copy when dir equals rigRoot instead of throwing ERR_FS_CP_EINVAL', () => {
+  const fakeRig = mkdtempSync(path.join(tmpdir(), 'rig-self-upd-'));
+  try {
+    mkdirSync(path.join(fakeRig, '.rig/hooks'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'templates'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'rules'), { recursive: true });
+    copyFileSync(path.join(RIG_ROOT, '.rig/hooks/pre-commit'), path.join(fakeRig, '.rig/hooks/pre-commit'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/models.json'), path.join(fakeRig, 'templates/models.json'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/rig-config.default.json'), path.join(fakeRig, 'templates/rig-config.default.json'));
+    copyFileSync(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(fakeRig, 'rules/AGENTS.md'));
+    writeFileSync(path.join(fakeRig, 'AGENTS.md'), '<!-- AGENT-RIG:START -->\noutdated\n<!-- AGENT-RIG:END -->\n\n# Context\n');
+
+    const res = updateRepo(fakeRig, { rigRoot: fakeRig, harness: 'antigravity' });
+    assert.ok(res.copied.includes(path.join(fakeRig, 'AGENTS.md')));
+    const updatedAgents = readFileSync(path.join(fakeRig, 'AGENTS.md'), 'utf8');
+    assert.doesNotMatch(updatedAgents, /\boutdated\b/);
+    assert.match(updatedAgents, /antigravity-pro/);
+  } finally {
+    rmSync(fakeRig, { recursive: true, force: true });
+  }
+});
+
 test('updateRig selective execution: allRepos and repoDir update clean repos and skip non-main/dirty repos with warnings', () => {
   const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-sel-home-'));
   const cleanRepo = mkdtempSync(path.join(tmpdir(), 'rig-sel-clean-'));

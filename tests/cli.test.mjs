@@ -1420,6 +1420,105 @@ test('updateRepo skips self-copy when dir equals rigRoot instead of throwing ERR
   }
 });
 
+test('detectRepoHarness when both plugin.json and .claude-plugin exist vs. when only .claude-plugin exists', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rig-detect-harness-'));
+  try {
+    // 1. Only .claude-plugin exists -> claude
+    mkdirSync(path.join(dir, '.claude-plugin'), { recursive: true });
+    assert.equal(detectRepoHarness(dir), 'claude');
+
+    // 2. Both plugin.json (Antigravity plugin manifest) and .claude-plugin exist (like agent-rig itself)
+    // -> must not classify as claude solely due to .claude-plugin (returns null)
+    writeFileSync(path.join(dir, 'plugin.json'), JSON.stringify({ id: 'agent-rig' }));
+    assert.equal(detectRepoHarness(dir), null);
+
+    // 3. .claude directory alone or alongside plugin.json -> claude
+    mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    assert.equal(detectRepoHarness(dir), 'claude');
+    rmSync(path.join(dir, '.claude'), { recursive: true, force: true });
+
+    // 4. .gemini directory overrides and returns antigravity
+    mkdirSync(path.join(dir, '.gemini'), { recursive: true });
+    assert.equal(detectRepoHarness(dir), 'antigravity');
+    rmSync(path.join(dir, '.gemini'), { recursive: true, force: true });
+
+    // 5. Single-harness .rig.local.json overrides
+    writeFileSync(path.join(dir, '.rig.local.json'), JSON.stringify({ activeProfiles: { cursor: 'cursor-default' } }));
+    assert.equal(detectRepoHarness(dir), 'cursor');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('updateRepo and checkRepoPendingUpdates when dir === rigRoot refresh AGENTS.md with antigravity profile without vendoring or overwriting templates', () => {
+  const fakeRig = mkdtempSync(path.join(tmpdir(), 'rig-self-root-'));
+  try {
+    // Set up a mock agent-rig root repository
+    mkdirSync(path.join(fakeRig, '.rig/hooks'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'templates'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'rules'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'skills/dispatch'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'agents'), { recursive: true });
+    mkdirSync(path.join(fakeRig, '.claude-plugin'), { recursive: true });
+    writeFileSync(path.join(fakeRig, 'plugin.json'), JSON.stringify({ id: 'agent-rig' }));
+
+    copyFileSync(path.join(RIG_ROOT, '.rig/hooks/pre-commit'), path.join(fakeRig, '.rig/hooks/pre-commit'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/models.json'), path.join(fakeRig, 'templates/models.json'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/rig-config.default.json'), path.join(fakeRig, 'templates/rig-config.default.json'));
+    copyFileSync(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(fakeRig, 'rules/AGENTS.md'));
+
+    // Source template files with unhydrated {{...}} placeholders
+    const skillSource = '# Dispatch\nTarget worker: {{MODEL_WORKER}}\nSubagent: {{SUBAGENT_MODEL_WORKER}}\n';
+    writeFileSync(path.join(fakeRig, 'skills/dispatch/SKILL.md'), skillSource);
+
+    const workerSource = '# Worker\nExecution tier model: {{MODEL_WORKER}}\n';
+    writeFileSync(path.join(fakeRig, 'agents/worker.md'), workerSource);
+
+    const ruleSource = '# UI Gate\nProfile: {{RIG_PROFILE}}\n';
+    writeFileSync(path.join(fakeRig, 'rules/ui-change-gate.md'), ruleSource);
+
+    // Initial outdated AGENTS.md
+    writeFileSync(
+      path.join(fakeRig, 'AGENTS.md'),
+      '<!-- AGENT-RIG:START -->\noutdated\n<!-- AGENT-RIG:END -->\n\n# Project Context\n',
+    );
+
+    // 1. checkRepoPendingUpdates should detect AGENTS.md pending update, but NOT vendored files or source templates
+    const pendingBefore = checkRepoPendingUpdates(fakeRig, { rigRoot: fakeRig });
+    assert.equal(pendingBefore.hasPendingUpdates, true);
+    assert.deepEqual(pendingBefore.pendingFiles, [path.join(fakeRig, 'AGENTS.md')]);
+
+    // 2. updateRepo on fakeRig with dir === rigRoot without explicit harness (should default to antigravity)
+    const res = updateRepo(fakeRig, { rigRoot: fakeRig });
+    assert.ok(res.copied.includes(path.join(fakeRig, 'AGENTS.md')));
+
+    // AGENTS.md is refreshed with antigravity profile and relative links (skills/..., agents/..., rules/...)
+    const updatedAgents = readFileSync(path.join(fakeRig, 'AGENTS.md'), 'utf8');
+    assert.doesNotMatch(updatedAgents, /\boutdated\b/);
+    assert.match(updatedAgents, /antigravity-pro/);
+    assert.match(updatedAgents, /gemini-4-hydrogen/);
+    assert.match(updatedAgents, /\(skills\/merge-to-main\/SKILL\.md\)/);
+    assert.match(updatedAgents, /\(agents\/verifier\.md\)/);
+    assert.match(updatedAgents, /\(rules\/ui-change-gate\.md\)/);
+
+    // Source templates in skills/, agents/, rules/ must NOT be overwritten or hydrated
+    assert.equal(readFileSync(path.join(fakeRig, 'skills/dispatch/SKILL.md'), 'utf8'), skillSource);
+    assert.equal(readFileSync(path.join(fakeRig, 'agents/worker.md'), 'utf8'), workerSource);
+    assert.equal(readFileSync(path.join(fakeRig, 'rules/ui-change-gate.md'), 'utf8'), ruleSource);
+
+    // Static rig assets must NOT be vendored into .rig/bin/rig.mjs or .rig/templates/
+    assert.equal(existsSync(path.join(fakeRig, '.rig/bin/rig.mjs')), false);
+    assert.equal(existsSync(path.join(fakeRig, '.rig/templates/models.json')), false);
+
+    // 3. checkRepoPendingUpdates after updateRepo should report clean (no pending updates)
+    const pendingAfter = checkRepoPendingUpdates(fakeRig, { rigRoot: fakeRig });
+    assert.equal(pendingAfter.hasPendingUpdates, false);
+    assert.equal(pendingAfter.pendingFiles.length, 0);
+  } finally {
+    rmSync(fakeRig, { recursive: true, force: true });
+  }
+});
+
 test('updateRig selective execution: allRepos and repoDir update clean repos and skip non-main/dirty repos with warnings', () => {
   const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-sel-home-'));
   const cleanRepo = mkdtempSync(path.join(tmpdir(), 'rig-sel-clean-'));

@@ -4,7 +4,42 @@ Sorted by actionability tier via [`skills/backlog-audit/SKILL.md`](../skills/bac
 
 ## Do next
 
-- None currently queued.
+- **Slice 1 — Conditional Markdown hydration (`RIG:IF`) and multi-harness prompt specialization:**
+  Governed by [`docs/adr/0003-conditional-markdown-hydration-and-marketplace-bundling.md`](adr/0003-conditional-markdown-hydration-and-marketplace-bundling.md);
+  Core files: `bin/rig.mjs`, `tests/cli.test.mjs`, [`rules/AGENTS.md`](../rules/AGENTS.md), [`agents/worker.md`](../agents/worker.md), [`agents/verifier.md`](../agents/verifier.md), [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md), [`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md), [`skills/doc-audit/SKILL.md`](../skills/doc-audit/SKILL.md), [`skills/backlog-audit/SKILL.md`](../skills/backlog-audit/SKILL.md), [`skills/wrap-up/SKILL.md`](../skills/wrap-up/SKILL.md), and [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md).
+  Extend `hydrateText(templateText, resolvedProfile, options)` in `bin/rig.mjs` to evaluate structural HTML-comment conditional blocks (`<!-- RIG:IF key=val1,val2 -->`, `<!-- RIG:ELIF key=val -->`, `<!-- RIG:ELSE -->`, `<!-- RIG:ENDIF -->`, supporting both `=` and `!=` operators) against `{ harness, distribution }` (`distribution` defaults to `"rig"` for `rig install`, `rig update`, and `rig init`, and `"standalone"` for marketplace builds; `harness` is `"antigravity" | "claude" | "codex" | "cursor" | "agensi"`).
+  Enforce fail-closed validation in `hydrateText` that throws a descriptive `Error` on unbalanced `RIG:IF` / `RIG:ENDIF` blocks, unknown condition keys (anything outside `harness` and `distribution`), or any leftover `<!-- RIG:` comment in the hydrated output, and collapse `3+` consecutive newlines (`/\n{3,}/g` to `\n\n`) after block evaluation so hydrated Markdown always passes `scripts/reflow-docs.mjs --check`.
+  Update the canonical Markdown files to replace "either/or" multi-environment prose with `RIG:IF` blocks:
+  in [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md) and [`rules/AGENTS.md`](../rules/AGENTS.md), split worktree setup between `harness=antigravity,claude` (native subagent worktree branching with `git branch -m <type>/<slug>`) and `ELSE` (`git worktree add .worktrees/<slug> -b <type>/<slug>`);
+  in [`skills/dispatch/SKILL.md`](../skills/dispatch/SKILL.md) and [`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md), specialize Worker/Verifier subagent invocation for `distribution=rig` vs. `distribution=standalone` (where `./references/worker.md` and `./references/verifier.md` are passed inline in the subagent invocation prompt);
+  in [`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md), split Step 2 between `distribution=rig` (`rig init <repo>`) and `distribution=standalone` (creating `.worktrees/rig-init` via `git worktree add .worktrees/rig-init -b chore/rig-init`, adding `.worktrees/` to `.gitignore`, and copying starter templates from [`templates/AGENTS.md`](../templates/AGENTS.md), [`templates/docs/backlog.md`](../templates/docs/backlog.md), and [`templates/docs/adr/0001-record-architecture-decisions.md`](../templates/docs/adr/0001-record-architecture-decisions.md));
+  in [`rules/AGENTS.md`](../rules/AGENTS.md), wrap `## CLI Entry Points (rig)` in `<!-- RIG:IF distribution=rig -->`;
+  across [`skills/doc-audit/SKILL.md`](../skills/doc-audit/SKILL.md), [`skills/backlog-audit/SKILL.md`](../skills/backlog-audit/SKILL.md), [`skills/wrap-up/SKILL.md`](../skills/wrap-up/SKILL.md), [`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md), [`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md), [`agents/worker.md`](../agents/worker.md), and [`agents/verifier.md`](../agents/verifier.md), split doc-linter commands between `distribution=rig` (`rig check-docs` and `rig reflow-docs --check`) and `distribution=standalone` (`node scripts/check-doc-links.mjs` and `node scripts/reflow-docs.mjs --check`).
+  Add unit tests in `tests/cli.test.mjs` covering `RIG:IF` / `RIG:ELIF` / `RIG:ELSE` / `!=` evaluation, newline normalization, and fail-closed errors, and verify with `npm test`.
+
+- **Slice 2 — Zero-maintenance Agensi skill bundler (`build-agensi.mjs`) and package verification test suite (sequenced after Slice 1):**
+  Governed by [`docs/adr/0003-conditional-markdown-hydration-and-marketplace-bundling.md`](adr/0003-conditional-markdown-hydration-and-marketplace-bundling.md);
+  Core files: `bin/rig.mjs`, `package.json`, `.gitignore`, `scripts/check-doc-links.mjs`, and `scripts/reflow-docs.mjs`;
+  Suggested files to create: `build-agensi.mjs` under `scripts/` and `buildAgensi.test.mjs` under `tests/`.
+  Functional dependency: sequence after Slice 1 so `hydrateText` in `bin/rig.mjs` already supports `{ harness: "agensi", distribution: "standalone" }` and `<!-- RIG:IF ... -->` conditional blocks.
+  Add `dist/` to `.gitignore` and `"build:agensi": "node scripts/build-agensi.mjs"` to `package.json`.
+  Implement `build-agensi.mjs` under `scripts/` to build six standalone skill packages into `<outDir>/<slug>/` and `<outDir>/<slug>.zip` (defaulting `<outDir>` to `dist/agensi`):
+  five Free SDD & Hygiene skills (`rig-onboard`, `doc-audit`, `backlog-audit`, `wrap-up`, `secure-credential-handoff`) and one Paid Autonomous Execution flagship (`dispatch`, excluding CLI-only `rig-update`).
+  For each target skill, `build-agensi.mjs` must:
+  hydrate `SKILL.md` via `hydrateText` using `{ harness: "agensi", distribution: "standalone" }` and harness-neutral role descriptors;
+  recursively crawl relative Markdown links in hydrated docs so any link pointing to an existing repo doc (`agents/`, `rules/`, `skills/`, [`docs/field-notes.md`](field-notes.md), `docs/adr/`) copies the hydrated target into `<slug>/references/<name>.md` (stripping agent-only `model:` and `tools:` YAML frontmatter keys from files placed in `references/`) and rewrites the link to `./references/<name>.md#fragment`, while links to buyer-repo files (`../../docs/backlog.md`, `../../AGENTS.md`) are unwrapped to inline code (`` `docs/backlog.md` ``, `` `AGENTS.md` ``);
+  detect references to `scripts/check-doc-links.mjs` or `scripts/reflow-docs.mjs` and copy those standalone scripts into `<slug>/scripts/`, rewriting `scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs` invocations to `./scripts/check-doc-links.mjs` and `./scripts/reflow-docs.mjs`;
+  for `rig-onboard`, copy hydrated starter templates ([`templates/AGENTS.md`](../templates/AGENTS.md) merged with hydrated [`rules/AGENTS.md`](../rules/AGENTS.md), [`templates/docs/backlog.md`](../templates/docs/backlog.md), and [`templates/docs/adr/0001-record-architecture-decisions.md`](../templates/docs/adr/0001-record-architecture-decisions.md)) into `rig-onboard/templates/` and rewrite template links to `./templates/...`;
+  generate a buyer-facing `<slug>/README.md` (with one sentence per line) summarizing the skill's purpose, trigger phrases, and bundled files;
+  create `<outDir>/<slug>.zip` containing the single top-level `<slug>/` folder with zero symlinks, hidden OS files, or binary executables;
+  and run a built-in verification check on every generated `<slug>/` directory (asserting valid `name` + `description` frontmatter, zero `{{...}}` or `<!-- RIG:` tokens, zero `../` links escaping `<slug>/`, existing targets for every relative link and `./scripts/` or `./templates/` path, and passing one-sentence-per-line formatting).
+  Add `buildAgensi.test.mjs` under `tests/` to run the bundler in a temporary directory and verify all six generated skill folders and `.zip` archives during `npm test`.
+
+- **Slice 3 — License transition from `MIT` to `PolyForm-Shield-1.0.0`:**
+  Governed by [`docs/adr/0003-conditional-markdown-hydration-and-marketplace-bundling.md`](adr/0003-conditional-markdown-hydration-and-marketplace-bundling.md);
+  Core files: `LICENSE`, `package.json`, `.claude-plugin/plugin.json`, `plugin.json`, and `README.md`.
+  Replace the `MIT` license text in `LICENSE` with the canonical `PolyForm-Shield-1.0.0` (PolyForm Shield License 1.0.0) text, update the `"license"` field in `package.json`, `.claude-plugin/plugin.json`, and `plugin.json` from `"MIT"` to `"PolyForm-Shield-1.0.0"`, and update any license mention in `README.md` if present.
+  Verify with `npm test`.
 
 ## Ready, unblocked
 

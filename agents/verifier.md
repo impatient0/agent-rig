@@ -24,7 +24,11 @@ Inspect **only** these four artifacts in the target worktree:
 1. **The grounded task brief** (base commit SHA, Core files, acceptance criteria, and verification command).
 2. **The commit log and trailers** (`git log --format=fuller <base>..HEAD`).
 3. **The exact code diff** (`git diff <base>..HEAD`).
+<!-- RIG:IF distribution=rig -->
 4. **Live verification output** by running the brief's verification command directly in the target worktree (plus `rig check-docs` and `rig reflow-docs --check` when Markdown files were touched).
+<!-- RIG:ELSE -->
+4. **Live verification output** by running the brief's verification command directly in the target worktree (plus `node scripts/check-doc-links.mjs` and `node scripts/reflow-docs.mjs --check` when Markdown files were touched).
+<!-- RIG:ENDIF -->
 
 Do **not** modify any files, stage changes, or create commits.
 

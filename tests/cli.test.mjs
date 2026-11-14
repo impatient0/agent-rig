@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, rmSync, readdirSync, copyFileSync, chmodSync, readlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, rmSync, readdirSync, copyFileSync, chmodSync, readlinkSync, statSync } from 'node:fs';
+import { reflowMarkdown } from '../scripts/reflow-docs.mjs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -2127,6 +2128,170 @@ test('statusRepo reports mode (attached vs self-contained vs unrigged) with loca
     rmSync(unriggedRepo, { recursive: true, force: true });
   }
 });
+
+test('hydrateText evaluates structural RIG:IF, RIG:ELIF, RIG:ELSE, and != conditionals with fail-closed validation', () => {
+  // 1. Basic IF/ELSE
+  const tpl1 = '<!-- RIG:IF harness=antigravity -->\nAntigravity\n<!-- RIG:ELSE -->\nOther\n<!-- RIG:ENDIF -->';
+  assert.equal(hydrateText(tpl1, null, { harness: 'antigravity' }), 'Antigravity');
+  assert.equal(hydrateText(tpl1, null, { harness: 'claude' }), 'Other');
+
+  // 2. Comma-separated value list
+  const tpl2 = '<!-- RIG:IF harness=antigravity,claude -->\nNative\n<!-- RIG:ELSE -->\nLinked\n<!-- RIG:ENDIF -->';
+  assert.equal(hydrateText(tpl2, null, { harness: 'antigravity' }), 'Native');
+  assert.equal(hydrateText(tpl2, null, { harness: 'claude' }), 'Native');
+  assert.equal(hydrateText(tpl2, null, { harness: 'codex' }), 'Linked');
+  assert.equal(hydrateText(tpl2, null, { harness: 'cursor' }), 'Linked');
+  assert.equal(hydrateText(tpl2, null, { harness: 'agensi' }), 'Linked');
+
+  // 3. Negation operator !=
+  const tpl3 = '<!-- RIG:IF distribution!=standalone -->\nRig Mode\n<!-- RIG:ELSE -->\nStandalone Mode\n<!-- RIG:ENDIF -->';
+  assert.equal(hydrateText(tpl3, null, { distribution: 'rig' }), 'Rig Mode');
+  assert.equal(hydrateText(tpl3, null, { distribution: 'standalone' }), 'Standalone Mode');
+
+  // 4. ELIF chains
+  const tplElif = [
+    '<!-- RIG:IF harness=antigravity -->',
+    'Branch A',
+    '<!-- RIG:ELIF harness=claude -->',
+    'Branch B',
+    '<!-- RIG:ELIF harness=codex,cursor -->',
+    'Branch C',
+    '<!-- RIG:ELSE -->',
+    'Branch D',
+    '<!-- RIG:ENDIF -->',
+  ].join('\n');
+  assert.equal(hydrateText(tplElif, null, { harness: 'antigravity' }), 'Branch A');
+  assert.equal(hydrateText(tplElif, null, { harness: 'claude' }), 'Branch B');
+  assert.equal(hydrateText(tplElif, null, { harness: 'codex' }), 'Branch C');
+  assert.equal(hydrateText(tplElif, null, { harness: 'cursor' }), 'Branch C');
+  assert.equal(hydrateText(tplElif, null, { harness: 'agensi' }), 'Branch D');
+
+  // 5. Default distribution is 'rig'
+  const tplDef = '<!-- RIG:IF distribution=rig -->\nDefault Rig\n<!-- RIG:ELSE -->\nNot Rig\n<!-- RIG:ENDIF -->';
+  assert.equal(hydrateText(tplDef, null), 'Default Rig');
+
+  // 6. Inline comments
+  const tplInline = 'Run <!-- RIG:IF distribution=rig -->rig check-docs<!-- RIG:ELSE -->scripts/check-doc-links.mjs<!-- RIG:ENDIF --> now.';
+  assert.equal(hydrateText(tplInline, null, { distribution: 'rig' }), 'Run rig check-docs now.');
+  assert.equal(hydrateText(tplInline, null, { distribution: 'standalone' }), 'Run scripts/check-doc-links.mjs now.');
+
+  // 7. Newline normalization (/\n{3,}/g -> \n\n)
+  const tplNewlines = '# Header\n\n\n<!-- RIG:IF distribution=standalone -->\nStandalone Only\n<!-- RIG:ENDIF -->\n\n\n## Section\n';
+  const out = hydrateText(tplNewlines, null, { distribution: 'rig' });
+  assert.equal(out, '# Header\n\n## Section\n');
+  assert.doesNotMatch(out, /\n{3,}/);
+
+  // 8. Fail-closed errors
+  // Unbalanced IF / missing ENDIF
+  assert.throws(
+    () => hydrateText('<!-- RIG:IF harness=claude -->Unclosed block', null),
+    /Unbalanced <!-- RIG:IF --> block: missing matching <!-- RIG:ENDIF -->/,
+  );
+  // Misplaced ELIF
+  assert.throws(
+    () => hydrateText('<!-- RIG:ELIF harness=claude -->', null),
+    /Misplaced <!-- RIG:ELIF/,
+  );
+  // Misplaced ELSE
+  assert.throws(
+    () => hydrateText('<!-- RIG:ELSE -->', null),
+    /Misplaced <!-- RIG:ELSE -->/,
+  );
+  // Misplaced ENDIF
+  assert.throws(
+    () => hydrateText('<!-- RIG:ENDIF -->', null),
+    /Misplaced <!-- RIG:ENDIF -->/,
+  );
+  // ELIF after ELSE
+  assert.throws(
+    () => hydrateText('<!-- RIG:IF harness=claude -->A<!-- RIG:ELSE -->B<!-- RIG:ELIF harness=codex -->C<!-- RIG:ENDIF -->', null),
+    /Misplaced <!-- RIG:ELIF.*after <!-- RIG:ELSE -->/,
+  );
+  // Duplicate ELSE
+  assert.throws(
+    () => hydrateText('<!-- RIG:IF harness=claude -->A<!-- RIG:ELSE -->B<!-- RIG:ELSE -->C<!-- RIG:ENDIF -->', null),
+    /Duplicate <!-- RIG:ELSE -->/,
+  );
+  // Unknown condition key
+  assert.throws(
+    () => hydrateText('<!-- RIG:IF foo=bar -->Content<!-- RIG:ENDIF -->', null),
+    /Unknown condition key: "foo"/,
+  );
+  // Malformed condition expression
+  assert.throws(
+    () => hydrateText('<!-- RIG:IF harness==claude -->Content<!-- RIG:ENDIF -->', null),
+    /Malformed condition expression/,
+  );
+  assert.throws(
+    () => hydrateText('<!-- RIG:IF harness= -->Content<!-- RIG:ENDIF -->', null),
+    /Malformed condition expression/,
+  );
+  assert.throws(
+    () => hydrateText('<!-- RIG:IF -->Content<!-- RIG:ENDIF -->', null),
+    /Missing condition expression/,
+  );
+  // Leftover RIG comments
+  assert.throws(
+    () => hydrateText('Text <!-- RIG:UNKNOWN -->', null),
+    /Unknown conditional directive/,
+  );
+  assert.throws(
+    () => hydrateText('Text <!-- RIG: -->', null),
+    /Leftover RIG comment/,
+  );
+});
+
+test('hydrating all canonical rules, agents, and skills Markdown files across harnesses and distributions succeeds and passes reflow-docs --check', () => {
+  const dirs = ['rules', 'agents', 'skills'];
+  const mdFiles = [];
+
+  function walk(dir) {
+    for (const entry of readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      const st = statSync(full);
+      if (st.isDirectory()) {
+        walk(full);
+      } else if (full.endsWith('.md')) {
+        mdFiles.push(full);
+      }
+    }
+  }
+
+  for (const d of dirs) {
+    walk(path.join(RIG_ROOT, d));
+  }
+
+  assert.ok(mdFiles.length >= 10, `Expected at least 10 canonical md files, found ${mdFiles.length}`);
+
+  const harnesses = ['antigravity', 'claude', 'codex', 'cursor', 'agensi'];
+  const distributions = ['rig', 'standalone'];
+  const baseProfile = resolveProfile('antigravity', { rigRoot: RIG_ROOT });
+
+  let combinationCount = 0;
+  for (const file of mdFiles) {
+    const raw = readFileSync(file, 'utf8');
+    for (const harness of harnesses) {
+      const profile = harness === 'agensi' ? baseProfile : resolveProfile(harness, { rigRoot: RIG_ROOT });
+      for (const distribution of distributions) {
+        const hydrated = hydrateText(raw, profile, { harness, distribution });
+        assert.doesNotMatch(hydrated, /<!--\s*RIG:/, `Leftover RIG comment in ${file} for harness=${harness}, distribution=${distribution}`);
+        assert.doesNotMatch(hydrated, /\{\{[A-Z0-9_]+\}\}/, `Leftover placeholder in ${file} for harness=${harness}, distribution=${distribution}`);
+        assert.doesNotMatch(hydrated, /\n{3,}/, `Consecutive 3+ newlines in ${file} for harness=${harness}, distribution=${distribution}`);
+
+        const reflowed = reflowMarkdown(hydrated);
+        assert.equal(
+          reflowed,
+          hydrated,
+          `Hydrated Markdown does not match reflowMarkdown in ${file} for harness=${harness}, distribution=${distribution}`,
+        );
+        combinationCount++;
+      }
+    }
+  }
+
+  assert.equal(combinationCount, mdFiles.length * harnesses.length * distributions.length);
+});
+
 
 
 

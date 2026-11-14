@@ -41,7 +41,11 @@ Because the repository's root checkout stays attached to `main` as a merge-only 
    Task that Worker inside its live worktree to run `git merge main`, resolve conflicting files using its direct domain context of the slice, verify tests, and commit the merge.
    Spawn a fresh Cold Verifier subagent ([`agents/verifier.md`](../../agents/verifier.md)) to audit the resolved branch diff against `main` before re-attempting Step 2.
 3. **Verification gate:**
+<!-- RIG:IF distribution=rig -->
    Once git merges cleanly without conflicts, run the project's full test and documentation verification suite in `<root>` (`npm test`, `rig check-docs`, `rig reflow-docs --check`) on the uncommitted merge state.
+<!-- RIG:ELSE -->
+   Once git merges cleanly without conflicts, run the project's full test and documentation verification suite in `<root>` (`npm test`, `node scripts/check-doc-links.mjs`, `node scripts/reflow-docs.mjs --check`) on the uncommitted merge state.
+<!-- RIG:ENDIF -->
 
 ---
 
@@ -84,7 +88,11 @@ Merging intermediate branches individually is unnecessary because the tip branch
    git -C <root> merge --no-commit --no-ff "$TIP_BRANCH"
    ```
 3. **Verify the merged stack:**
+<!-- RIG:IF distribution=rig -->
    Run the project's full test and documentation verification suite in `<root>` (`npm test`, `rig check-docs`, `rig reflow-docs --check`) on the uncommitted merge state.
+<!-- RIG:ELSE -->
+   Run the project's full test and documentation verification suite in `<root>` (`npm test`, `node scripts/check-doc-links.mjs`, `node scripts/reflow-docs.mjs --check`) on the uncommitted merge state.
+<!-- RIG:ENDIF -->
 4. **Commit and remove all stack worktrees and branches:**
    Commit the verified merge and clean up all constituent worktrees and branches across the stack in a single compound command:
    ```bash

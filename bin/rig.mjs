@@ -289,18 +289,211 @@ export function resolveProfile(harness, { profileName = null, rigRoot = RIG_ROOT
   };
 }
 
-export function hydrateText(templateText, resolvedProfile) {
-  let text = templateText;
-  text = text.replaceAll('{{RIG_PROFILE}}', resolvedProfile.profileName);
-  text = text.replaceAll('{{RIG_HARNESS}}', resolvedProfile.harness);
+const COND_REGEX = /^\s*([a-zA-Z0-9_-]+)\s*(=|!=)\s*([a-zA-Z0-9_,\s-]+?)\s*$/;
 
-  for (const role of ROLES) {
-    const roleData = resolvedProfile.roles[role];
-    if (roleData) {
-      const upper = role.toUpperCase();
-      text = text.replaceAll(`{{MODEL_${upper}}}`, roleData.model);
-      text = text.replaceAll(`{{SUBAGENT_MODEL_${upper}}}`, roleData.subagentModel);
-      text = text.replaceAll(`{{EFFORT_${upper}}}`, roleData.effort);
+export function parseCondition(expr) {
+  if (!expr || typeof expr !== 'string') {
+    throw new Error(`Malformed condition expression: "${expr}"`);
+  }
+  const match = expr.match(COND_REGEX);
+  if (!match) {
+    throw new Error(`Malformed condition expression: "${expr.trim()}"`);
+  }
+  const [, key, op, rawValues] = match;
+  if (key !== 'harness' && key !== 'distribution') {
+    throw new Error(`Unknown condition key: "${key}" (expected "harness" or "distribution")`);
+  }
+  const values = rawValues.split(',').map((s) => s.trim()).filter(Boolean);
+  if (values.length === 0) {
+    throw new Error(`Malformed condition expression: "${expr.trim()}" (no values provided)`);
+  }
+  return { key, op, values };
+}
+
+export function evaluateCondition(expr, context) {
+  const { key, op, values } = parseCondition(expr);
+  const actual = context[key];
+  const matched = values.includes(actual);
+  return op === '=' ? matched : !matched;
+}
+
+export function evaluateConditionals(templateText, context) {
+  const DIRECTIVE_REGEX = /<!--\s*RIG:([A-Za-z0-9_-]+)([\s\S]*?)-->/g;
+  const tokens = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = DIRECTIVE_REGEX.exec(templateText)) !== null) {
+    const rawTag = match[0];
+    const dir = match[1].toUpperCase();
+    const rest = match[2].trim();
+    const matchIndex = match.index;
+    const matchLength = rawTag.length;
+
+    if (dir !== 'IF' && dir !== 'ELIF' && dir !== 'ELSE' && dir !== 'ENDIF') {
+      throw new Error(`Unknown conditional directive: "<!-- RIG:${match[1]}${match[2]}-->"`);
+    }
+    if ((dir === 'IF' || dir === 'ELIF') && !rest) {
+      throw new Error(`Missing condition expression in <!-- RIG:${dir} -->`);
+    }
+    if ((dir === 'ELSE' || dir === 'ENDIF') && rest) {
+      throw new Error(`Unexpected expression "${rest}" in <!-- RIG:${dir} -->`);
+    }
+
+    let lineStart = templateText.lastIndexOf('\n', matchIndex - 1);
+    lineStart = lineStart === -1 ? 0 : lineStart + 1;
+    const isLeadingWhitespace = /^[ \t]*$/.test(templateText.slice(lineStart, matchIndex));
+
+    let lineEnd = templateText.indexOf('\n', matchIndex + matchLength);
+    let isTrailingWhitespace;
+    let spanEnd;
+    if (lineEnd === -1) {
+      isTrailingWhitespace = /^[ \t]*\r?$/.test(templateText.slice(matchIndex + matchLength));
+      spanEnd = templateText.length;
+    } else {
+      isTrailingWhitespace = /^[ \t]*\r?$/.test(templateText.slice(matchIndex + matchLength, lineEnd));
+      spanEnd = lineEnd + 1;
+    }
+
+    let tagStart = matchIndex;
+    let tagEnd = matchIndex + matchLength;
+    if (isLeadingWhitespace && isTrailingWhitespace) {
+      tagStart = lineStart;
+      tagEnd = spanEnd;
+    }
+
+    if (tagStart > lastIndex) {
+      tokens.push({ type: 'text', content: templateText.slice(lastIndex, tagStart) });
+    }
+    tokens.push({ type: 'tag', dir, expr: rest });
+    lastIndex = tagEnd;
+  }
+
+  if (lastIndex < templateText.length) {
+    tokens.push({ type: 'text', content: templateText.slice(lastIndex) });
+  }
+
+  const root = { type: 'root', children: [] };
+  const stack = [root];
+
+  const currentContainer = () => {
+    const top = stack[stack.length - 1];
+    if (top.type === 'root') return top;
+    return top.branches[top.branches.length - 1];
+  };
+
+  for (const token of tokens) {
+    if (token.type === 'text') {
+      if (token.content) {
+        currentContainer().children.push(token);
+      }
+    } else if (token.dir === 'IF') {
+      parseCondition(token.expr);
+      const ifNode = {
+        type: 'if',
+        branches: [{ type: 'if', expr: token.expr, children: [] }],
+        hasElse: false,
+      };
+      currentContainer().children.push(ifNode);
+      stack.push(ifNode);
+    } else if (token.dir === 'ELIF') {
+      const top = stack[stack.length - 1];
+      if (top.type === 'root') {
+        throw new Error(`Misplaced <!-- RIG:ELIF ${token.expr} --> without matching <!-- RIG:IF -->`);
+      }
+      if (top.hasElse) {
+        throw new Error(`Misplaced <!-- RIG:ELIF ${token.expr} --> after <!-- RIG:ELSE -->`);
+      }
+      parseCondition(token.expr);
+      top.branches.push({ type: 'elif', expr: token.expr, children: [] });
+    } else if (token.dir === 'ELSE') {
+      const top = stack[stack.length - 1];
+      if (top.type === 'root') {
+        throw new Error('Misplaced <!-- RIG:ELSE --> without matching <!-- RIG:IF -->');
+      }
+      if (top.hasElse) {
+        throw new Error('Duplicate <!-- RIG:ELSE --> in the same conditional block');
+      }
+      top.hasElse = true;
+      top.branches.push({ type: 'else', expr: null, children: [] });
+    } else if (token.dir === 'ENDIF') {
+      const top = stack[stack.length - 1];
+      if (top.type === 'root') {
+        throw new Error('Misplaced <!-- RIG:ENDIF --> without matching <!-- RIG:IF -->');
+      }
+      stack.pop();
+    }
+  }
+
+  if (stack.length > 1) {
+    throw new Error('Unbalanced <!-- RIG:IF --> block: missing matching <!-- RIG:ENDIF -->');
+  }
+
+  function renderNode(node) {
+    if (node.type === 'text') {
+      return node.content;
+    }
+    if (node.type === 'root') {
+      return node.children.map(renderNode).join('');
+    }
+    if (node.type === 'if') {
+      for (const branch of node.branches) {
+        if (branch.type === 'else' || evaluateCondition(branch.expr, context)) {
+          return branch.children.map(renderNode).join('');
+        }
+      }
+      return '';
+    }
+    return '';
+  }
+
+  let rendered = renderNode(root);
+
+  rendered = rendered.replace(/\n{3,}/g, '\n\n');
+
+  if (templateText.endsWith('\n')) {
+    rendered = rendered.replace(/\n*$/, '\n');
+  } else {
+    rendered = rendered.replace(/\n*$/, '');
+  }
+
+  if (!templateText.startsWith('\n')) {
+    rendered = rendered.replace(/^\n+/, '');
+  }
+
+  return rendered;
+}
+
+export function hydrateText(templateText, resolvedProfile, options = {}) {
+  let opts = options || {};
+  let profile = resolvedProfile;
+  if (resolvedProfile && !resolvedProfile.roles && (resolvedProfile.harness || resolvedProfile.distribution)) {
+    opts = { ...resolvedProfile, ...opts };
+    profile = null;
+  }
+
+  const harness = opts.harness || profile?.harness || null;
+  const distribution = opts.distribution || profile?.distribution || 'rig';
+  const context = { harness, distribution };
+
+  let text = evaluateConditionals(templateText, context);
+
+  if (profile?.profileName) {
+    text = text.replaceAll('{{RIG_PROFILE}}', profile.profileName);
+  }
+  if (profile?.harness) {
+    text = text.replaceAll('{{RIG_HARNESS}}', profile.harness);
+  }
+
+  if (profile?.roles) {
+    for (const role of ROLES) {
+      const roleData = profile.roles[role];
+      if (roleData) {
+        const upper = role.toUpperCase();
+        text = text.replaceAll(`{{MODEL_${upper}}}`, roleData.model);
+        text = text.replaceAll(`{{SUBAGENT_MODEL_${upper}}}`, roleData.subagentModel);
+        text = text.replaceAll(`{{EFFORT_${upper}}}`, roleData.effort);
+      }
     }
   }
 
@@ -308,6 +501,13 @@ export function hydrateText(templateText, resolvedProfile) {
   if (leftover) {
     throw new Error(`Unresolved template placeholder(s) in hydrated content: ${[...new Set(leftover)].join(', ')}`);
   }
+
+  const leftoverComment = text.match(/<!--\s*RIG:[\s\S]*?-->/);
+  if (leftoverComment) {
+    throw new Error(`Leftover RIG comment in hydrated content: "${leftoverComment[0]}"`);
+  }
+
+  text = text.replace(/\n{3,}/g, '\n\n');
   return text;
 }
 
@@ -344,10 +544,14 @@ export function getHydratedFileContent(
   srcPath,
   destPath,
   resolvedProfile,
-  { isGlobal = false, harness = null, isDotHarness = false } = {},
+  { isGlobal = false, harness = null, isDotHarness = false, distribution = 'rig', ...rest } = {},
 ) {
   const template = readFileSync(srcPath, 'utf8');
-  let hydrated = hydrateText(template, resolvedProfile);
+  let hydrated = hydrateText(template, resolvedProfile, {
+    harness: harness || resolvedProfile?.harness,
+    distribution,
+    ...rest,
+  });
   hydrated = rewriteDocLinks(hydrated, {
     harness: harness || resolvedProfile?.harness,
     isGlobal,
@@ -361,16 +565,25 @@ export function writeHydratedFile(
   srcPath,
   destPath,
   resolvedProfile,
-  { executable = false, isGlobal = false, harness = null, isDotHarness = false } = {},
+  { executable = false, isGlobal = false, harness = null, isDotHarness = false, distribution = 'rig', ...rest } = {},
 ) {
-  const hydrated = getHydratedFileContent(srcPath, destPath, resolvedProfile, { isGlobal, harness, isDotHarness });
+  const hydrated = getHydratedFileContent(srcPath, destPath, resolvedProfile, {
+    isGlobal,
+    harness,
+    isDotHarness,
+    distribution,
+    ...rest,
+  });
   mkdirSync(path.dirname(destPath), { recursive: true });
   if (isSymlink(destPath)) rmSync(destPath, { recursive: true, force: true });
   writeFileSync(destPath, hydrated, 'utf8');
   if (executable) chmodSync(destPath, 0o755);
 }
 
-export function buildManagedAgentsBlock(resolvedProfile, { rigRoot = RIG_ROOT, isSelfContained = false } = {}) {
+export function buildManagedAgentsBlock(
+  resolvedProfile,
+  { rigRoot = RIG_ROOT, isSelfContained = false, harness = null, distribution = 'rig' } = {},
+) {
   const candidates = [
     path.join(rigRoot, 'rules/AGENTS.md'),
     path.join(rigRoot, '.rig/rules/AGENTS.md'),
@@ -380,7 +593,10 @@ export function buildManagedAgentsBlock(resolvedProfile, { rigRoot = RIG_ROOT, i
   ];
   const rulesAgentsPath = candidates.find((c) => existsSync(c)) || path.join(rigRoot, 'rules/AGENTS.md');
   const template = readFileSync(rulesAgentsPath, 'utf8');
-  let hydrated = hydrateText(template, resolvedProfile);
+  let hydrated = hydrateText(template, resolvedProfile, {
+    harness: harness || resolvedProfile?.harness,
+    distribution,
+  });
   hydrated = hydrated.replaceAll('../skills/', 'skills/');
   hydrated = hydrated.replaceAll('../agents/', 'agents/');
   hydrated = hydrated.replaceAll('../rules/', 'rules/');

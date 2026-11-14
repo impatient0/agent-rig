@@ -16,7 +16,11 @@ Run both mechanical and semantic checks across the repository's Markdown documen
 
 ## Step 1 — Mechanical Link & Format Gate
 
-Run `scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs --check` (or `rig check-docs` and `rig reflow-docs --check`).
+<!-- RIG:IF distribution=rig -->
+Run `rig check-docs` and `rig reflow-docs --check`.
+<!-- RIG:ELSE -->
+Run `node scripts/check-doc-links.mjs` and `node scripts/reflow-docs.mjs --check`.
+<!-- RIG:ENDIF -->
 Fix any broken relative links, missing `#fragment` anchors, orphaned files under `docs/`, non-existent backticked repo paths, or multi-sentence lines first.
 
 ---

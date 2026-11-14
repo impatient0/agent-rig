@@ -42,7 +42,11 @@ Every active item in [`docs/backlog.md`](../../docs/backlog.md) belongs in exact
 
 ## Step 3 — Normalize Format & Verify Links
 
-Run `scripts/reflow-docs.mjs` and `scripts/check-doc-links.mjs` (or `rig reflow-docs` and `rig check-docs`) after editing [`docs/backlog.md`](../../docs/backlog.md).
+<!-- RIG:IF distribution=rig -->
+Run `rig reflow-docs` and `rig check-docs` after editing [`docs/backlog.md`](../../docs/backlog.md).
+<!-- RIG:ELSE -->
+Run `node scripts/reflow-docs.mjs` and `node scripts/check-doc-links.mjs` after editing [`docs/backlog.md`](../../docs/backlog.md).
+<!-- RIG:ENDIF -->
 
 ---
 

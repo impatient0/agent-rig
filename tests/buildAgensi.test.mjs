@@ -232,3 +232,61 @@ test('CLI node scripts/build-agensi.mjs supports --outDir and --skill flags', ()
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('CLI node scripts/build-agensi.mjs --outDir creates non-existent nested directory from scratch without chdir ENOENT', () => {
+  const baseTmp = mkdtempSync(path.join(tmpdir(), 'rig-cli-nested-'));
+  const nestedOutDir = path.join(baseTmp, 'deeply', 'nested', 'target');
+  try {
+    const res = spawnSync('node', [
+      path.resolve(RIG_ROOT, 'scripts/build-agensi.mjs'),
+      '--outDir',
+      nestedOutDir,
+      '--skill',
+      'secure-credential-handoff',
+    ], { encoding: 'utf8' });
+
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(existsSync(nestedOutDir));
+    assert.ok(existsSync(path.join(nestedOutDir, 'secure-credential-handoff/SKILL.md')));
+    assert.ok(existsSync(path.join(nestedOutDir, 'secure-credential-handoff.zip')));
+  } finally {
+    rmSync(baseTmp, { recursive: true, force: true });
+  }
+});
+
+test('importing reflowMarkdown from scripts/reflow-docs.mjs does not chdir or throw ENOENT when CLI args contain non-existent directory', () => {
+  const cwdBefore = process.cwd();
+  const res = spawnSync('node', [
+    '--input-type=module',
+    '-e',
+    `
+    import { reflowMarkdown } from './scripts/reflow-docs.mjs';
+    import assert from 'node:assert/strict';
+    assert.equal(typeof reflowMarkdown, 'function');
+    console.log('IMPORTED_OK');
+    `,
+    '--',
+    '--outDir',
+    '/non-existent-dir-for-import-test',
+  ], { encoding: 'utf8', cwd: RIG_ROOT });
+
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(res.stdout.includes('IMPORTED_OK'));
+  assert.equal(process.cwd(), cwdBefore);
+});
+
+test('rig-onboard preserves ./templates/ markdown links for starter templates in SKILL.md', () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), 'rig-onboard-links-'));
+  try {
+    buildSkillPackage('rig-onboard', { outDir: tmp, rigRoot: RIG_ROOT });
+    const skillPath = path.join(tmp, 'rig-onboard/SKILL.md');
+    assert.ok(existsSync(skillPath));
+
+    const content = readFileSync(skillPath, 'utf8');
+    assert.ok(content.includes('[`templates/AGENTS.md`](./templates/AGENTS.md)'));
+    assert.ok(content.includes('[`templates/docs/backlog.md`](./templates/docs/backlog.md)'));
+    assert.ok(content.includes('[`templates/docs/adr/0001-record-architecture-decisions.md`](./templates/docs/adr/0001-record-architecture-decisions.md)'));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

@@ -9,13 +9,6 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, realpat
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 
-const args = process.argv.slice(2);
-const checkOnly = args.includes('--check');
-const dirArg = args.find((a) => !a.startsWith('-'));
-if (dirArg) {
-  process.chdir(path.resolve(dirArg));
-}
-
 const DEFAULT_DOC_ROOTS = [
   'README.md',
   'AGENTS.md',
@@ -262,7 +255,23 @@ export function reflowMarkdown(src) {
   return out.join('\n');
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+function isMainScript() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainScript()) {
+  const args = process.argv.slice(2);
+  const checkOnly = args.includes('--check');
+  const dirArg = args.find((a) => !a.startsWith('-'));
+  if (dirArg) {
+    process.chdir(path.resolve(dirArg));
+  }
+
   const files = loadDocRoots().flatMap((r) => walk(r));
   const dirty = [];
 

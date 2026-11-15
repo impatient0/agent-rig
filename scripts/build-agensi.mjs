@@ -277,7 +277,20 @@ export function rewriteDocContent(
       return fullMatch;
     }
 
-    // B. Buyer repo files -> unwrap to inline code
+    // B. Starter template links for rig-onboard (must precede generic buyer-repo file unwrapping)
+    if (hasTemplates && targetPath.includes('templates/')) {
+      if (targetPath.endsWith('templates/AGENTS.md')) {
+        return `[${linkText}](./templates/AGENTS.md${fragSuffix})`;
+      }
+      if (targetPath.endsWith('templates/docs/backlog.md')) {
+        return `[${linkText}](./templates/docs/backlog.md${fragSuffix})`;
+      }
+      if (targetPath.endsWith('templates/docs/adr/0001-record-architecture-decisions.md')) {
+        return `[${linkText}](./templates/docs/adr/0001-record-architecture-decisions.md${fragSuffix})`;
+      }
+    }
+
+    // C. Buyer repo files -> unwrap to inline code
     if (
       targetPath.endsWith('docs/backlog.md') ||
       targetPath === 'docs/backlog.md' ||
@@ -289,19 +302,6 @@ export function rewriteDocContent(
         // Handled below under bundled references
       } else {
         return unwrapInlineCode(linkText);
-      }
-    }
-
-    // C. Starter template links for rig-onboard
-    if (hasTemplates && targetPath.includes('templates/')) {
-      if (targetPath.endsWith('templates/AGENTS.md')) {
-        return `[${linkText}](./templates/AGENTS.md${fragSuffix})`;
-      }
-      if (targetPath.endsWith('templates/docs/backlog.md')) {
-        return `[${linkText}](./templates/docs/backlog.md${fragSuffix})`;
-      }
-      if (targetPath.endsWith('templates/docs/adr/0001-record-architecture-decisions.md')) {
-        return `[${linkText}](./templates/docs/adr/0001-record-architecture-decisions.md${fragSuffix})`;
       }
     }
 

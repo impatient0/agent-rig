@@ -889,14 +889,14 @@ test('installRig rewrites relative inter-doc links for Codex and hydrates repo-r
     assert.equal(existsSync(path.join(fakeHome, '.claude/rules/AGENTS.md')), false);
 
     // Codex skills must point to repo-relative docs/backlog.md rather than ../../docs/backlog.md
-    const codexBacklogSkill = readFileSync(path.join(fakeHome, '.codex/skills/backlog-audit/SKILL.md'), 'utf8');
-    assert.match(codexBacklogSkill, /\[`docs\/backlog\.md`\]\(docs\/backlog\.md\)/);
-    assert.equal(codexBacklogSkill.includes('../../docs/backlog.md'), false);
+    const codexWrapUpSkill = readFileSync(path.join(fakeHome, '.codex/skills/wrap-up/SKILL.md'), 'utf8');
+    assert.match(codexWrapUpSkill, /\[`docs\/backlog\.md`\]\(docs\/backlog\.md\)/);
+    assert.equal(codexWrapUpSkill.includes('../../docs/backlog.md'), false);
 
     // Global Claude skills also rewrite ../../docs/ to repo-relative docs/
-    const claudeBacklogSkill = readFileSync(path.join(fakeHome, '.claude/skills/backlog-audit/SKILL.md'), 'utf8');
-    assert.match(claudeBacklogSkill, /\[`docs\/backlog\.md`\]\(docs\/backlog\.md\)/);
-    assert.equal(claudeBacklogSkill.includes('../../docs/backlog.md'), false);
+    const claudeWrapUpSkill = readFileSync(path.join(fakeHome, '.claude/skills/wrap-up/SKILL.md'), 'utf8');
+    assert.match(claudeWrapUpSkill, /\[`docs\/backlog\.md`\]\(docs\/backlog\.md\)/);
+    assert.equal(claudeWrapUpSkill.includes('../../docs/backlog.md'), false);
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
   }
@@ -2290,6 +2290,34 @@ test('hydrating all canonical rules, agents, and skills Markdown files across ha
   }
 
   assert.equal(combinationCount, mdFiles.length * harnesses.length * distributions.length);
+});
+
+test('checkRepoPendingUpdates and updateRepo prune obsolete skills from self-contained repositories', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rig-prune-self-'));
+  try {
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+    spawnSync('git', ['-C', dir, 'config', 'user.email', 'test@example.com']);
+    spawnSync('git', ['-C', dir, 'config', 'user.name', 'Test']);
+
+    initRepo(dir, { selfContained: true, worktrees: false, harness: 'claude', homeDir: false });
+    spawnSync('git', ['-C', dir, 'add', '-A']);
+    spawnSync('git', ['-C', dir, 'commit', '-q', '-m', 'initial']);
+
+    // Simulate a legacy retired skill present in .claude/skills/backlog-audit
+    const legacySkillDir = path.join(dir, '.claude/skills/backlog-audit');
+    mkdirSync(legacySkillDir, { recursive: true });
+    writeFileSync(path.join(legacySkillDir, 'SKILL.md'), '---\nname: backlog-audit\n---\n# Legacy\n', 'utf8');
+
+    const pending = checkRepoPendingUpdates(dir, { rigRoot: RIG_ROOT });
+    assert.equal(pending.hasPendingUpdates, true);
+    assert.ok(pending.pendingFiles.includes(legacySkillDir));
+
+    const res = updateRepo(dir, { rigRoot: RIG_ROOT, autoCommit: false });
+    assert.ok(res.removed.includes(legacySkillDir));
+    assert.equal(existsSync(legacySkillDir), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 

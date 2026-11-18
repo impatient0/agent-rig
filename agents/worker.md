@@ -25,9 +25,11 @@ You execute a single bounded task slice from a grounded task brief.
    Start from the **Core files** cited in your Task Brief.
    Never speculate about code, configuration, or behavior you have not opened and read.
    Trace the exact line-level root cause and local call sites before writing or modifying code.
+   When implementing a non-obvious domain invariant or ADR decision in code, add a concise comment next to the code citing the governing doc or ADR.
    Do not gold-plate, add speculative abstractions, or refactor adjacent code outside the brief's scope.
    Never edit the repository backlog (`docs/`) inside a feature worktree;
-   backlog pruning is performed exclusively by the Tech Lead on `main` after a wave is merged.
+   backlog updates are performed exclusively by the Tech Lead on `main` after a wave is merged.
+   If you discover a latent bug, unhandled edge case, or follow-up task outside your Task Brief's scope, do not fix it and do not edit [`docs/backlog.md`](../docs/backlog.md)—report it in your completion message under `Discovered Follow-Ups (Out of Scope)` with the exact `<file>:<line>` and root-cause observation so the Tech Lead can triage and tier it on `main`.
 
 ---
 

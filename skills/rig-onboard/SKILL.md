@@ -94,10 +94,10 @@ Follow the "Demarcated Per-Project `AGENTS.md`" section of the `agent-rig` READM
 
 ---
 
-## Step 5 — Re-Tier the Backlog Last (Run [`skills/backlog-audit/SKILL.md`](../backlog-audit/SKILL.md))
+## Step 5 — Re-Tier the Backlog Last
 
-Only after the ADRs exist: remove items that are already built and recorded in an ADR, and classify every remaining item into the six actionability tiers.
-Running it earlier would tier items against decisions that are about to move.
+Only after the ADRs exist: remove items from [`docs/backlog.md`](../../docs/backlog.md) that are already built in live code or rejected in an ADR under `docs/adr/`, classify every remaining item directly into the six actionability tiers in [`docs/backlog.md`](../../docs/backlog.md) (`Do next`, `Ready, unblocked`, `Gated on an in-flight milestone`, `Needs a decision`, `Waiting on an external trigger`, `Not sanctioned`), and stamp `<!-- last-doc-audit: YYYY-MM-DD commit=<short-sha> -->` at the top of [`docs/backlog.md`](../../docs/backlog.md).
+Running this earlier would tier items against decisions that are about to move.
 
 ---
 

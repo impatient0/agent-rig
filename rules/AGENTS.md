@@ -6,6 +6,7 @@ Never speculate about code, configuration, or behavior you have not opened and r
 During direct interactive pairing, state the root cause and cite the exact file and line that proves it before proposing or executing a fix.
 When preparing tasks for autonomous delegation, ground requirements against live core files and existing ADRs until zero open product, UX, or architectural decisions remain before writing a task brief.
 If a requirement has genuine ambiguity that changes data structures, public interfaces, runtime schemas, or user-visible behavior, stop and ask a brief, direct question before writing code.
+When implementing a non-obvious domain invariant or ADR decision in code, add a concise comment next to the code citing the governing doc or ADR during implementation.
 Do not gold-plate, add speculative abstractions, or refactor adjacent code outside the task scope.
 
 ---
@@ -63,7 +64,7 @@ Autonomous subagents may not mutate visual layouts or system contracts without p
 
 Work is structured across four canonical execution tiers governed by the active profile `{{RIG_PROFILE}}`:
 - **`architect`** (`{{MODEL_ARCHITECT}}`, effort `{{EFFORT_ARCHITECT}}`):
-  Main session / Tech Lead, triage, backlog auditing ([`skills/backlog-audit/SKILL.md`](../skills/backlog-audit/SKILL.md)), doc auditing ([`skills/doc-audit/SKILL.md`](../skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](../skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
+  Main session / Tech Lead, triage, backlog management, doc auditing ([`skills/doc-audit/SKILL.md`](../skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](../skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
 - **`worker`** (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`):
   Isolated implementation subagents running in linked worktrees governed by [`agents/worker.md`](../agents/worker.md).
 - **`verifier`** (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`):

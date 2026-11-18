@@ -8,6 +8,7 @@ Never speculate about code, configuration, or behavior you have not opened and r
 During direct interactive pairing, state the root cause and cite the exact file and line that proves it before proposing or executing a fix.
 When preparing tasks for autonomous delegation, ground requirements against live core files and existing ADRs until zero open product, UX, or architectural decisions remain before writing a task brief.
 If a requirement has genuine ambiguity that changes data structures, public interfaces, runtime schemas, or user-visible behavior, stop and ask a brief, direct question before writing code.
+When implementing a non-obvious domain invariant or ADR decision in code, add a concise comment next to the code citing the governing doc or ADR during implementation.
 Do not gold-plate, add speculative abstractions, or refactor adjacent code outside the task scope.
 
 ---
@@ -61,7 +62,7 @@ Autonomous subagents may not mutate visual layouts or system contracts without p
 
 Work is structured across four canonical execution tiers governed by the active profile `antigravity-pro`:
 - **`architect`** (`gemini-4-argon`, effort `high`):
-  Main session / Tech Lead, triage, backlog auditing ([`skills/backlog-audit/SKILL.md`](skills/backlog-audit/SKILL.md)), doc auditing ([`skills/doc-audit/SKILL.md`](skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
+  Main session / Tech Lead, triage, backlog management, doc auditing ([`skills/doc-audit/SKILL.md`](skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
 - **`worker`** (subagent model `flash`, target `gemini-4-hydrogen`, effort `high`):
   Isolated implementation subagents running in linked worktrees governed by [`agents/worker.md`](agents/worker.md).
 - **`verifier`** (subagent model `flash`, target `gemini-4-hydrogen`, effort `medium`):
@@ -136,9 +137,8 @@ Every Markdown file in a rigged repository follows two mechanical invariants enf
 - **Cold Verifier Subagent** — [`agents/verifier.md`](agents/verifier.md)
 - **Skills (`skills/`):**
   - [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md) — Triage → Isolated Worker → Cold Verifier execution pipeline
-  - [`skills/wrap-up/SKILL.md`](skills/wrap-up/SKILL.md) — End-of-session audit, decision routing, and reachability check
-  - [`skills/backlog-audit/SKILL.md`](skills/backlog-audit/SKILL.md) — Actionability tiering and ADR-rejection check for [`docs/backlog.md`](docs/backlog.md)
-  - [`skills/doc-audit/SKILL.md`](skills/doc-audit/SKILL.md) — Token-budget, duplication, and code-grounding audit for Markdown docs
+  - [`skills/wrap-up/SKILL.md`](skills/wrap-up/SKILL.md) — End-of-session checkpoint, direct backlog tiering, passive drift reconciliation, and `doc-audit` freshness check
+  - [`skills/doc-audit/SKILL.md`](skills/doc-audit/SKILL.md) — Token-budget, duplication, and code-grounding audit for Markdown docs and [`docs/backlog.md`](docs/backlog.md)
   - [`skills/rig-onboard/SKILL.md`](skills/rig-onboard/SKILL.md) — Legacy repository onboarding workflow eliminating dual-convention state
   - [`skills/rig-update/SKILL.md`](skills/rig-update/SKILL.md) — Global harness and clean-trunk repository asset update and verification procedure
   - [`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md) — Safe worktree-to-`main` merge procedure in the root checkout

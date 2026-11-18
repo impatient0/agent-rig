@@ -78,7 +78,7 @@ Record the following fields:
   do not paste implementation code blocks, shell script bodies, or line-by-line edit recipes into the brief.
 - **Backlog isolation:**
   Workers must never edit [`docs/backlog.md`](../../docs/backlog.md) inside feature worktrees;
-  only the Tech Lead updates [`docs/backlog.md`](../../docs/backlog.md) directly on `main` after a wave is merged.
+  Workers report any out-of-scope discoveries under `Discovered Follow-Ups (Out of Scope)` (`<file>:<line> — <observation>`), and only the Tech Lead updates [`docs/backlog.md`](../../docs/backlog.md) directly on `main` after a wave is merged.
 - **Verification command:**
   Exact test and linter command the Worker must pass.
 - **The 5 Stop Triggers** (governed by [`agents/worker.md`](../../agents/worker.md)).
@@ -116,7 +116,7 @@ Workers follow a strict five-stage lifecycle:
 2. **Implement & Self-Verify:**
    Traces root cause from Core files, writes code and tests, and verifies exit status `0`.
 3. **Report:**
-   Sends completion message with commit SHA and diff summary to Tech Lead.
+   Sends completion message with commit SHA, diff summary, and any `Discovered Follow-Ups (Out of Scope)` (`<file>:<line> — <observation>`) to Tech Lead.
 4. **On-Hold in Worktree:**
    The Worker must remain alive and idle in its worktree until its branch is merged into `main`.
    If a subsequent merge collision occurs during `merge-to-main`, the Tech Lead messages this Worker to merge `main` and resolve conflicts in its native context.
@@ -155,10 +155,11 @@ After at most **3 completed slices**, pause and present a concise attribution re
 - Slices completed (branch names and commit SHAs).
 - Cold Verifier verdict and findings.
 - Consolidated table of every `Unmandated-call:` trailer across the wave so the user can approve or revert any judgment call in seconds.
+- Any `Discovered Follow-Ups (Out of Scope)` (`<file>:<line> — <observation>`) reported by Workers during implementation.
 
 Workers remain on hold in their worktrees until each slice is merged into `main` via [`skills/merge-to-main/SKILL.md`](../merge-to-main/SKILL.md);
 only after a slice is committed to `main` is its worktree removed and its Worker subagent terminated.
-Once the wave is merged to `main`, the Tech Lead prunes the completed items from [`docs/backlog.md`](../../docs/backlog.md) directly on `main`.
+Once the wave is merged to `main`, the Tech Lead runs [`skills/wrap-up/SKILL.md`](../wrap-up/SKILL.md) (or applies its backlog step directly on `main`) to prune completed slices, promote any `Gated` items they unblocked, and tier any `Discovered Follow-Ups` in [`docs/backlog.md`](../../docs/backlog.md).
 
 ---
 
@@ -179,6 +180,9 @@ Return a wave execution report using this exact structure:
 ### Bucket 2 & Blocked Slices
 - `<slice-name>`: `<file>:<line> — <exact question, architectural fork, or human gate needed>` (or `None`)
 
+### Discovered Follow-Ups (Out of Scope)
+- `<file>:<line> — <latent bug, edge case, or follow-up reported by Worker>` (or `None`)
+
 ### Consolidated Unmandated Calls
 | Slice | Commit | Choice & Rationale | Citation |
 | :--- | :--- | :--- | :--- |
@@ -186,5 +190,5 @@ Return a wave execution report using this exact structure:
 
 ### Recommended Next Steps
 - Merge verified branches into `main` via `skills/merge-to-main/SKILL.md`.
-- Prune completed items from `docs/backlog.md` directly on `main`.
+- Run `skills/wrap-up/SKILL.md` on `main` to prune completed items, re-tier unblocked items, and tier discovered follow-ups in `docs/backlog.md`.
 ```

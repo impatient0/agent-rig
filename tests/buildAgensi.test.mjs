@@ -16,11 +16,11 @@ import {
 import { reflowMarkdown } from '../scripts/reflow-docs.mjs';
 import { RIG_ROOT } from '../bin/rig.mjs';
 
-test('buildAgensiSkills builds all six standalone skill packages into outDir with zip archives', () => {
+test('buildAgensiSkills builds all five standalone skill packages into outDir with zip archives', () => {
   const tmp = mkdtempSync(path.join(tmpdir(), 'rig-agensi-test-'));
   try {
     const results = buildAgensiSkills({ outDir: tmp, rigRoot: RIG_ROOT });
-    assert.equal(results.length, 6);
+    assert.equal(results.length, 5);
 
     for (const skill of TARGET_SKILLS) {
       const skillDir = path.join(tmp, skill);

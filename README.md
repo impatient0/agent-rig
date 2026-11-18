@@ -301,9 +301,8 @@ cp templates/ci/rig-verify.yml .github/workflows/rig-verify.yml
 - [`agents/worker.md`](agents/worker.md) — Isolated Worker subagent prompt, line-level epistemic hygiene, and five hard stop triggers.
 - [`agents/verifier.md`](agents/verifier.md) — Cold Verifier subagent prompt and `VERDICT: PASS | FAIL` checklist (runs tests live, strictly read-only for code).
 - [`wrap-up`](skills/wrap-up/SKILL.md) — End-of-session checkpoint:
-  verifies git/worktree cleanliness and test gates, routes undocumented decisions to ADRs or [`docs/backlog.md`](docs/backlog.md), and checks cold-session reachability.
-- [`backlog-audit`](skills/backlog-audit/SKILL.md) — Sorts `Unranked` items in [`docs/backlog.md`](docs/backlog.md) into six actionability tiers after checking existing ADRs for prior rejections.
-- [`doc-audit`](skills/doc-audit/SKILL.md) — Audits documentation for mixed lifecycles (stable decisions vs. chronological slice logs), duplicate prose, and stale code claims.
+  verifies git/worktree cleanliness and test gates, routes undocumented decisions and deferred follow-ups directly on `main` to ADRs or actionability tiers in [`docs/backlog.md`](docs/backlog.md), re-tiers items for passive drift, and checks whether a cold-session [`doc-audit`](skills/doc-audit/SKILL.md) is due.
+- [`doc-audit`](skills/doc-audit/SKILL.md) — Audits documentation and [`docs/backlog.md`](docs/backlog.md) for mixed lifecycles (stable decisions vs. chronological slice logs), duplicate prose, stale code claims, and ADR rejections, and updates the `last-doc-audit` tracking stamp.
 - [`rig-onboard`](skills/rig-onboard/SKILL.md) — Onboards an existing repository with legacy agent files (CLAUDE.md), decision logs, or backlog into agent-rig conventions without dual-convention state.
 - [`rig-update`](skills/rig-update/SKILL.md) — Global harness and clean-trunk repository asset update and verification procedure.
 - [`merge-to-main`](skills/merge-to-main/SKILL.md) — Safe worktree-to-`main` merge procedure.

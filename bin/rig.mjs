@@ -1590,7 +1590,8 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
         const resolvedProfile = resolveProfile(tHarness, { rigRoot });
         const skillsDir = path.join(rigRoot, 'skills');
         if (existsSync(skillsDir)) {
-          for (const skill of listSkills(skillsDir)) {
+          const validSkills = listSkills(skillsDir);
+          for (const skill of validSkills) {
             checkDirPending(
               path.join(skillsDir, skill),
               path.join(dotDir, 'skills', skill),
@@ -1598,6 +1599,14 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
               { isGlobal: false, harness: tHarness, isDotHarness: true },
               pendingFiles,
             );
+          }
+          const destSkillsDir = path.join(dotDir, 'skills');
+          if (existsSync(destSkillsDir)) {
+            for (const existingSkill of listSkills(destSkillsDir)) {
+              if (!validSkills.includes(existingSkill)) {
+                pendingFiles.push(path.join(destSkillsDir, existingSkill));
+              }
+            }
           }
         }
         const agentsDir = path.join(rigRoot, 'agents');
@@ -1641,7 +1650,8 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
       const resolvedProfile = resolveProfile(tHarness, { rigRoot });
       const skillsDir = path.join(rigRoot, 'skills');
       if (existsSync(skillsDir)) {
-        for (const skill of listSkills(skillsDir)) {
+        const validSkills = listSkills(skillsDir);
+        for (const skill of validSkills) {
           checkDirPending(
             path.join(skillsDir, skill),
             path.join(dir, 'skills', skill),
@@ -1649,6 +1659,14 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
             { isGlobal: false, harness: tHarness },
             pendingFiles,
           );
+        }
+        const destSkillsDir = path.join(dir, 'skills');
+        if (existsSync(destSkillsDir)) {
+          for (const existingSkill of listSkills(destSkillsDir)) {
+            if (!validSkills.includes(existingSkill)) {
+              pendingFiles.push(path.join(destSkillsDir, existingSkill));
+            }
+          }
         }
       }
       const agentsDir = path.join(rigRoot, 'agents');
@@ -1866,6 +1884,11 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
         skipped,
         executable: true,
       });
+      copyFileSafe(path.join(rigRoot, 'rules/AGENTS.md'), path.join(dir, '.rig/rules/AGENTS.md'), {
+        force: true,
+        copied,
+        skipped,
+      });
       copyFileSafe(path.join(rigRoot, 'templates/models.json'), path.join(dir, '.rig/templates/models.json'), {
         force: true,
         copied,
@@ -1931,7 +1954,8 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
         const dotDir = path.join(dir, dotDirName);
         const resolvedProfile = resolveProfile(tHarness, { rigRoot });
         const skillsDir = path.join(rigRoot, 'skills');
-        for (const skill of listSkills(skillsDir)) {
+        const validSkills = listSkills(skillsDir);
+        for (const skill of validSkills) {
           copyOrHydrateDir(path.join(skillsDir, skill), path.join(dotDir, 'skills', skill), resolvedProfile, {
             hydrated: copied,
             isGlobal: false,
@@ -1939,6 +1963,7 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
             isDotHarness: true,
           });
         }
+        pruneMissingRigEntries(path.join(dotDir, 'skills'), validSkills, { pruned: removed });
         if (existsSync(path.join(rigRoot, 'agents'))) {
           for (const agent of readdirSync(path.join(rigRoot, 'agents'))) {
             if (isIgnoredFsEntry(agent)) continue;
@@ -1999,13 +2024,15 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
       const tHarness = harness || detectRepoHarness(dir) || 'claude';
       const resolvedProfile = resolveProfile(tHarness, { rigRoot });
       const skillsDir = path.join(rigRoot, 'skills');
-      for (const skill of listSkills(skillsDir)) {
+      const validSkills = listSkills(skillsDir);
+      for (const skill of validSkills) {
         copyOrHydrateDir(path.join(skillsDir, skill), path.join(dir, 'skills', skill), resolvedProfile, {
           hydrated: copied,
           isGlobal: false,
           harness: tHarness,
         });
       }
+      pruneMissingRigEntries(path.join(dir, 'skills'), validSkills, { pruned: removed });
       if (existsSync(path.join(rigRoot, 'agents'))) {
         for (const agent of readdirSync(path.join(rigRoot, 'agents'))) {
           if (isIgnoredFsEntry(agent)) continue;
@@ -3198,9 +3225,13 @@ export function statusRepo(targetDir = process.cwd(), { homeDir = homedir(), rig
   }
 
   const state = readRigState(homeDir);
-  let globalSkills = (state.installedSkills || []).slice().sort();
-  if (globalSkills.length === 0 && existsSync(path.join(rigRoot, 'skills'))) {
-    globalSkills = listSkills(path.join(rigRoot, 'skills'));
+  const currentSkills = existsSync(path.join(rigRoot, 'skills')) ? listSkills(path.join(rigRoot, 'skills')) : null;
+  let globalSkills = (state.installedSkills || [])
+    .filter((s) => !currentSkills || currentSkills.includes(s))
+    .slice()
+    .sort();
+  if (globalSkills.length === 0 && currentSkills) {
+    globalSkills = currentSkills;
   }
 
   const standardGuards = [
@@ -3318,9 +3349,14 @@ export function runPreCommitHook(targetDir = process.cwd()) {
           if (!matches) {
             try {
               const tHarness = detectRepoHarness(repoRoot) || 'antigravity';
-              const resolvedProfile = resolveProfile(tHarness, { rigRoot: RIG_ROOT });
+              const effectiveRigRoot = existsSync(path.join(repoRoot, 'rules/AGENTS.md'))
+                ? repoRoot
+                : existsSync(path.join(repoRoot, '.rig/rules/AGENTS.md'))
+                  ? path.join(repoRoot, '.rig')
+                  : RIG_ROOT;
+              const resolvedProfile = resolveProfile(tHarness, { rigRoot: effectiveRigRoot });
               const isSelf = isSelfContainedRepo(repoRoot);
-              const canonicalBlock = buildManagedAgentsBlock(resolvedProfile, { rigRoot: RIG_ROOT, isSelfContained: isSelf });
+              const canonicalBlock = buildManagedAgentsBlock(resolvedProfile, { rigRoot: effectiveRigRoot, isSelfContained: isSelf });
               if (canonicalBlock.trim() === stagedBlock.trim()) {
                 matches = true;
               }

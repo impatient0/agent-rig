@@ -2,8 +2,8 @@
 /**
  * Standalone skill package bundler for the Agensi marketplace.
  *
- * Builds six standalone skill packages into <outDir>/<slug>/ and <outDir>/<slug>.zip:
- *   - Five Free SDD & Hygiene skills: rig-onboard, doc-audit, backlog-audit, wrap-up, secure-credential-handoff
+ * Builds five standalone skill packages into <outDir>/<slug>/ and <outDir>/<slug>.zip:
+ *   - Four Free SDD & Hygiene skills: rig-onboard, doc-audit, wrap-up, secure-credential-handoff
  *   - One Paid Autonomous Execution flagship: dispatch (excluding CLI-only rig-update)
  *
  * Governed by docs/adr/0003-conditional-markdown-hydration-and-marketplace-bundling.md.
@@ -41,7 +41,6 @@ import {
 export const TARGET_SKILLS = [
   'rig-onboard',
   'doc-audit',
-  'backlog-audit',
   'wrap-up',
   'secure-credential-handoff',
   'dispatch',
@@ -376,7 +375,7 @@ export function buildSkillPackage(skillName, { outDir = 'dist/agensi', rigRoot =
     bundledRefs.set('agents/verifier.md', 'verifier.md');
     hasScripts = true;
     hasTemplates = true;
-  } else if (skillName === 'doc-audit' || skillName === 'backlog-audit' || skillName === 'wrap-up') {
+  } else if (skillName === 'doc-audit' || skillName === 'wrap-up') {
     bundledRefs.set('docs/adr/0001-record-architecture-decisions.md', '0001-record-architecture-decisions.md');
     hasScripts = true;
   }

@@ -8,7 +8,6 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 const CORE_SKILLS = [
   'dispatch',
   'doc-audit',
-  'backlog-audit',
   'wrap-up',
   'rig-onboard',
   'rig-update',

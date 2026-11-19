@@ -127,5 +127,5 @@ Return a merge completion report using this exact structure:
 - **Root Checkout State:** Clean on `main` (`HEAD` at `<sha>`)
 
 ### Next Steps
-- Prune merged backlog items in `docs/backlog.md` on `main`.
+- Run `skills/wrap-up/SKILL.md` when closing out the wave or session.
 ```

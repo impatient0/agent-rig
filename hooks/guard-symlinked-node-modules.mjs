@@ -9,7 +9,7 @@ import { lstatSync } from 'node:fs';
 import path from 'node:path';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { readHookInput, emitDecision } from './lib/hook-io.mjs';
+import { readHookInput, emitDecision, isDirectoryInRiggedRepo } from './lib/hook-io.mjs';
 
 function stripHeredocs(cmd) {
   const lines = cmd.split('\n');
@@ -278,6 +278,9 @@ export function checkCommand(command, cwd = process.cwd()) {
   const calls = findPmCalls(stripHeredocs(command), cwd);
   for (const { pm, verb, prefix, effectiveCwd } of calls) {
     const dir = prefix ? path.resolve(effectiveCwd, prefix) : effectiveCwd;
+    // Enforce symlinked node_modules guard only inside rigged repositories
+    // (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
+    if (!isDirectoryInRiggedRepo(dir)) continue;
     const nm = path.join(dir, 'node_modules');
     if (isSymlink(nm)) {
       return (

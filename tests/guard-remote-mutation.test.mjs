@@ -1,21 +1,25 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { checkCommand } from '../hooks/guard-remote-mutation.mjs';
 
 const HOOK = path.resolve(import.meta.dirname, '../hooks/guard-remote-mutation.mjs');
 
-function makeRepoWithBranch() {
+function makeRepoWithBranch({ rigged = true } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'rig-remote-guard-'));
   const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
   git('init', '-q', '-b', 'main');
   git('config', 'user.email', 'test@example.com');
   git('config', 'user.name', 'Test');
   writeFileSync(path.join(root, 'index.js'), 'export const x = 1;\n');
-  git('add', 'index.js');
+  if (rigged) {
+    mkdirSync(path.join(root, '.rig/hooks'), { recursive: true });
+    writeFileSync(path.join(root, '.rig/hooks/pre-commit'), '#!/bin/sh\nexit 0\n');
+  }
+  git('add', '-A');
   git('commit', '-qm', 'init');
   const wt = path.join(root, '.worktrees', 'feat-a');
   git('worktree', 'add', '-q', '-b', 'feature/feat-a', wt, 'main');
@@ -135,5 +139,58 @@ test('end-to-end CLI flags bare git push on main and allows on feature branch', 
     assert.equal(JSON.parse(agyAllow.stdout).decision, 'allow');
   } finally {
     cleanup();
+  }
+});
+
+test('does not trigger in unrigged repositories unless command explicitly targets a rigged repository', () => {
+  const unrigged = makeRepoWithBranch({ rigged: false });
+  const rigged = makeRepoWithBranch({ rigged: true });
+  try {
+    // Commands inside an unrigged repository are allowed unprompted
+    assert.equal(checkCommand('ssh nerd "docker exec -u hermes hermes python3 -c \'print(1)\'"', unrigged.root), null);
+    assert.equal(checkCommand('scp file.txt user@host:/tmp/', unrigged.root), null);
+    assert.equal(checkCommand('git push origin main', unrigged.root), null);
+    assert.equal(checkCommand('git push', unrigged.root), null);
+    assert.equal(checkCommand('git push --force origin feature/x', unrigged.root), null);
+    assert.equal(checkCommand('gh pr create --fill', unrigged.root), null);
+
+    // End-to-end CLI payloads for an unrigged workspace return allow
+    const agyAllow = spawnSync(
+      process.execPath,
+      [HOOK, '--harness=antigravity'],
+      {
+        input: JSON.stringify({
+          workspacePaths: [unrigged.root],
+          toolCall: { name: 'run_command', args: { CommandLine: 'ssh nerd "ls"' } },
+        }),
+        encoding: 'utf8',
+      },
+    );
+    assert.equal(agyAllow.status, 0);
+    assert.equal(JSON.parse(agyAllow.stdout).decision, 'allow');
+
+    const claudeAllow = spawnSync(
+      process.execPath,
+      [HOOK, '--harness=claude'],
+      {
+        input: JSON.stringify({
+          cwd: unrigged.root,
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Bash',
+          tool_input: { command: 'ssh nerd "ls"' },
+        }),
+        encoding: 'utf8',
+      },
+    );
+    assert.equal(claudeAllow.status, 0);
+    assert.equal(claudeAllow.stdout.trim(), '');
+
+    // Commands that cd or git -C from an unrigged directory into a rigged repository are still guarded
+    assert.ok(checkCommand(`cd "${rigged.root}" && ssh user@host ls`, unrigged.root));
+    assert.ok(checkCommand(`git -C "${rigged.root}" push origin main`, unrigged.root));
+    assert.equal(checkCommand(`git -C "${unrigged.root}" push origin main`, rigged.root), null);
+  } finally {
+    unrigged.cleanup();
+    rigged.cleanup();
   }
 });

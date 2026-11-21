@@ -1,4 +1,137 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
+
+/**
+ * Finds the nearest existing directory ancestor for a target file or directory path.
+ */
+export function existingAncestor(targetPath, cwd = process.cwd()) {
+  if (typeof targetPath !== 'string' || !targetPath.trim()) return null;
+  const abs = path.isAbsolute(targetPath) ? targetPath : path.resolve(cwd, targetPath);
+  let dir = abs;
+  try {
+    if (!existsSync(abs) || !statSync(abs).isDirectory()) {
+      dir = path.dirname(abs);
+    }
+  } catch {
+    dir = path.dirname(abs);
+  }
+  while (!existsSync(dir)) {
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+  return dir;
+}
+
+/**
+ * Resolves git worktree and repository root paths for a directory, or null if not in a git repository.
+ */
+export function resolveGitRoots(dir) {
+  if (!dir || typeof dir !== 'string') return null;
+  try {
+    const res = spawnSync(
+      'git',
+      ['-C', dir, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir', '--show-toplevel'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    if (res.status !== 0 || typeof res.stdout !== 'string') return null;
+    const [gitDir, commonDir, topLevel] = res.stdout.trim().split('\n');
+    if (!gitDir || !commonDir || !topLevel) return null;
+    return { gitDir, commonDir, topLevel, repoRoot: path.dirname(commonDir) };
+  } catch {
+    return null;
+  }
+}
+
+export function isRigHooksPath(repoRoot, hooksPath) {
+  if (!repoRoot || !hooksPath || typeof hooksPath !== 'string') return false;
+  const trimmed = hooksPath.trim();
+  if (!trimmed) return false;
+  const normalized = trimmed.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  if (
+    normalized === '.rig/hooks' ||
+    normalized.endsWith('/.rig/hooks') ||
+    normalized === 'scripts/git-hooks' ||
+    normalized.endsWith('/scripts/git-hooks')
+  ) {
+    return true;
+  }
+  return (
+    path.resolve(repoRoot, trimmed) === path.resolve(repoRoot, '.rig/hooks') ||
+    path.resolve(repoRoot, trimmed) === path.resolve(repoRoot, 'scripts/git-hooks')
+  );
+}
+
+/**
+ * Checks whether a repository root has worktree-isolation pre-commit hooks rigged
+ * (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
+ */
+export function isWorktreeRiggedRepo(repoRoot) {
+  if (!repoRoot || typeof repoRoot !== 'string') return false;
+
+  if (
+    existsSync(path.join(repoRoot, '.rig/hooks/pre-commit')) ||
+    existsSync(path.join(repoRoot, 'scripts/git-hooks/pre-commit'))
+  ) {
+    return true;
+  }
+
+  try {
+    const res = spawnSync('git', ['-C', repoRoot, 'config', '--get', 'core.hooksPath'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (res.status === 0 && typeof res.stdout === 'string') {
+      if (isRigHooksPath(repoRoot, res.stdout)) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
+/**
+ * Canonical check for whether a repository root is rigged under agent-rig
+ * (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
+ * Covers both worktree-rigged repos and `--no-worktrees` repos with `.rig/`,
+ * and returns false after `rig eject` or in unrigged repositories.
+ */
+export function isRiggedRepo(repoRoot) {
+  if (!repoRoot || typeof repoRoot !== 'string') return false;
+  if (isWorktreeRiggedRepo(repoRoot)) return true;
+  if (
+    existsSync(path.join(repoRoot, '.rig/hooks/guard-remote-mutation.mjs')) ||
+    existsSync(path.join(repoRoot, '.rig/bin/rig.mjs'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Checks whether an arbitrary file or directory path resides inside a rigged repository
+ * (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
+ */
+export function isDirectoryInRiggedRepo(targetPath, cwd = process.cwd()) {
+  const dir = existingAncestor(targetPath, cwd);
+  if (!dir) return false;
+  const roots = resolveGitRoots(dir);
+  if (roots) {
+    return isRiggedRepo(roots.topLevel) || isRiggedRepo(roots.repoRoot);
+  }
+  let cur = dir;
+  while (cur) {
+    if (isRiggedRepo(cur)) return true;
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return false;
+}
 
 /**
  * Resolves the declared harness identity from explicit CLI flags (--harness=...)

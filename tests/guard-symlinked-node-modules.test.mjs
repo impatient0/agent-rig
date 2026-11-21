@@ -1,16 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { checkCommand } from '../hooks/guard-symlinked-node-modules.mjs';
 
-function makeWorktreeWithSymlink() {
+function makeWorktreeWithSymlink({ rigged = true } = {}) {
   const base = mkdtempSync(path.join(tmpdir(), 'rig-nm-'));
   const realNm = path.join(base, 'node_modules');
   const wt = path.join(base, '.worktrees', 'slice-1');
   mkdirSync(realNm, { recursive: true });
   mkdirSync(wt, { recursive: true });
+  if (rigged) {
+    mkdirSync(path.join(base, '.rig/hooks'), { recursive: true });
+    writeFileSync(path.join(base, '.rig/hooks/pre-commit'), '#!/bin/sh\nexit 0\n');
+  }
   symlinkSync(realNm, path.join(wt, 'node_modules'));
   return { base, wt, cleanup: () => rmSync(base, { recursive: true, force: true }) };
 }
@@ -73,3 +77,14 @@ test('handles grouping commands with parentheses around cd and package manager c
   }
 });
 
+test('allows package manager commands in unrigged repositories even with symlinked node_modules', () => {
+  const { base, wt, cleanup } = makeWorktreeWithSymlink({ rigged: false });
+  try {
+    assert.equal(checkCommand('npm ci', wt), null);
+    assert.equal(checkCommand('npm install', wt), null);
+    assert.equal(checkCommand('cd .worktrees/slice-1 && npm install', base), null);
+    assert.equal(checkCommand('pnpm add zod', wt), null);
+  } finally {
+    cleanup();
+  }
+});

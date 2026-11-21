@@ -4,30 +4,19 @@
 // parallel sessions never share a working copy.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, statSync, realpathSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, realpathSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readHookInput, emitDecision } from './lib/hook-io.mjs';
+import {
+  readHookInput,
+  emitDecision,
+  existingAncestor,
+  isRiggedRepo,
+  isWorktreeRiggedRepo,
+} from './lib/hook-io.mjs';
 
-export function existingAncestor(targetPath, cwd = process.cwd()) {
-  if (typeof targetPath !== 'string' || !targetPath.trim()) return null;
-  const abs = path.isAbsolute(targetPath) ? targetPath : path.resolve(cwd, targetPath);
-  let dir = abs;
-  try {
-    if (!existsSync(abs) || !statSync(abs).isDirectory()) {
-      dir = path.dirname(abs);
-    }
-  } catch {
-    dir = path.dirname(abs);
-  }
-  while (!existsSync(dir)) {
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-  return dir;
-}
+export { existingAncestor, isRiggedRepo, isWorktreeRiggedRepo };
 
 function buildRemediation(harness) {
   if (harness === 'claude') {
@@ -50,47 +39,6 @@ export function isDocFile(filePath, repoRoot) {
   if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
   const normalized = rel.split(path.sep).join('/');
   return normalized === 'README.md' || normalized === 'AGENTS.md' || normalized.startsWith('docs/');
-}
-
-export function isRiggedRepo(repoRoot) {
-  if (!repoRoot || typeof repoRoot !== 'string') return false;
-
-  // Verify that .rig/hooks/pre-commit or legacy scripts/git-hooks/pre-commit exists in the repo
-  if (
-    existsSync(path.join(repoRoot, '.rig/hooks/pre-commit')) ||
-    existsSync(path.join(repoRoot, 'scripts/git-hooks/pre-commit'))
-  ) {
-    return true;
-  }
-
-  // Verify whether git config --get core.hooksPath resolves to .rig/hooks or scripts/git-hooks
-  try {
-    const res = spawnSync('git', ['-C', repoRoot, 'config', '--get', 'core.hooksPath'], { encoding: 'utf8' });
-    if (res.status === 0) {
-      const hooksPath = res.stdout.trim();
-      if (hooksPath) {
-        const normalized = hooksPath.replace(/\\/g, '/').replace(/\/+$/, '');
-        if (
-          normalized === '.rig/hooks' ||
-          normalized.endsWith('/.rig/hooks') ||
-          normalized === 'scripts/git-hooks' ||
-          normalized.endsWith('/scripts/git-hooks')
-        ) {
-          return true;
-        }
-        if (
-          path.resolve(repoRoot, hooksPath) === path.resolve(repoRoot, '.rig/hooks') ||
-          path.resolve(repoRoot, hooksPath) === path.resolve(repoRoot, 'scripts/git-hooks')
-        ) {
-          return true;
-        }
-      }
-    }
-  } catch {
-    return false;
-  }
-
-  return false;
 }
 
 function hasThirdPartyHookManager(repoRoot) {
@@ -193,14 +141,16 @@ export function checkEditTarget(filePath, options = {}) {
 
   const repoRoot = path.dirname(commonDir);
   const targetRoot = isRiggedRepo(repoRoot) ? repoRoot : topLevel;
-  if (isRiggedRepo(targetRoot)) {
+  if (isWorktreeRiggedRepo(targetRoot)) {
     ensureRepoAttached(targetRoot, { homeDir: options?.homeDir });
   }
 
   const isRigged = isRiggedRepo(topLevel) || isRiggedRepo(repoRoot);
+  const isWorktreeRigged = isWorktreeRiggedRepo(topLevel) || isWorktreeRiggedRepo(repoRoot);
 
   // If the repository is not rigged under agent-rig conventions, permit edits
-  // in the main checkout so globally-installed hooks do not block unrigged repos.
+  // in the main checkout so globally-installed hooks do not block unrigged repos
+  // (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
   if (!isRigged) return null;
 
   // Protect the agent-rig managed blocks in AGENTS.md across both main checkout and worktrees
@@ -274,6 +224,8 @@ export function checkEditTarget(filePath, options = {}) {
       // ignore read errors
     }
   }
+
+  if (!isWorktreeRigged) return null;
 
   // In a linked worktree, --git-dir is <common>/worktrees/<name>; in the main
   // checkout the two paths are identical.

@@ -1,16 +1,20 @@
 ---
 name: doc-audit
 description: >-
-  Use when the user invokes /doc-audit, asks to "audit docs", "audit
-  documentation", "check doc hygiene", or verify markdown graph and backlog
-  consistency. Audits documentation and docs/backlog.md for bloat, duplication,
-  stale code claims, ADR rejections, or mixed concerns, checks mechanical link
-  and format gates, and updates the last-doc-audit tracking stamp.
+  Use in an agent-rig repository when the user invokes /doc-audit, asks to
+  "audit docs", "audit documentation", "check doc hygiene", or verify markdown
+  graph and backlog consistency. Audits documentation and docs/backlog.md for
+  bloat, duplication, stale code claims, ADR rejections, or mixed concerns,
+  checks mechanical link and format gates, and updates the last-doc-audit
+  tracking stamp.
 ---
 
 # Documentation Graph & Hygiene Audit (`doc-audit`)
 
 Run both mechanical and semantic checks across the repository's Markdown documentation and [`docs/backlog.md`](../../docs/backlog.md).
+<!-- RIG:IF distribution=rig -->
+Apply this skill only inside a rigged repository (`rig status` reports `"mode": "attached"` or `"mode": "self-contained"`).
+<!-- RIG:ENDIF -->
 
 ---
 

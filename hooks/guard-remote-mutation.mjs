@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readHookInput, emitDecision } from './lib/hook-io.mjs';
+import { readHookInput, emitDecision, isDirectoryInRiggedRepo } from './lib/hook-io.mjs';
 
 function stripHeredocs(cmd) {
   const lines = cmd.split('\n');
@@ -246,6 +246,10 @@ function checkGitPush(seg, cwd) {
 
   if (pushIdx === -1) return null;
 
+  // Enforce remote mutation guards only inside rigged repositories
+  // (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
+  if (!isDirectoryInRiggedRepo(activeCwd)) return null;
+
   const pushArgs = rest.slice(pushIdx + 1);
   let isForce = false;
   let isMainMaster = false;
@@ -285,7 +289,12 @@ function checkGitPush(seg, cwd) {
     }
     const target = pos.includes(':') ? pos.slice(pos.indexOf(':') + 1) : pos;
     const cleanTarget = target.startsWith('+') ? target.slice(1) : target;
-    if (cleanTarget === 'main' || cleanTarget === 'master') {
+    if (
+      cleanTarget === 'main' ||
+      cleanTarget === 'master' ||
+      cleanTarget.endsWith('/main') ||
+      cleanTarget.endsWith('/master')
+    ) {
       isMainMaster = true;
     }
   }
@@ -332,14 +341,6 @@ const RULES = [
     reason: 'sets `DOCKER_HOST` to target a non-default Docker daemon',
   },
   {
-    re: atSegStart(String.raw`git\b[^;&|\n]*\bpush\b[^;&|\n]*\b(?:main|master)\b`),
-    reason: 'pushes directly to `main` / `master`',
-  },
-  {
-    re: atSegStart(String.raw`git\b[^;&|\n]*\bpush\b[^;&|\n]*(?:--force\b|--force-with-lease\b|--delete\b|(?<!\S)-[A-Za-z]*f|(?<!\S):\S|(?<!\S)\+\S)`),
-    reason: 'force-pushes or deletes a remote ref',
-  },
-  {
     re: atSegStart(String.raw`gh\s+(?!-\S+\s)*(?:pr|issue|release|repo|run|workflow|api|gist|label|secret|variable)\b(?!\s+(?:view|list|status|diff|checks|watch|search|clone)\b)`),
     reason: 'mutates GitHub state via `gh`',
   },
@@ -350,20 +351,6 @@ export function checkCommand(command, cwd = process.cwd(), _depth = 0) {
 
   const stripped = stripHeredocs(command);
 
-  // 1. Check extracted subshells ($( ... ) and ` ... `) recursively
-  const subshells = extractSubshells(stripped);
-  for (const sub of subshells) {
-    const reason = checkCommand(sub, cwd, _depth + 1);
-    if (reason) return reason;
-  }
-
-  // 2. Check top-level / scrubbed command against RULES
-  const scrubbed = maskQuotes(stripped);
-  for (const { re, reason } of RULES) {
-    if (re.test(scrubbed)) return reason;
-  }
-
-  // 3. Split into segments (by ; && || | \n) and inspect each segment
   let activeCwd = cwd;
   const segs = splitSegments(stripped);
   for (const seg of segs) {
@@ -373,13 +360,31 @@ export function checkCommand(command, cwd = process.cwd(), _depth = 0) {
       continue;
     }
 
+    // 1. Check extracted subshells ($( ... ) and ` ... `) in this segment recursively
+    const subshells = extractSubshells(seg);
+    for (const sub of subshells) {
+      const reason = checkCommand(sub, activeCwd, _depth + 1);
+      if (reason) return reason;
+    }
+
+    // 2. Check git push (resolves -C <dir> relative to activeCwd and checks rigged status)
     const pushReason = checkGitPush(seg, activeCwd);
     if (pushReason) return pushReason;
 
+    // 3. Check nested commands (bash -c, eval)
     const nested = parseNestedCommand(seg);
     if (nested) {
       const reason = checkCommand(nested, activeCwd, _depth + 1);
       if (reason) return reason;
+    }
+
+    // 4. Enforce general remote/shared-state rules only when activeCwd is in a rigged repository
+    // (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
+    if (isDirectoryInRiggedRepo(activeCwd)) {
+      const scrubbed = maskQuotes(seg);
+      for (const { re, reason } of RULES) {
+        if (re.test(scrubbed)) return reason;
+      }
     }
   }
 

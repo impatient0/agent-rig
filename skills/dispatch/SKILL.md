@@ -1,17 +1,21 @@
 ---
 name: dispatch
 description: >-
-  Use when the user invokes /dispatch, asks to "sweep the backlog", "execute
-  implementation plan", "run tasks autonomously", or dispatch multi-task waves.
-  Triages candidate items into Dispatch Now vs. Ask User First, dispatches
-  isolated Worker subagents in git worktrees under five stop triggers, and
-  requires a cold read-only Verifier subagent (Executor != Verifier) before
-  accepting any diff.
+  Use in an agent-rig repository when the user invokes /dispatch, asks to
+  "sweep the backlog", "execute implementation plan", "run tasks autonomously",
+  or dispatch multi-task waves. Triages candidate items into Dispatch Now vs.
+  Ask User First, dispatches isolated Worker subagents in git worktrees under
+  five stop triggers, and requires a cold read-only Verifier subagent
+  (Executor != Verifier) before accepting any diff.
 ---
 
 # Subagent-First Task Dispatch (`dispatch`)
 
 Execute candidate tasks under **Gear 2 (Autonomous Dispatch)** through a **Tech Lead → Isolated Worker → Cold Verifier** pipeline so straightforward slices complete in parallel worktrees while ambiguous items are surfaced to the user immediately.
+<!-- RIG:IF distribution=rig -->
+Apply this skill only inside a rigged repository (`rig status` reports `"mode": "attached"` or `"mode": "self-contained"`);
+if the active workspace is unrigged, do not run `dispatch` unless the user explicitly asks to onboard the repository first.
+<!-- RIG:ENDIF -->
 
 ---
 

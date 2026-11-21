@@ -60,16 +60,12 @@ Autonomous subagents may not mutate visual layouts or system contracts without p
 
 ### Execution Tiers & Subagent Model Selection
 
-Work is structured across four canonical execution tiers governed by the active profile `antigravity-pro`:
-- **`architect`** (`gemini-4-neon`, effort `high`):
-  Main session / Tech Lead, triage, backlog management, doc auditing ([`skills/doc-audit/SKILL.md`](skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
-- **`worker`** (subagent model `flash`, target `gemini-4-hydrogen`, effort `high`):
-  Isolated implementation subagents running in linked worktrees governed by [`agents/worker.md`](agents/worker.md).
-- **`verifier`** (subagent model `flash`, target `gemini-4-hydrogen`, effort `medium`):
-  Cold audit subagent governed by [`agents/verifier.md`](agents/verifier.md).
-- **`utility`** (subagent model `flash_lite`, target `gemini-4-hydrogen`, effort `low`):
-  Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md), [`skills/rig-update/SKILL.md`](skills/rig-update/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
-  Whenever launching a subagent, explicitly pass the tier's resolved subagent model argument (`flash` for Workers, `flash` for Verifiers, `flash_lite` for Utility tasks) rather than defaulting to `inherit`.
+Work is structured across four canonical execution tiers whose active model and effort bindings are configured per harness via `rig profile` (and hydrated into your harness's active skills and subagent definitions):
+- **`architect`**: Main session / Tech Lead, triage, backlog management, doc auditing ([`skills/doc-audit/SKILL.md`](skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
+- **`worker`**: Isolated implementation subagents running in linked worktrees governed by [`agents/worker.md`](agents/worker.md).
+- **`verifier`**: Cold audit subagent governed by [`agents/verifier.md`](agents/verifier.md).
+- **`utility`**: Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md), [`skills/rig-update/SKILL.md`](skills/rig-update/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
+  Whenever launching a subagent, explicitly pass the tier's resolved subagent model selector from the hydrated subagent definition or skill instructions (or query `rig model resolve <role>`) rather than defaulting to `inherit`.
 
 ---
 

@@ -20,7 +20,7 @@ Where a default convention is too heavy for a small project, the CLI provides op
 
 1. **Global Layer (`rig install`):**
    Installs all 8 skills (`skills/`), the Worker and Verifier subagent definitions ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and the multi-protocol `PreToolUse` guards (`hooks/`) into your harnesses' global configuration directories (`~/.gemini/config/`, `~/.claude/`, `~/.codex/`, `~/.cursor/`).
-   Prompts, skills, and agent definitions are statically hydrated with your active model profile from `.rig.local.json` (seeded from [`templates/rig-config.default.json`](templates/rig-config.default.json) and validated by [`templates/rig-config.schema.json`](templates/rig-config.schema.json) using the model catalog [`templates/models.json`](templates/models.json)).
+   Prompts, skills, and agent definitions are statically hydrated with your active model profile from `~/.config/agent-rig/config.json` (layered over the unified preset and model catalog [`templates/profiles.json`](templates/profiles.json) and validated by [`templates/profiles.schema.json`](templates/profiles.schema.json)).
    Running `rig update` or `rig profile use` re-hydrates your harnesses immediately with any changes.
 2. **Per-Project Layer (`rig init`):**
    Touches a project repository as lightly as possible:
@@ -101,7 +101,7 @@ rig profile use antigravity-ultra
 rig profile use claude-pro
 ```
 
-Customize a specific role's model, subagent selector, or reasoning effort in `.rig.local.json`:
+Customize a specific role's model, subagent selector, or reasoning effort (automatically snapshots the active preset into a pinned custom configuration in `~/.config/agent-rig/config.json`):
 
 ```bash
 rig profile set worker claude-opus-5-5 --effort high
@@ -115,10 +115,10 @@ rig model resolve worker
 rig model resolve verifier --harness claude --json
 ```
 
-#### Extending Profiles and Models (`.rig.local.json`)
+#### Extending Profiles and Models (`~/.config/agent-rig/config.json`)
 
-Model definitions and default subagent selectors are cataloged in [`templates/models.json`](templates/models.json) and validated by [`templates/rig-config.schema.json`](templates/rig-config.schema.json).
-You can define custom models and custom profiles in `.rig.local.json` without modifying `agent-rig` code:
+Built-in presets, model definitions, and default subagent selectors are cataloged in [`templates/profiles.json`](templates/profiles.json) and validated by [`templates/profiles.schema.json`](templates/profiles.schema.json).
+You can define custom models and custom profile overrides in `~/.config/agent-rig/config.json` without modifying `agent-rig` code:
 
 ```json
 {
@@ -162,7 +162,7 @@ What `rig init` does by default:
 Flags for `rig init`:
 - `--stealth` — Initialize without tracking any files in git or modifying `.gitignore`.
   Configures `.git/info/exclude` to ignore `AGENTS.md`, `.rig/`, `.worktrees/`, [`docs/backlog.md`](docs/backlog.md), and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md), keeping `git status` completely clean for seamless work in shared team repositories.
-- `--self-contained` — Hydrate `skills/`, `agents/`, and `rules/` into the repository's harness dot-directory (`.gemini/`, `.claude/`, `.codex/`, `.cursor/`, plus `.claude/hooks/` and `.claude/settings.json` for Claude) and vendor `bin/rig.mjs`, `templates/models.json`, `templates/rig-config.default.json`, `scripts/check-doc-links.mjs`, `scripts/reflow-docs.mjs`, and `hooks/` under `.rig/` (useful for team repos or CI).
+- `--self-contained` — Hydrate `skills/`, `agents/`, and `rules/` into the repository's harness dot-directory (`.gemini/`, `.claude/`, `.codex/`, `.cursor/`, plus `.claude/hooks/` and `.claude/settings.json` for Claude) and vendor `bin/rig.mjs`, `templates/profiles.json`, `scripts/check-doc-links.mjs`, `scripts/reflow-docs.mjs`, and `hooks/` under `.rig/` (useful for team repos or CI).
 - `--harness <id>` — Specify target harness(es) (`antigravity`, `claude`, `codex`, `cursor`) for `--self-contained` initialization.
 - `--no-worktrees` — Skip git worktree hooks for single-checkout repos.
 - `--ui` — Also copy `templates/docs/design/mockup-scaffold.html`.

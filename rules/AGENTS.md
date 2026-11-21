@@ -62,16 +62,12 @@ Autonomous subagents may not mutate visual layouts or system contracts without p
 
 ### Execution Tiers & Subagent Model Selection
 
-Work is structured across four canonical execution tiers governed by the active profile `{{RIG_PROFILE}}`:
-- **`architect`** (`{{MODEL_ARCHITECT}}`, effort `{{EFFORT_ARCHITECT}}`):
-  Main session / Tech Lead, triage, backlog management, doc auditing ([`skills/doc-audit/SKILL.md`](../skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](../skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
-- **`worker`** (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`):
-  Isolated implementation subagents running in linked worktrees governed by [`agents/worker.md`](../agents/worker.md).
-- **`verifier`** (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`):
-  Cold audit subagent governed by [`agents/verifier.md`](../agents/verifier.md).
-- **`utility`** (subagent model `{{SUBAGENT_MODEL_UTILITY}}`, target `{{MODEL_UTILITY}}`, effort `{{EFFORT_UTILITY}}`):
-  Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md), [`skills/rig-update/SKILL.md`](../skills/rig-update/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](../skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
-  Whenever launching a subagent, explicitly pass the tier's resolved subagent model argument (`{{SUBAGENT_MODEL_WORKER}}` for Workers, `{{SUBAGENT_MODEL_VERIFIER}}` for Verifiers, `{{SUBAGENT_MODEL_UTILITY}}` for Utility tasks) rather than defaulting to `inherit`.
+Work is structured across four canonical execution tiers whose active model and effort bindings are configured per harness via `rig profile` (and hydrated into your harness's active skills and subagent definitions):
+- **`architect`**: Main session / Tech Lead, triage, backlog management, doc auditing ([`skills/doc-audit/SKILL.md`](../skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](../skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](../skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
+- **`worker`**: Isolated implementation subagents running in linked worktrees governed by [`agents/worker.md`](../agents/worker.md).
+- **`verifier`**: Cold audit subagent governed by [`agents/verifier.md`](../agents/verifier.md).
+- **`utility`**: Fast mechanical procedures ([`skills/merge-to-main/SKILL.md`](../skills/merge-to-main/SKILL.md), [`skills/rig-update/SKILL.md`](../skills/rig-update/SKILL.md), [`skills/secure-credential-handoff/SKILL.md`](../skills/secure-credential-handoff/SKILL.md)) and targeted read-only research subagents.
+  Whenever launching a subagent, explicitly pass the tier's resolved subagent model selector from the hydrated subagent definition or skill instructions (or query `rig model resolve <role>`) rather than defaulting to `inherit`.
 
 ---
 

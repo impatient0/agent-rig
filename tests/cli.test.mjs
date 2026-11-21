@@ -653,9 +653,8 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
     mkdirSync(path.join(fakeRig, 'hooks'), { recursive: true });
     mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
 
-    copyFileSync(path.join(RIG_ROOT, 'templates/models.json'), path.join(fakeRig, 'templates/models.json'));
-    copyFileSync(path.join(RIG_ROOT, 'templates/rig-config.default.json'), path.join(fakeRig, 'templates/rig-config.default.json'));
-    copyFileSync(path.join(RIG_ROOT, 'templates/rig-config.schema.json'), path.join(fakeRig, 'templates/rig-config.schema.json'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/profiles.json'), path.join(fakeRig, 'templates/profiles.json'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/profiles.schema.json'), path.join(fakeRig, 'templates/profiles.schema.json'));
     copyFileSync(path.join(RIG_ROOT, 'plugin.json'), path.join(fakeRig, 'plugin.json'));
     copyFileSync(path.join(RIG_ROOT, 'hooks.json'), path.join(fakeRig, 'hooks.json'));
     writeFileSync(path.join(fakeRig, 'rules/AGENTS.md'), '# Rules\nProfile: {{RIG_PROFILE}}\nWorker: {{MODEL_WORKER}}\n');
@@ -665,33 +664,80 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
     // Install rig globally in fakeHome
     installRig({ homeDir: fakeHome, harnesses: ['antigravity'], rigRoot: fakeRig });
 
-    // Initial inspection
-    const initialProfiles = listProfiles(fakeRig);
+    // Initial inspection: no config.json created yet until customized
+    assert.equal(existsSync(path.join(fakeHome, '.config/agent-rig/config.json')), false);
+    const initialProfiles = listProfiles(fakeRig, { homeDir: fakeHome });
     assert.equal(initialProfiles.activeProfiles.antigravity, 'antigravity-pro');
     assert.equal(initialProfiles.profiles['antigravity-pro'].isActive, true);
 
-    const resolvedWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig });
+    const resolvedWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
     assert.equal(resolvedWorker.model, 'gemini-4-hydrogen');
     assert.equal(resolvedWorker.subagentModel, 'flash');
 
-    // Switch profile to antigravity-ultra
+    // Switch profile to antigravity-ultra (stores only pointer in ~/.config/agent-rig/config.json)
     useProfile('antigravity-ultra', { rigRoot: fakeRig, homeDir: fakeHome });
-    const afterUse = listProfiles(fakeRig);
+    const afterUse = listProfiles(fakeRig, { homeDir: fakeHome });
     assert.equal(afterUse.activeProfiles.antigravity, 'antigravity-ultra');
     assert.equal(existsSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules/AGENTS.md')), false);
     const hydratedWorker = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/agents/worker.md'), 'utf8');
     assert.match(hydratedWorker, /Profile: antigravity-ultra/);
     assert.match(hydratedWorker, /Worker: gemini-4-neon/);
 
-    // Update role in profile
+    // Update role in profile -> copy-on-write forks built-in preset to pinned antigravity-custom
     setProfileRole('worker', 'claude-opus-5-5', { effort: 'medium', rigRoot: fakeRig, homeDir: fakeHome, harness: 'antigravity' });
-    const afterSet = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig });
+    const afterSet = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
+    assert.equal(afterSet.profile, 'antigravity-custom');
     assert.equal(afterSet.model, 'claude-opus-5-5');
     assert.equal(afterSet.subagentModel, 'pro'); // claude-opus-5-5 mapped to pro on antigravity
     assert.equal(afterSet.effort, 'medium');
+    // Built-in antigravity-ultra remains untouched
+    const ultraWorker = resolveRoleModel('worker', { harness: 'antigravity', profileName: 'antigravity-ultra', rigRoot: fakeRig, homeDir: fakeHome });
+    assert.equal(ultraWorker.model, 'gemini-4-neon');
 
     const rehydratedWorker = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/agents/worker.md'), 'utf8');
+    assert.match(rehydratedWorker, /Profile: antigravity-custom/);
     assert.match(rehydratedWorker, /Worker: claude-opus-5-5/);
+
+    // Switching back to a built-in preset clears antigravity-custom
+    useProfile('antigravity-pro', { rigRoot: fakeRig, homeDir: fakeHome });
+    const afterReset = listProfiles(fakeRig, { homeDir: fakeHome });
+    assert.equal(afterReset.activeProfiles.antigravity, 'antigravity-pro');
+    assert.equal(afterReset.profiles['antigravity-custom'], undefined);
+    // Legacy .rig.local.json migration to ~/.config/agent-rig/config.json:
+    // strips built-in preset duplicates and maps legacy antigravity-budget -> antigravity-pro
+    rmSync(path.join(fakeHome, '.config/agent-rig/config.json'), { force: true });
+    writeFileSync(
+      path.join(fakeRig, '.rig.local.json'),
+      JSON.stringify({
+        activeProfiles: { antigravity: 'antigravity-budget', claude: 'claude-pro' },
+        profiles: {
+          'antigravity-budget': {
+            harness: 'antigravity',
+            roles: {
+              architect: { model: 'gemini-4-argon', effort: 'high' },
+              worker: { model: 'gemini-3-8-flash', effort: 'high' },
+              verifier: { model: 'gemini-3-8-flash', effort: 'medium' },
+              utility: { model: 'gemini-3-8-flash', effort: 'low' },
+            },
+          },
+          'antigravity-pro': {
+            harness: 'antigravity',
+            roles: {
+              architect: { model: 'gemini-4-argon', effort: 'high' },
+              worker: { model: 'gemini-4-argon', effort: 'high' },
+              verifier: { model: 'gemini-3-8-flash', effort: 'medium' },
+              utility: { model: 'gemini-3-8-flash', effort: 'low' },
+            },
+          },
+        },
+      }),
+    );
+    installRig({ homeDir: fakeHome, harnesses: ['antigravity'], rigRoot: fakeRig });
+    assert.equal(existsSync(path.join(fakeRig, '.rig.local.json')), false);
+    assert.equal(existsSync(path.join(fakeHome, '.config/agent-rig/config.json')), true);
+    const migratedWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
+    assert.equal(migratedWorker.profile, 'antigravity-pro');
+    assert.equal(migratedWorker.model, 'gemini-4-hydrogen');
   } finally {
     rmSync(fakeRig, { recursive: true, force: true });
     rmSync(fakeHome, { recursive: true, force: true });
@@ -1416,8 +1462,7 @@ test('updateRepo skips self-copy when dir equals rigRoot instead of throwing ERR
     mkdirSync(path.join(fakeRig, 'templates'), { recursive: true });
     mkdirSync(path.join(fakeRig, 'rules'), { recursive: true });
     copyFileSync(path.join(RIG_ROOT, '.rig/hooks/pre-commit'), path.join(fakeRig, '.rig/hooks/pre-commit'));
-    copyFileSync(path.join(RIG_ROOT, 'templates/models.json'), path.join(fakeRig, 'templates/models.json'));
-    copyFileSync(path.join(RIG_ROOT, 'templates/rig-config.default.json'), path.join(fakeRig, 'templates/rig-config.default.json'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/profiles.json'), path.join(fakeRig, 'templates/profiles.json'));
     copyFileSync(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(fakeRig, 'rules/AGENTS.md'));
     writeFileSync(path.join(fakeRig, 'AGENTS.md'), '<!-- AGENT-RIG:START -->\noutdated\n<!-- AGENT-RIG:END -->\n\n# Context\n');
 
@@ -1425,7 +1470,8 @@ test('updateRepo skips self-copy when dir equals rigRoot instead of throwing ERR
     assert.ok(res.copied.includes(path.join(fakeRig, 'AGENTS.md')));
     const updatedAgents = readFileSync(path.join(fakeRig, 'AGENTS.md'), 'utf8');
     assert.doesNotMatch(updatedAgents, /\boutdated\b/);
-    assert.match(updatedAgents, /antigravity-pro/);
+    assert.match(updatedAgents, /Universal Agentic Engineering Rules/);
+    assert.doesNotMatch(updatedAgents, /antigravity-pro/);
   } finally {
     rmSync(fakeRig, { recursive: true, force: true });
   }
@@ -1474,8 +1520,7 @@ test('updateRepo and checkRepoPendingUpdates when dir === rigRoot refresh AGENTS
     writeFileSync(path.join(fakeRig, 'plugin.json'), JSON.stringify({ id: 'agent-rig' }));
 
     copyFileSync(path.join(RIG_ROOT, '.rig/hooks/pre-commit'), path.join(fakeRig, '.rig/hooks/pre-commit'));
-    copyFileSync(path.join(RIG_ROOT, 'templates/models.json'), path.join(fakeRig, 'templates/models.json'));
-    copyFileSync(path.join(RIG_ROOT, 'templates/rig-config.default.json'), path.join(fakeRig, 'templates/rig-config.default.json'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/profiles.json'), path.join(fakeRig, 'templates/profiles.json'));
     copyFileSync(path.join(RIG_ROOT, 'rules/AGENTS.md'), path.join(fakeRig, 'rules/AGENTS.md'));
 
     // Source template files with unhydrated {{...}} placeholders
@@ -1503,11 +1548,12 @@ test('updateRepo and checkRepoPendingUpdates when dir === rigRoot refresh AGENTS
     const res = updateRepo(fakeRig, { rigRoot: fakeRig });
     assert.ok(res.copied.includes(path.join(fakeRig, 'AGENTS.md')));
 
-    // AGENTS.md is refreshed with antigravity profile and relative links (skills/..., agents/..., rules/...)
+    // AGENTS.md is refreshed with profile-agnostic universal rules and relative links (skills/..., agents/..., rules/...)
     const updatedAgents = readFileSync(path.join(fakeRig, 'AGENTS.md'), 'utf8');
     assert.doesNotMatch(updatedAgents, /\boutdated\b/);
-    assert.match(updatedAgents, /antigravity-pro/);
-    assert.match(updatedAgents, /gemini-4-hydrogen/);
+    assert.match(updatedAgents, /four canonical execution tiers/);
+    assert.doesNotMatch(updatedAgents, /antigravity-pro/);
+    assert.doesNotMatch(updatedAgents, /gemini-4-hydrogen/);
     assert.match(updatedAgents, /\(skills\/merge-to-main\/SKILL\.md\)/);
     assert.match(updatedAgents, /\(agents\/verifier\.md\)/);
     assert.match(updatedAgents, /\(rules\/ui-change-gate\.md\)/);
@@ -1519,7 +1565,7 @@ test('updateRepo and checkRepoPendingUpdates when dir === rigRoot refresh AGENTS
 
     // Static rig assets must NOT be vendored into .rig/bin/rig.mjs or .rig/templates/
     assert.equal(existsSync(path.join(fakeRig, '.rig/bin/rig.mjs')), false);
-    assert.equal(existsSync(path.join(fakeRig, '.rig/templates/models.json')), false);
+    assert.equal(existsSync(path.join(fakeRig, '.rig/templates/profiles.json')), false);
 
     // 3. checkRepoPendingUpdates after updateRepo should report clean (no pending updates)
     const pendingAfter = checkRepoPendingUpdates(fakeRig, { rigRoot: fakeRig });
@@ -1966,8 +2012,7 @@ test('rig handles foreign system, editor, and metadata files without throwing EN
   try {
     // Scaffold minimal rig structure in fakeRigRoot
     mkdirSync(path.join(fakeRigRoot, 'templates'), { recursive: true });
-    copyFileSync(path.join(RIG_ROOT, 'templates/models.json'), path.join(fakeRigRoot, 'templates/models.json'));
-    copyFileSync(path.join(RIG_ROOT, 'templates/rig-config.default.json'), path.join(fakeRigRoot, 'templates/rig-config.default.json'));
+    copyFileSync(path.join(RIG_ROOT, 'templates/profiles.json'), path.join(fakeRigRoot, 'templates/profiles.json'));
     copyFileSync(path.join(RIG_ROOT, 'plugin.json'), path.join(fakeRigRoot, 'plugin.json'));
 
     mkdirSync(path.join(fakeRigRoot, 'skills/dispatch'), { recursive: true });

@@ -211,88 +211,199 @@ export function detectRepoHarness(targetDir) {
 export const ROLES = ['architect', 'worker', 'verifier', 'utility'];
 
 export function loadCatalog(rigRoot = RIG_ROOT) {
-  const catalogPath = path.join(rigRoot, 'templates', 'models.json');
-  if (!existsSync(catalogPath)) {
-    return { harnesses: {}, models: {} };
+  const candidates = [
+    path.join(rigRoot, 'templates', 'profiles.json'),
+    path.join(rigRoot, 'templates', 'models.json'),
+  ];
+  const catalogPath = candidates.find((p) => existsSync(p));
+  if (!catalogPath) {
+    return { harnesses: {}, models: {}, activeProfiles: {}, profiles: {} };
   }
   try {
-    return JSON.parse(readFileSync(catalogPath, 'utf8'));
+    const parsed = JSON.parse(readFileSync(catalogPath, 'utf8'));
+    if (catalogPath.endsWith('models.json') && !parsed.profiles) {
+      const legacyDefaultPath = path.join(rigRoot, 'templates', 'rig-config.default.json');
+      if (existsSync(legacyDefaultPath)) {
+        try {
+          const legacyDefault = JSON.parse(readFileSync(legacyDefaultPath, 'utf8'));
+          return {
+            ...parsed,
+            activeProfiles: legacyDefault.activeProfiles || {},
+            profiles: legacyDefault.profiles || {},
+          };
+        } catch {
+          // ignore
+        }
+      }
+    }
+    return {
+      harnesses: parsed.harnesses || {},
+      models: parsed.models || {},
+      activeProfiles: parsed.activeProfiles || {},
+      profiles: parsed.profiles || {},
+    };
   } catch {
-    return { harnesses: {}, models: {} };
+    return { harnesses: {}, models: {}, activeProfiles: {}, profiles: {} };
   }
 }
 
-export function configFilePath(rigRoot = RIG_ROOT) {
-  const local = path.join(rigRoot, '.rig.local.json');
-  if (existsSync(local)) return local;
+export function configFilePath(homeDir = homedir(), rigRoot = RIG_ROOT) {
+  // Backward compatibility if a single rigRoot argument was passed that is not homeDir
+  if (homeDir && existsSync(path.join(homeDir, 'templates', 'profiles.json')) && homeDir !== homedir()) {
+    const local = path.join(homeDir, '.rig.local.json');
+    if (existsSync(local)) return local;
+  }
+  const effectiveHome = homeDir || homedir();
+  const userCfg = path.join(effectiveHome, '.config', 'agent-rig', 'config.json');
+  if (existsSync(userCfg)) return userCfg;
+  if (rigRoot) {
+    const local = path.join(rigRoot, '.rig.local.json');
+    if (existsSync(local)) return local;
+  }
+  return userCfg;
+}
+
+export function migrateLegacyLocalConfig(rigRoot = RIG_ROOT, homeDir = homedir()) {
+  if (!rigRoot || !homeDir) return false;
+  const legacyPaths = [path.join(rigRoot, '.rig.local.json')];
   try {
     const res = spawnSync('git', ['-C', rigRoot, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
       encoding: 'utf8',
     });
     if (res.status === 0 && res.stdout.trim()) {
-      const commonDir = res.stdout.trim();
-      const mainCheckout = path.dirname(commonDir);
+      const mainCheckout = path.dirname(res.stdout.trim());
       const mainCfg = path.join(mainCheckout, '.rig.local.json');
-      if (existsSync(mainCfg)) return mainCfg;
+      if (!legacyPaths.includes(mainCfg)) legacyPaths.push(mainCfg);
     }
   } catch {
     // ignore
   }
-  return local;
+
+  const existingLegacy = legacyPaths.find((p) => existsSync(p));
+  if (!existingLegacy) return false;
+
+  const catalog = loadCatalog(rigRoot);
+  const builtinProfiles = catalog.profiles || {};
+  const userCfgPath = path.join(homeDir, '.config', 'agent-rig', 'config.json');
+
+  try {
+    const raw = JSON.parse(readFileSync(existingLegacy, 'utf8'));
+    if (!existsSync(userCfgPath)) {
+      const sparse = {};
+      if (raw.activeProfiles && typeof raw.activeProfiles === 'object') {
+        const cleanedActive = {};
+        for (const [h, pName] of Object.entries(raw.activeProfiles)) {
+          if (pName === 'antigravity-budget') {
+            cleanedActive[h] = 'antigravity-pro';
+          } else {
+            cleanedActive[h] = pName;
+          }
+        }
+        if (Object.keys(cleanedActive).length > 0) {
+          sparse.activeProfiles = cleanedActive;
+        }
+      }
+      if (raw.profiles && typeof raw.profiles === 'object') {
+        const customProfiles = {};
+        for (const [pName, pDef] of Object.entries(raw.profiles)) {
+          if (pName === 'antigravity-budget') continue;
+          if (!builtinProfiles[pName]) {
+            customProfiles[pName] = pDef;
+          }
+        }
+        if (Object.keys(customProfiles).length > 0) {
+          sparse.profiles = customProfiles;
+        }
+      }
+      if (raw.models && typeof raw.models === 'object' && Object.keys(raw.models).length > 0) {
+        sparse.models = raw.models;
+      }
+      if (raw.harnesses && typeof raw.harnesses === 'object' && Object.keys(raw.harnesses).length > 0) {
+        sparse.harnesses = raw.harnesses;
+      }
+      if (Object.keys(sparse).length > 0) {
+        mkdirSync(path.dirname(userCfgPath), { recursive: true });
+        writeFileSync(userCfgPath, JSON.stringify(sparse, null, 2) + '\n', 'utf8');
+      }
+    }
+    for (const lp of legacyPaths) {
+      if (existsSync(lp)) {
+        rmSync(lp, { force: true });
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-export function ensureRigConfig(rigRoot = RIG_ROOT) {
-  const p = configFilePath(rigRoot);
-  if (!existsSync(p)) {
-    if (path.basename(rigRoot) === '.rig') {
-      const template = path.join(rigRoot, 'templates', 'rig-config.default.json');
-      return existsSync(template) ? template : p;
+export function loadUserConfig({ homeDir = homedir(), rigRoot = RIG_ROOT } = {}) {
+  const userCfgPath = homeDir ? path.join(homeDir, '.config', 'agent-rig', 'config.json') : null;
+  if (userCfgPath && existsSync(userCfgPath)) {
+    try {
+      return JSON.parse(readFileSync(userCfgPath, 'utf8'));
+    } catch {
+      return {};
     }
-    const template = path.join(rigRoot, 'templates', 'rig-config.default.json');
-    if (existsSync(template)) {
+  }
+  if (rigRoot) {
+    const localPath = path.join(rigRoot, '.rig.local.json');
+    if (existsSync(localPath)) {
       try {
-        mkdirSync(path.dirname(p), { recursive: true });
-        copyFileSync(template, p);
+        return JSON.parse(readFileSync(localPath, 'utf8'));
       } catch {
-        return template;
+        return {};
       }
     }
   }
-  return p;
+  return {};
 }
 
-export function loadRigConfig(rigRoot = RIG_ROOT) {
-  const p = configFilePath(rigRoot);
-  const templatePath = path.join(rigRoot, 'templates', 'rig-config.default.json');
-  if (existsSync(p)) {
-    try {
-      return JSON.parse(readFileSync(p, 'utf8'));
-    } catch {
-      // fall through to template
+export function loadRigConfig(rigRoot = RIG_ROOT, { homeDir = homedir() } = {}) {
+  const catalog = loadCatalog(rigRoot);
+  const userCfg = loadUserConfig({ homeDir, rigRoot });
+
+  const builtinProfiles = catalog.profiles || {};
+  const userProfiles = userCfg.profiles || {};
+
+  // Built-in preset definitions always come from templates/profiles.json so presets auto-update;
+  // userCfg.profiles can define custom profiles (such as <harness>-custom or user-named profiles).
+  const mergedProfiles = {
+    ...userProfiles,
+    ...builtinProfiles,
+  };
+
+  const mergedActiveProfiles = {
+    ...(catalog.activeProfiles || {}),
+  };
+  for (const [h, pName] of Object.entries(userCfg.activeProfiles || {})) {
+    if (mergedProfiles[pName]) {
+      mergedActiveProfiles[h] = pName;
     }
   }
-  if (existsSync(templatePath)) {
-    try {
-      return JSON.parse(readFileSync(templatePath, 'utf8'));
-    } catch {
-      return { activeProfiles: {}, profiles: {} };
-    }
-  }
-  return { activeProfiles: {}, profiles: {} };
+
+  return {
+    harnesses: { ...(catalog.harnesses || {}), ...(userCfg.harnesses || {}) },
+    models: { ...(catalog.models || {}), ...(userCfg.models || {}) },
+    activeProfiles: mergedActiveProfiles,
+    profiles: mergedProfiles,
+  };
 }
 
-export function writeRigConfig(config, rigRoot = RIG_ROOT) {
-  const p = configFilePath(rigRoot);
+export function writeRigConfig(config, { homeDir = homedir() } = {}) {
+  const targetHome = typeof homeDir === 'string' ? homeDir : homedir();
+  const p = path.join(targetHome, '.config', 'agent-rig', 'config.json');
   mkdirSync(path.dirname(p), { recursive: true });
   writeFileSync(p, JSON.stringify(config, null, 2) + '\n', 'utf8');
   return config;
 }
 
-export function resolveSubagentModel(harness, model, explicitSubagentModel = null, { rigRoot = RIG_ROOT, userConfig = null } = {}) {
+export function resolveSubagentModel(harness, model, explicitSubagentModel = null, { rigRoot = RIG_ROOT, homeDir = homedir(), userConfig = null } = {}) {
   if (explicitSubagentModel) return explicitSubagentModel;
   const catalog = loadCatalog(rigRoot);
-  const userModels = userConfig?.models ?? {};
-  const userHarnesses = userConfig?.harnesses ?? {};
+  const effectiveUser = userConfig ?? loadUserConfig({ homeDir, rigRoot });
+  const userModels = effectiveUser?.models ?? {};
+  const userHarnesses = effectiveUser?.harnesses ?? {};
 
   const mergedModels = { ...(catalog.models || {}), ...userModels };
   const mergedHarnesses = { ...(catalog.harnesses || {}), ...userHarnesses };
@@ -320,11 +431,18 @@ export const AGENSI_PROFILE = {
   },
 };
 
-export function resolveProfile(harness, { profileName = null, rigRoot = RIG_ROOT, userConfig = null } = {}) {
+export function resolveProfile(harness, { profileName = null, rigRoot = RIG_ROOT, homeDir = homedir(), userConfig = null } = {}) {
   if (harness === 'agensi' || profileName === 'agensi-neutral') {
     return { ...AGENSI_PROFILE };
   }
-  const cfg = userConfig ?? loadRigConfig(rigRoot);
+  const cfg = userConfig
+    ? {
+        ...loadRigConfig(rigRoot, { homeDir }),
+        ...userConfig,
+        activeProfiles: { ...loadRigConfig(rigRoot, { homeDir }).activeProfiles, ...(userConfig.activeProfiles || {}) },
+        profiles: { ...loadRigConfig(rigRoot, { homeDir }).profiles, ...(userConfig.profiles || {}) },
+      }
+    : loadRigConfig(rigRoot, { homeDir });
   const targetProfileName = profileName || cfg.activeProfiles?.[harness];
   if (!targetProfileName) {
     throw new Error(`No active profile configured for harness: ${harness}`);
@@ -340,7 +458,7 @@ export function resolveProfile(harness, { profileName = null, rigRoot = RIG_ROOT
     if (!r) {
       throw new Error(`Profile ${targetProfileName} missing role definition for: ${role}`);
     }
-    const subagentModel = resolveSubagentModel(harness, r.model, r.subagentModel, { rigRoot, userConfig: cfg });
+    const subagentModel = resolveSubagentModel(harness, r.model, r.subagentModel, { rigRoot, homeDir, userConfig: cfg });
     resolvedRoles[role] = {
       model: r.model,
       subagentModel,
@@ -1109,7 +1227,7 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
   }
   mkdirSync(pluginDir, { recursive: true });
 
-  const resolvedProfile = resolveProfile('antigravity', { rigRoot });
+  const resolvedProfile = resolveProfile('antigravity', { rigRoot, homeDir });
 
   copyFileSafe(path.join(rigRoot, 'plugin.json'), path.join(pluginDir, 'plugin.json'), { force: true, copied: updated });
 
@@ -1195,7 +1313,7 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
   const claudeDir = path.join(homeDir, '.claude');
   mkdirSync(claudeDir, { recursive: true });
 
-  const resolvedProfile = resolveProfile('claude', { rigRoot });
+  const resolvedProfile = resolveProfile('claude', { rigRoot, homeDir });
 
   for (const sub of ['skills', 'agents', 'rules']) {
     pruneRigSymlinks(path.join(claudeDir, sub), { rigRoot, pruned });
@@ -1313,7 +1431,7 @@ function installForCodex(homeDir, { force = false, hydrated = [], skipped = [], 
     }
   }
 
-  const resolvedProfile = resolveProfile('codex', { rigRoot });
+  const resolvedProfile = resolveProfile('codex', { rigRoot, homeDir });
   const skillsDir = path.join(rigRoot, 'skills');
   for (const skill of listSkills(skillsDir)) {
     copyOrHydrateDir(path.join(skillsDir, skill), path.join(codexDir, 'skills', skill), resolvedProfile, { hydrated, isGlobal: true, harness: 'codex' });
@@ -1348,7 +1466,7 @@ function installForCursor(homeDir, { force = false, hydrated = [], skipped = [],
     }
   }
 
-  const resolvedProfile = resolveProfile('cursor', { rigRoot });
+  const resolvedProfile = resolveProfile('cursor', { rigRoot, homeDir });
   const skillsDir = path.join(rigRoot, 'skills');
   for (const skill of listSkills(skillsDir)) {
     copyOrHydrateDir(path.join(skillsDir, skill), path.join(cursorDir, 'skills', skill), resolvedProfile, { hydrated, isGlobal: true, harness: 'cursor' });
@@ -1377,7 +1495,7 @@ export function installRig({
   rigRoot = RIG_ROOT,
   nodeBin = null,
 } = {}) {
-  ensureRigConfig(rigRoot);
+  migrateLegacyLocalConfig(rigRoot, homeDir);
   const discovered = detectHarnesses(homeDir);
   let selectedIds;
   if (Array.isArray(harnesses) && harnesses.length > 0) {
@@ -1456,8 +1574,7 @@ export const VENDORED_RIG_FILES = [
   { src: 'rules/AGENTS.md', dest: '.rig/rules/AGENTS.md' },
   { src: 'rules/ui-change-gate.md', dest: '.rig/rules/ui-change-gate.md' },
   { src: 'rules/contract-change-gate.md', dest: '.rig/rules/contract-change-gate.md' },
-  { src: 'templates/models.json', dest: '.rig/templates/models.json' },
-  { src: 'templates/rig-config.default.json', dest: '.rig/templates/rig-config.default.json' },
+  { src: 'templates/profiles.json', dest: '.rig/templates/profiles.json' },
   { src: 'scripts/check-doc-links.mjs', dest: '.rig/scripts/check-doc-links.mjs' },
   { src: 'scripts/reflow-docs.mjs', dest: '.rig/scripts/reflow-docs.mjs' },
   { src: 'hooks/lib/hook-io.mjs', dest: '.rig/hooks/lib/hook-io.mjs' },
@@ -1941,16 +2058,20 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
           });
         }
       }
-      copyFileSafe(path.join(rigRoot, 'templates/models.json'), path.join(dir, '.rig/templates/models.json'), {
-        force: true,
-        copied,
-        skipped,
-      });
-      copyFileSafe(path.join(rigRoot, 'templates/rig-config.default.json'), path.join(dir, '.rig/templates/rig-config.default.json'), {
-        force: true,
-        copied,
-        skipped,
-      });
+      if (existsSync(path.join(rigRoot, 'templates/profiles.json'))) {
+        copyFileSafe(path.join(rigRoot, 'templates/profiles.json'), path.join(dir, '.rig/templates/profiles.json'), {
+          force: true,
+          copied,
+          skipped,
+        });
+      }
+      for (const legacyTpl of ['models.json', 'rig-config.default.json']) {
+        const legacyDest = path.join(dir, '.rig/templates', legacyTpl);
+        if (existsSync(legacyDest)) {
+          rmSync(legacyDest, { force: true });
+          removed.push(legacyDest);
+        }
+      }
       copyFileSafe(path.join(rigRoot, 'scripts/check-doc-links.mjs'), path.join(dir, '.rig/scripts/check-doc-links.mjs'), {
         force: true,
         copied,
@@ -2287,8 +2408,8 @@ export function updateRig({
   };
 }
 
-export function listProfiles(rigRoot = RIG_ROOT) {
-  const cfg = loadRigConfig(rigRoot);
+export function listProfiles(rigRoot = RIG_ROOT, { homeDir = homedir() } = {}) {
+  const cfg = loadRigConfig(rigRoot, { homeDir });
   const profiles = cfg.profiles || {};
   const activeProfiles = cfg.activeProfiles || {};
 
@@ -2305,7 +2426,7 @@ export function listProfiles(rigRoot = RIG_ROOT) {
       if (r) {
         resolvedRoles[role] = {
           model: r.model,
-          subagentModel: resolveSubagentModel(harness, r.model, r.subagentModel, { rigRoot, userConfig: cfg }),
+          subagentModel: resolveSubagentModel(harness, r.model, r.subagentModel, { rigRoot, homeDir, userConfig: cfg }),
           effort: r.effort,
         };
       }
@@ -2321,7 +2442,8 @@ export function listProfiles(rigRoot = RIG_ROOT) {
 }
 
 export function useProfile(profileName, { rigRoot = RIG_ROOT, homeDir = homedir() } = {}) {
-  const cfg = loadRigConfig(rigRoot);
+  const catalog = loadCatalog(rigRoot);
+  const cfg = loadRigConfig(rigRoot, { homeDir });
   const profile = cfg.profiles?.[profileName];
   if (!profile) {
     throw new Error(`Profile not found: "${profileName}"`);
@@ -2330,9 +2452,19 @@ export function useProfile(profileName, { rigRoot = RIG_ROOT, homeDir = homedir(
   if (!harness) {
     throw new Error(`Profile "${profileName}" does not specify a harness`);
   }
-  cfg.activeProfiles = cfg.activeProfiles || {};
-  cfg.activeProfiles[harness] = profileName;
-  writeRigConfig(cfg, rigRoot);
+  const userCfg = loadUserConfig({ homeDir, rigRoot });
+  userCfg.activeProfiles = userCfg.activeProfiles || {};
+  userCfg.activeProfiles[harness] = profileName;
+
+  // If switching back to a built-in preset, prune any auto-forked <harness>-custom override
+  if (catalog.profiles?.[profileName] && userCfg.profiles?.[`${harness}-custom`]) {
+    delete userCfg.profiles[`${harness}-custom`];
+    if (Object.keys(userCfg.profiles).length === 0) {
+      delete userCfg.profiles;
+    }
+  }
+
+  writeRigConfig(userCfg, { homeDir, rigRoot });
   const updateRes = updateRig({ homeDir, rigRoot });
   return { profileName, harness, updateRes };
 }
@@ -2341,52 +2473,75 @@ export function setProfileRole(role, model, { effort = null, subagentModel = nul
   if (!ROLES.includes(role)) {
     throw new Error(`Invalid role "${role}". Valid roles are: ${ROLES.join(', ')}`);
   }
-  const cfg = loadRigConfig(rigRoot);
-  let targetProfileName = profileName;
-  if (!targetProfileName) {
+  const catalog = loadCatalog(rigRoot);
+  const cfg = loadRigConfig(rigRoot, { homeDir });
+  const userCfg = loadUserConfig({ homeDir, rigRoot });
+
+  let baseProfileName = profileName;
+  if (!baseProfileName) {
     if (harness) {
-      targetProfileName = cfg.activeProfiles?.[harness];
+      baseProfileName = cfg.activeProfiles?.[harness];
     } else {
       const activeList = Object.values(cfg.activeProfiles || {});
       if (activeList.length === 1) {
-        targetProfileName = activeList[0];
+        baseProfileName = activeList[0];
       } else {
         throw new Error(`Specify --profile <name> or --harness <id> to choose which profile to update`);
       }
     }
   }
 
-  const profile = cfg.profiles?.[targetProfileName];
-  if (!profile) {
-    throw new Error(`Profile not found: "${targetProfileName}"`);
+  const baseProfile = cfg.profiles?.[baseProfileName];
+  if (!baseProfile) {
+    throw new Error(`Profile not found: "${baseProfileName}"`);
   }
 
-  const existingRole = profile.roles?.[role] || {};
+  const targetHarness = baseProfile.harness;
+  // Copy-on-write: if target is a built-in preset, snapshot all 4 roles into a pinned <harness>-custom profile
+  const isBuiltinPreset = Boolean(catalog.profiles?.[baseProfileName]);
+  const targetProfileName = isBuiltinPreset && !profileName ? `${targetHarness}-custom` : (isBuiltinPreset ? `${targetHarness}-custom` : baseProfileName);
+
+  const clonedRoles = {};
+  for (const rName of ROLES) {
+    const rDef = baseProfile.roles?.[rName];
+    if (rDef) {
+      clonedRoles[rName] = { ...rDef };
+    }
+  }
+
+  const existingRole = clonedRoles[role] || {};
   const newEffort = effort || existingRole.effort || 'medium';
   const validEfforts = ['low', 'medium', 'high', 'max'];
   if (!validEfforts.includes(newEffort)) {
     throw new Error(`Invalid effort "${newEffort}". Valid levels: ${validEfforts.join(', ')}`);
   }
 
-  const resolvedSub = resolveSubagentModel(profile.harness, model, subagentModel || null, { rigRoot, userConfig: cfg });
+  const resolvedSub = resolveSubagentModel(targetHarness, model, subagentModel || null, { rigRoot, homeDir, userConfig: cfg });
 
-  profile.roles = profile.roles || {};
-  profile.roles[role] = {
+  clonedRoles[role] = {
     model,
     subagentModel: resolvedSub,
     effort: newEffort,
   };
 
-  writeRigConfig(cfg, rigRoot);
+  userCfg.profiles = userCfg.profiles || {};
+  userCfg.profiles[targetProfileName] = {
+    harness: targetHarness,
+    roles: clonedRoles,
+  };
+  userCfg.activeProfiles = userCfg.activeProfiles || {};
+  userCfg.activeProfiles[targetHarness] = targetProfileName;
+
+  writeRigConfig(userCfg, { homeDir, rigRoot });
   const updateRes = updateRig({ homeDir, rigRoot });
-  return { profileName: targetProfileName, harness: profile.harness, role, model, subagentModel: resolvedSub, effort: newEffort, updateRes };
+  return { profileName: targetProfileName, harness: targetHarness, role, model, subagentModel: resolvedSub, effort: newEffort, updateRes };
 }
 
-export function resolveRoleModel(role, { harness = null, profileName = null, rigRoot = RIG_ROOT } = {}) {
+export function resolveRoleModel(role, { harness = null, profileName = null, rigRoot = RIG_ROOT, homeDir = homedir() } = {}) {
   if (!ROLES.includes(role)) {
     throw new Error(`Invalid role "${role}". Valid roles are: ${ROLES.join(', ')}`);
   }
-  const cfg = loadRigConfig(rigRoot);
+  const cfg = loadRigConfig(rigRoot, { homeDir });
   let targetHarness = harness;
   if (!targetHarness) {
     if (profileName && cfg.profiles?.[profileName]) {
@@ -2395,7 +2550,7 @@ export function resolveRoleModel(role, { harness = null, profileName = null, rig
       targetHarness = 'antigravity';
     }
   }
-  const resolvedProf = resolveProfile(targetHarness, { profileName, rigRoot, userConfig: cfg });
+  const resolvedProf = resolveProfile(targetHarness, { profileName, rigRoot, homeDir, userConfig: cfg });
   const roleData = resolvedProf.roles[role];
   return {
     harness: targetHarness,
@@ -3000,16 +3155,13 @@ export function initRepo(
       });
     }
   }
-  copyFileSafe(path.join(rigRoot, 'templates/models.json'), path.join(dir, '.rig/templates/models.json'), {
-    force,
-    copied,
-    skipped,
-  });
-  copyFileSafe(path.join(rigRoot, 'templates/rig-config.default.json'), path.join(dir, '.rig/templates/rig-config.default.json'), {
-    force,
-    copied,
-    skipped,
-  });
+  if (existsSync(path.join(rigRoot, 'templates/profiles.json'))) {
+    copyFileSafe(path.join(rigRoot, 'templates/profiles.json'), path.join(dir, '.rig/templates/profiles.json'), {
+      force,
+      copied,
+      skipped,
+    });
+  }
   copyFileSafe(path.join(rigRoot, 'scripts/check-doc-links.mjs'), path.join(dir, '.rig/scripts/check-doc-links.mjs'), {
     force,
     copied,

@@ -1,15 +1,20 @@
 ---
 name: merge-to-main
 description: >-
-  Use when the user invokes /merge-to-main, asks to "merge to main", "merge
-  branch", "land worktree", or finalize a verified slice. Merges a worktree
-  branch into main from the attached root checkout, verifies the uncommitted
-  merge with the full test suite, commits, and removes the worktree.
+  Use in an agent-rig repository when the user invokes /merge-to-main, asks to
+  "merge to main", "merge branch", "land worktree", or finalize a verified
+  slice. Merges a worktree branch into main from the attached root checkout,
+  verifies the uncommitted merge with the full test suite, commits, and removes
+  the worktree.
 ---
 
 # Safe Worktree Merge to `main` (`merge-to-main`)
 
 Because the repository's root checkout stays attached to `main` as a merge-only trunk, verified merges land directly in the root checkout while feature work stays isolated in linked worktrees.
+<!-- RIG:IF distribution=rig -->
+Apply this skill only inside a rigged repository (`rig status` reports `"mode": "attached"` or `"mode": "self-contained"`);
+in an unrigged repository, use standard git commands instead.
+<!-- RIG:ENDIF -->
 
 ---
 

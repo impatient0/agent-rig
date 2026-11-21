@@ -54,6 +54,58 @@ import {
   extractManagedDocsBlock,
   mergeManagedAgentsFile,
 } from '../scripts/check-doc-links.mjs';
+export function isRigHooksPath(repoRoot, hooksPath) {
+  if (!repoRoot || !hooksPath || typeof hooksPath !== 'string') return false;
+  const trimmed = hooksPath.trim();
+  if (!trimmed) return false;
+  const normalized = trimmed.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  if (
+    normalized === '.rig/hooks' ||
+    normalized.endsWith('/.rig/hooks') ||
+    normalized === 'scripts/git-hooks' ||
+    normalized.endsWith('/scripts/git-hooks')
+  ) {
+    return true;
+  }
+  return (
+    path.resolve(repoRoot, trimmed) === path.resolve(repoRoot, '.rig/hooks') ||
+    path.resolve(repoRoot, trimmed) === path.resolve(repoRoot, 'scripts/git-hooks')
+  );
+}
+
+export function isWorktreeRiggedRepo(repoRoot) {
+  if (!repoRoot || typeof repoRoot !== 'string') return false;
+  if (
+    existsSync(path.join(repoRoot, '.rig/hooks/pre-commit')) ||
+    existsSync(path.join(repoRoot, 'scripts/git-hooks/pre-commit'))
+  ) {
+    return true;
+  }
+  try {
+    const res = spawnSync('git', ['-C', repoRoot, 'config', '--get', 'core.hooksPath'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (res.status === 0 && typeof res.stdout === 'string') {
+      if (isRigHooksPath(repoRoot, res.stdout)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+export function isRiggedRepo(repoRoot) {
+  if (!repoRoot || typeof repoRoot !== 'string') return false;
+  if (isWorktreeRiggedRepo(repoRoot)) return true;
+  if (
+    existsSync(path.join(repoRoot, '.rig/hooks/guard-remote-mutation.mjs')) ||
+    existsSync(path.join(repoRoot, '.rig/bin/rig.mjs'))
+  ) {
+    return true;
+  }
+  return false;
+}
 
 export {
   MANAGED_AGENTS_START,
@@ -531,7 +583,11 @@ export function rewriteDocLinks(
 ) {
   let result = text;
   if (isGlobal) {
+    // Global skills and agents reference repo-local .rig/rules/ rather than global rules/
+    // (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
     result = result.replaceAll('../../docs/', 'docs/');
+    result = result.replaceAll('../../rules/', '.rig/rules/');
+    result = result.replaceAll('../rules/', '.rig/rules/');
   }
   if (isDotHarness) {
     result = result.replaceAll('../../docs/', '../../../docs/');
@@ -1068,31 +1124,24 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
 
   linkSafe(path.join(rigRoot, 'hooks'), path.join(pluginDir, 'hooks'), { force: true, linked, skipped });
 
-  const rulesSrcDir = path.join(rigRoot, 'rules');
+  // Do not install gate rules globally into the plugin rules/ directory so unrigged repositories
+  // are never affected (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
   const rulesDestDir = path.join(pluginDir, 'rules');
-  mkdirSync(rulesDestDir, { recursive: true });
-  for (const rule of readdirSync(rulesSrcDir)) {
-    if (rule === 'AGENTS.md' || isIgnoredFsEntry(rule)) continue;
-    const src = path.join(rulesSrcDir, rule);
-    const dest = path.join(rulesDestDir, rule);
-    let stat;
+  if (existsSync(rulesDestDir)) {
+    for (const legacyRule of ['AGENTS.md', 'ui-change-gate.md', 'contract-change-gate.md']) {
+      const legacyRulePath = path.join(rulesDestDir, legacyRule);
+      if (existsSync(legacyRulePath)) {
+        rmSync(legacyRulePath, { force: true });
+        pruned.push(legacyRulePath);
+      }
+    }
     try {
-      stat = statSync(src);
+      if (readdirSync(rulesDestDir).length === 0) {
+        rmSync(rulesDestDir, { recursive: true, force: true });
+      }
     } catch {
-      continue;
+      // ignore
     }
-    if (!stat.isFile()) continue;
-    if (rule.endsWith('.md')) {
-      writeHydratedFile(src, dest, resolvedProfile, { isGlobal: true, harness: 'antigravity' });
-      hydrated.push(dest);
-    } else {
-      copyFileSafe(src, dest, { force: true, copied: hydrated });
-    }
-  }
-  const legacyPluginAgentsMd = path.join(rulesDestDir, 'AGENTS.md');
-  if (existsSync(legacyPluginAgentsMd)) {
-    rmSync(legacyPluginAgentsMd, { force: true });
-    pruned.push(legacyPluginAgentsMd);
   }
 
   const skillsSrcDir = path.join(rigRoot, 'skills');
@@ -1188,42 +1237,28 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
     }
   }
 
-  const rulesDir = path.join(rigRoot, 'rules');
-  const claudeRulesDir = path.join(claudeDir, 'rules');
-  mkdirSync(claudeRulesDir, { recursive: true });
-  if (existsSync(rulesDir)) {
-    for (const rule of readdirSync(rulesDir)) {
-      if (rule === 'AGENTS.md' || isIgnoredFsEntry(rule)) continue;
-      const src = path.join(rulesDir, rule);
-      const dest = path.join(claudeRulesDir, rule);
-      let stat;
+  // Do not install rules globally into ~/.claude/rules/ because Claude Code loads all files in
+  // ~/.claude/rules/ into every repository session, including unrigged repositories
+  // (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
+  const claudeRulesCheck = [
+    { name: 'AGENTS.md', marker: 'Universal Agentic Engineering Rules (`agent-rig`)' },
+    { name: 'ui-change-gate.md', marker: 'Human-in-the-Loop UI Change Gate' },
+    { name: 'contract-change-gate.md', marker: 'Human-in-the-Loop Domain & Schema Contract Gate' },
+  ];
+  for (const { name, marker } of claudeRulesCheck) {
+    const legacyRulePath = path.join(claudeDir, 'rules', name);
+    if (existsSync(legacyRulePath)) {
       try {
-        stat = statSync(src);
+        const text = readFileSync(legacyRulePath, 'utf8');
+        if (text.includes(marker) || text.includes(MANAGED_AGENTS_START)) {
+          rmSync(legacyRulePath, { force: true });
+          pruned.push(legacyRulePath);
+        } else {
+          console.warn(`Notice: Found custom ${legacyRulePath}; preserving it.`);
+        }
       } catch {
-        continue;
+        // ignore
       }
-      if (!stat.isFile()) continue;
-      if (rule.endsWith('.md')) {
-        writeHydratedFile(src, dest, resolvedProfile, { isGlobal: true, harness: 'claude' });
-        hydrated.push(dest);
-      } else {
-        copyFileSafe(src, dest, { force: true, copied: hydrated });
-      }
-    }
-  }
-
-  const legacyClaudeAgentsMd = path.join(claudeDir, 'rules', 'AGENTS.md');
-  if (existsSync(legacyClaudeAgentsMd)) {
-    try {
-      const text = readFileSync(legacyClaudeAgentsMd, 'utf8');
-      if (text.includes('Universal Agentic Engineering Rules (`agent-rig`)') || text.includes(MANAGED_AGENTS_START)) {
-        rmSync(legacyClaudeAgentsMd, { force: true });
-        pruned.push(legacyClaudeAgentsMd);
-      } else {
-        console.warn(`Notice: Found custom ${legacyClaudeAgentsMd}; preserving it.`);
-      }
-    } catch {
-      // ignore
     }
   }
 
@@ -1419,6 +1454,8 @@ export const installGlobal = installRig;
 export const VENDORED_RIG_FILES = [
   { src: 'bin/rig.mjs', dest: '.rig/bin/rig.mjs' },
   { src: 'rules/AGENTS.md', dest: '.rig/rules/AGENTS.md' },
+  { src: 'rules/ui-change-gate.md', dest: '.rig/rules/ui-change-gate.md' },
+  { src: 'rules/contract-change-gate.md', dest: '.rig/rules/contract-change-gate.md' },
   { src: 'templates/models.json', dest: '.rig/templates/models.json' },
   { src: 'templates/rig-config.default.json', dest: '.rig/templates/rig-config.default.json' },
   { src: 'scripts/check-doc-links.mjs', dest: '.rig/scripts/check-doc-links.mjs' },
@@ -1539,14 +1576,16 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
   const agentsPath = path.join(dir, 'AGENTS.md');
   if (existsSync(agentsPath)) {
     try {
-      const tHarness = harness || detectRepoHarness(dir) || 'antigravity';
-      const resolvedProfile = resolveProfile(tHarness, { rigRoot });
-      const isSelf = isRigRoot || isSelfContainedRepo(dir);
-      const expectedBlock = buildManagedAgentsBlock(resolvedProfile, { rigRoot, isSelfContained: isSelf });
       const content = readFileSync(agentsPath, 'utf8');
       const { block, hasBlock } = extractManagedAgentsBlock(content);
-      if (!hasBlock || block.trim() !== expectedBlock.trim()) {
-        pendingFiles.push(agentsPath);
+      if (isRigRoot || isRiggedRepo(dir) || hasBlock) {
+        const tHarness = harness || detectRepoHarness(dir) || 'antigravity';
+        const resolvedProfile = resolveProfile(tHarness, { rigRoot });
+        const isSelf = isRigRoot || isSelfContainedRepo(dir);
+        const expectedBlock = buildManagedAgentsBlock(resolvedProfile, { rigRoot, isSelfContained: isSelf });
+        if (!hasBlock || block.trim() !== expectedBlock.trim()) {
+          pendingFiles.push(agentsPath);
+        }
       }
     } catch {
       // ignore
@@ -1832,16 +1871,19 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
   const agentsPath = path.join(dir, 'AGENTS.md');
   if (existsSync(agentsPath)) {
     try {
-      const tHarness = harness || detectRepoHarness(dir) || 'antigravity';
-      const resolvedProfile = resolveProfile(tHarness, { rigRoot });
-      const isSelf = isRigRoot || isSelfContainedRepo(dir);
-      const expectedBlock = buildManagedAgentsBlock(resolvedProfile, { rigRoot, isSelfContained: isSelf });
-      const docsBlock = buildDocsIndexBlock(dir);
       const existing = readFileSync(agentsPath, 'utf8');
-      const updated = mergeManagedAgentsFile(existing, expectedBlock, '', docsBlock);
-      if (updated !== existing) {
-        writeFileSync(agentsPath, updated, 'utf8');
-        copied.push(agentsPath);
+      const { hasBlock } = extractManagedAgentsBlock(existing);
+      if (isRigRoot || isRiggedRepo(dir) || hasBlock) {
+        const tHarness = harness || detectRepoHarness(dir) || 'antigravity';
+        const resolvedProfile = resolveProfile(tHarness, { rigRoot });
+        const isSelf = isRigRoot || isSelfContainedRepo(dir);
+        const expectedBlock = buildManagedAgentsBlock(resolvedProfile, { rigRoot, isSelfContained: isSelf });
+        const docsBlock = buildDocsIndexBlock(dir);
+        const updated = mergeManagedAgentsFile(existing, expectedBlock, '', docsBlock);
+        if (updated !== existing) {
+          writeFileSync(agentsPath, updated, 'utf8');
+          copied.push(agentsPath);
+        }
       }
     } catch {
       // ignore
@@ -1889,6 +1931,16 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
         copied,
         skipped,
       });
+      for (const gateRule of ['ui-change-gate.md', 'contract-change-gate.md']) {
+        const gateRuleSrc = path.join(rigRoot, 'rules', gateRule);
+        if (existsSync(gateRuleSrc)) {
+          copyFileSafe(gateRuleSrc, path.join(dir, '.rig/rules', gateRule), {
+            force: true,
+            copied,
+            skipped,
+          });
+        }
+      }
       copyFileSafe(path.join(rigRoot, 'templates/models.json'), path.join(dir, '.rig/templates/models.json'), {
         force: true,
         copied,
@@ -2628,6 +2680,16 @@ export function attachRepo(targetDir = process.cwd(), { homeDir = homedir(), for
       }
     }
   }
+  if (existsSync(path.join(mainCheckout, '.rig')) || existsSync(path.join(mainCheckout, 'AGENTS.md'))) {
+    for (const gateRule of ['ui-change-gate.md', 'contract-change-gate.md']) {
+      const srcRule = path.join(rigRoot, 'rules', gateRule);
+      const destRule = path.join(mainCheckout, '.rig/rules', gateRule);
+      if (existsSync(srcRule) && !existsSync(destRule)) {
+        mkdirSync(path.dirname(destRule), { recursive: true });
+        copyFileSync(srcRule, destRule);
+      }
+    }
+  }
 
   const mainCheckoutHead = attachMainCheckout(mainCheckout);
 
@@ -2928,6 +2990,16 @@ export function initRepo(
     copied,
     skipped,
   });
+  for (const gateRule of ['ui-change-gate.md', 'contract-change-gate.md']) {
+    const gateRuleSrc = path.join(rigRoot, 'rules', gateRule);
+    if (existsSync(gateRuleSrc)) {
+      copyFileSafe(gateRuleSrc, path.join(dir, '.rig/rules', gateRule), {
+        force,
+        copied,
+        skipped,
+      });
+    }
+  }
   copyFileSafe(path.join(rigRoot, 'templates/models.json'), path.join(dir, '.rig/templates/models.json'), {
     force,
     copied,
@@ -3210,12 +3282,11 @@ export function statusRepo(targetDir = process.cwd(), { homeDir = homedir(), rig
   const activePreCommit = preCommitCandidates.find((c) => existsSync(c));
   const gitPreCommit = activePreCommit ? path.relative(dir, activePreCommit).replace(/\\/g, '/') : null;
 
-  const selfContained = isSelfContainedRepo(dir);
-  const isRigged =
-    selfContained ||
-    existsSync(path.join(dir, 'AGENTS.md')) ||
-    existsSync(path.join(dir, '.rig')) ||
-    Boolean(gitHooksPath);
+  // Canonical rigged-repo check: unrigged repositories (even with their own AGENTS.md or
+  // third-party core.hooksPath like .husky, or after rig eject) report mode: 'unrigged'
+  // (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
+  const isRigged = isRiggedRepo(dir);
+  const selfContained = isRigged && isSelfContainedRepo(dir);
 
   let mode = 'unrigged';
   if (selfContained) {

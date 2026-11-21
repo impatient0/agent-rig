@@ -143,3 +143,15 @@ Rather than altering the universal engineering rules in [`rules/AGENTS.md`](../r
 Attempting to pipeline investigation across waves (investigating Wave 2 code while Wave 1 Workers run in the background) does not save net execution time and actively pollutes the Tech Lead's context window.
 If a Wave 1 Worker triggers a Stop Trigger or encounters a merge collision, an orchestrator saturated with Wave 2 code struggles with context fragmentation.
 Triage investigation must remain strictly wave-scoped.
+
+---
+
+## 9. Why Global Harnesses Enforce Strict Unrigged Repository Isolation
+
+When a developer works across both rigged and deliberately unrigged repositories on the same machine, any global harness artifact that fires without checking repository state creates a "half-rigged" uncanny valley:
+1. Global `PreToolUse` command hooks (`hooks/guard-remote-mutation.mjs` and `hooks/guard-symlinked-node-modules.mjs`) intercept `ssh`, `git push`, or package-manager commands in unrigged projects.
+2. Global rule files placed in `~/.claude/rules/` ([`rules/ui-change-gate.md`](../rules/ui-change-gate.md) and [`rules/contract-change-gate.md`](../rules/contract-change-gate.md)) are injected by Claude Code into the system prompt of every project on the machine, telling the agent to use linked git worktrees and `/dispatch` in repositories that do not use `agent-rig`.
+
+**Fix in [`docs/adr/0004-strict-unrigged-repository-isolation.md`](adr/0004-strict-unrigged-repository-isolation.md):**
+All three `PreToolUse` guards share canonical rigged-repository detection in `hooks/lib/hook-io.mjs` (`isRiggedRepo`, `isWorktreeRiggedRepo`, and `isDirectoryInRiggedRepo`), immediately allowing commands and edits when the target directory is not inside a rigged repository.
+Gate rules are pruned from global `rules/` directories and vendored per rigged repository under `.rig/rules/`, with `rewriteDocLinks` in `bin/rig.mjs` rewriting global skill and subagent links to `.rig/rules/`.

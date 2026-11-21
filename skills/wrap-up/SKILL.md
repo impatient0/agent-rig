@@ -1,17 +1,21 @@
 ---
 name: wrap-up
 description: >-
-  Use at the end of a coding session or after merging a wave when the user
-  invokes /wrap-up, says "wrap up", "end session", "finish session", or requests
-  a session checkpoint. Verifies git/worktree cleanliness and test gates, routes
-  undocumented decisions and deferred work directly on main to ADRs,
-  docs/backlog.md, or AGENTS.md, re-tiers backlog items for passive drift, and
-  checks whether a cold-session /doc-audit is due.
+  Use in an agent-rig repository at the end of a coding session or after
+  merging a wave when the user invokes /wrap-up, says "wrap up", "end session",
+  "finish session", or requests a session checkpoint. Verifies git/worktree
+  cleanliness and test gates, routes undocumented decisions and deferred work
+  directly on main to ADRs, docs/backlog.md, or AGENTS.md, re-tiers backlog
+  items for passive drift, and checks whether a cold-session /doc-audit is due.
 ---
 
 # End-of-Session Checkpoint (`wrap-up`)
 
 Run this checklist on `main` after landing any finished worktrees via [`skills/merge-to-main/SKILL.md`](../merge-to-main/SKILL.md) so the next cold session starts with a clean tree, green tests, an accurate backlog, and zero trapped context in the conversation transcript.
+<!-- RIG:IF distribution=rig -->
+Apply this skill only inside a rigged repository (`rig status` reports `"mode": "attached"` or `"mode": "self-contained"`);
+if the active workspace is unrigged, do not run `agent-rig` doc linters or create [`docs/backlog.md`](../../docs/backlog.md).
+<!-- RIG:ENDIF -->
 Because `wrap-up` is strictly a documentation and project-context procedure (touching only `docs/`, `AGENTS.md`, and `README.md`), its updates are permitted and committed directly on `main` without creating a separate worktree.
 
 ---

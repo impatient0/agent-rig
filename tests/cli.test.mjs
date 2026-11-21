@@ -205,15 +205,18 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     assert.equal(lstatSync(agyPluginDir).isSymbolicLink(), false);
     assert.ok(lstatSync(path.join(agyPluginDir, 'hooks')).isSymbolicLink());
     assert.equal(existsSync(path.join(agyPluginDir, 'rules/AGENTS.md')), false);
-    assert.ok(existsSync(path.join(agyPluginDir, 'rules/contract-change-gate.md')));
-    assert.ok(existsSync(path.join(agyPluginDir, 'rules/ui-change-gate.md')));
+    assert.equal(existsSync(path.join(agyPluginDir, 'rules/contract-change-gate.md')), false);
+    assert.equal(existsSync(path.join(agyPluginDir, 'rules/ui-change-gate.md')), false);
     const agyVerifier = readFileSync(path.join(agyPluginDir, 'agents/verifier.md'), 'utf8');
     assert.match(agyVerifier, /gemini-4-hydrogen/);
     assert.equal(agyVerifier.includes('{{'), false);
+    assert.match(agyVerifier, /\(\.rig\/rules\/ui-change-gate\.md\)/);
+    assert.doesNotMatch(agyVerifier, /\(\.\.\/rules\//);
     const agyWorker = readFileSync(path.join(agyPluginDir, 'agents/worker.md'), 'utf8');
     assert.match(agyWorker, /gemini-4-hydrogen/);
     assert.equal(agyWorker.includes('{{'), false);
-    assert.ok(existsSync(path.join(agyPluginDir, 'rules/contract-change-gate.md')));
+    assert.match(agyWorker, /\(\.rig\/rules\/contract-change-gate\.md\)/);
+    assert.doesNotMatch(agyWorker, /\(\.\.\/rules\//);
     const pluginsJson = JSON.parse(readFileSync(path.join(fakeHome, '.gemini/config/plugins.json'), 'utf8'));
     assert.equal(pluginsJson.entries.length, 1);
     const agyHooks = JSON.parse(readFileSync(path.join(agyPluginDir, 'hooks.json'), 'utf8'));
@@ -224,13 +227,18 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     const claudeSkill = readFileSync(path.join(fakeHome, '.claude/skills/dispatch/SKILL.md'), 'utf8');
     assert.match(claudeSkill, /claude-sonnet-5-5/);
     assert.equal(claudeSkill.includes('{{'), false);
+    assert.match(claudeSkill, /\(\.rig\/rules\/ui-change-gate\.md\)/);
+    assert.doesNotMatch(claudeSkill, /\(\.\.\/\.\.\/rules\//);
     const claudeVerifier = readFileSync(path.join(fakeHome, '.claude/agents/verifier.md'), 'utf8');
     assert.match(claudeVerifier, /model: sonnet/);
     assert.equal(claudeVerifier.includes('{{'), false);
+    assert.match(claudeVerifier, /\(\.rig\/rules\/ui-change-gate\.md\)/);
     const claudeWorker = readFileSync(path.join(fakeHome, '.claude/agents/worker.md'), 'utf8');
     assert.match(claudeWorker, /model: sonnet/);
     assert.equal(claudeWorker.includes('{{'), false);
-    assert.ok(existsSync(path.join(fakeHome, '.claude/rules/contract-change-gate.md')));
+    assert.match(claudeWorker, /\(\.rig\/rules\/contract-change-gate\.md\)/);
+    assert.equal(existsSync(path.join(fakeHome, '.claude/rules/contract-change-gate.md')), false);
+    assert.equal(existsSync(path.join(fakeHome, '.claude/rules/ui-change-gate.md')), false);
     const claudeSettings = JSON.parse(readFileSync(path.join(fakeHome, '.claude/settings.json'), 'utf8'));
     assert.equal(claudeSettings.hooks.PreToolUse.length, 2);
     assert.match(claudeSettings.hooks.PreToolUse[0].hooks[0].command, /Run 'rig update'/);
@@ -2022,8 +2030,7 @@ test('rig handles foreign system, editor, and metadata files without throwing EN
     assert.equal(existsSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/skills/dispatch/.DS_Store')), false);
     assert.equal(existsSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/skills/dispatch/SKILL.md~')), false);
 
-    const installedRules = readdirSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules'));
-    assert.deepEqual(installedRules, ['contract-change-gate.md']);
+    assert.equal(existsSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules')), false);
 
     const installedAgents = readdirSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/agents'));
     assert.deepEqual(installedAgents, ['verifier.md']);
@@ -2047,10 +2054,15 @@ test('statusRepo reports mode (attached vs self-contained vs unrigged) with loca
   const unriggedRepo = mkdtempSync(path.join(tmpdir(), 'rig-status-unrigged-'));
 
   try {
-    // 1. Unrigged repository
+    // 1. Unrigged repository (even with its own custom AGENTS.md and third-party .husky core.hooksPath)
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: unriggedRepo });
+    spawnSync('git', ['-C', unriggedRepo, 'config', 'core.hooksPath', '.husky']);
+    writeFileSync(path.join(unriggedRepo, 'AGENTS.md'), '# Custom Unrigged Project Instructions\n');
     const unriggedStatus = statusRepo(unriggedRepo, { homeDir: fakeHome, rigRoot: fakeRigRoot });
     assert.equal(unriggedStatus.mode, 'unrigged');
-    assert.equal(unriggedStatus.hasAgentsMd, false);
+    assert.equal(unriggedStatus.hasAgentsMd, true);
+    rmSync(path.join(unriggedRepo, 'AGENTS.md'), { force: true });
+    assert.equal(statusRepo(unriggedRepo, { homeDir: fakeHome, rigRoot: fakeRigRoot }).hasAgentsMd, false);
     assert.equal(unriggedStatus.skills.effective.length, 0);
     assert.equal(unriggedStatus.skills.local.length, 0);
     assert.equal(unriggedStatus.skills.global.length, 0);

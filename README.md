@@ -54,12 +54,12 @@ What `rig install` configures:
 - **CLI Binary (`~/.local/bin/rig`):**
   Installs an executable shell wrapper at `~/.local/bin/rig` with resolved Node runtime execution and fail-safe diagnostics advising `rig update` if Node is relocated.
 - **Antigravity (`~/.gemini/config/` & `~/.gemini/antigravity/bin/`):**
-  Registers `agent-rig` in `~/.gemini/config/plugins.json`, installs a `rig` CLI wrapper in `~/.gemini/antigravity/bin/rig` (plus `node`/`npm` symlinks when Node is not on system `PATH`), and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig`, activating gate rules ([`rules/ui-change-gate.md`](rules/ui-change-gate.md), [`rules/contract-change-gate.md`](rules/contract-change-gate.md)), all 8 skills under `skills/`, subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and `hooks.json` with dynamic Node runtime resolution across every workspace with symlinked `hooks/`.
+  Registers `agent-rig` in `~/.gemini/config/plugins.json`, installs a `rig` CLI wrapper in `~/.gemini/antigravity/bin/rig` (plus `node`/`npm` symlinks when Node is not on system `PATH`), and stages a hydrated plugin in `~/.gemini/config/plugins/agent-rig` with all skills under `skills/`, subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and `hooks.json` with dynamic Node runtime resolution and symlinked `hooks/` (all guards no-op in unrigged repositories per [`docs/adr/0004-strict-unrigged-repository-isolation.md`](docs/adr/0004-strict-unrigged-repository-isolation.md), while gate rules [`rules/ui-change-gate.md`](rules/ui-change-gate.md) and [`rules/contract-change-gate.md`](rules/contract-change-gate.md) are vendored per rigged repository under `.rig/rules/`).
 - **Claude Code (`~/.claude/`):**
-  Installs hydrated `skills/` into `~/.claude/skills/`, subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)) into `~/.claude/agents/`, and gate rules into `~/.claude/rules/`, symlinks `hooks/` into `~/.claude/hooks/`, and non-destructively merges dynamically resolved `PreToolUse` hooks into `~/.claude/settings.json`.
+  Installs hydrated `skills/` into `~/.claude/skills/` and subagents ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)) into `~/.claude/agents/`, prunes global `~/.claude/rules/` so unrigged repositories are unaffected, symlinks `hooks/` into `~/.claude/hooks/`, and non-destructively merges dynamically resolved `PreToolUse` hooks into `~/.claude/settings.json`.
   (Alternatively, inside Claude Code you can run `/plugin marketplace add impatient0/agent-rig` and `/plugin install agent-rig@agent-rig`.)
 - **Codex CLI (`~/.codex/`) & Cursor (`~/.cursor/`):**
-  Installs hydrated skills, subagents, and gate rules.
+  Installs hydrated skills into `~/.codex/skills/` and `~/.cursor/skills/`.
 
 To pull updates in `agent-rig`, standard `git pull` works directly in the root checkout;
 run `rig update` afterwards to sync newly added skills, subagents, or hook entries into your previously selected harnesses:

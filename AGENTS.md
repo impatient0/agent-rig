@@ -115,6 +115,7 @@ Every Markdown file in a rigged repository follows two mechanical invariants enf
 - [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) — ADR 0001: Record Architecture Decisions and Dual-Protocol Hook Architecture — Record architectural decisions in docs/adr/ and separate hook payload schema from harness identity.
 - [`docs/adr/0002-two-gear-execution-and-worker-subagent.md`](docs/adr/0002-two-gear-execution-and-worker-subagent.md) — ADR 0002: Two-Gear Execution Model and Isolated Worker Subagent — Two-gear execution model separating interactive pairing from autonomous dispatch with isolated worker subagents.
 - [`docs/adr/0003-conditional-markdown-hydration-and-marketplace-bundling.md`](docs/adr/0003-conditional-markdown-hydration-and-marketplace-bundling.md) — ADR 0003: Conditional Markdown Hydration and Standalone Marketplace Bundling — HTML-comment conditional hydration in canonical Markdown files and zero-maintenance standalone skill bundling under PolyForm Shield.
+- [`docs/adr/0004-strict-unrigged-repository-isolation.md`](docs/adr/0004-strict-unrigged-repository-isolation.md) — ADR 0004: Strict Unrigged Repository Isolation — Binary rigged-or-unrigged repository boundary eliminating global hook, rule, and skill leakage into unrigged repositories.
 <!-- AGENT-RIG:DOCS:END -->
 
 # Project Context (`agent-rig`)

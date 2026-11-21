@@ -61,7 +61,7 @@ Autonomous subagents may not mutate visual layouts or system contracts without p
 ### Execution Tiers & Subagent Model Selection
 
 Work is structured across four canonical execution tiers governed by the active profile `antigravity-pro`:
-- **`architect`** (`gemini-4-argon`, effort `high`):
+- **`architect`** (`gemini-4-neon`, effort `high`):
   Main session / Tech Lead, triage, backlog management, doc auditing ([`skills/doc-audit/SKILL.md`](skills/doc-audit/SKILL.md)), repo onboarding ([`skills/rig-onboard/SKILL.md`](skills/rig-onboard/SKILL.md)), session wrap-up ([`skills/wrap-up/SKILL.md`](skills/wrap-up/SKILL.md)), ADR authoring, and handling Worker stop triggers.
 - **`worker`** (subagent model `flash`, target `gemini-4-hydrogen`, effort `high`):
   Isolated implementation subagents running in linked worktrees governed by [`agents/worker.md`](agents/worker.md).

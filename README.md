@@ -134,7 +134,7 @@ You can define custom models and custom profiles in `.rig.local.json` without mo
     "my-custom-profile": {
       "harness": "antigravity",
       "roles": {
-        "architect": { "model": "gemini-4-argon", "effort": "high" },
+        "architect": { "model": "gemini-4-neon", "effort": "high" },
         "worker": { "model": "my-custom-model", "effort": "medium" },
         "verifier": { "model": "gemini-4-hydrogen", "effort": "medium" },
         "utility": { "model": "gemini-4-hydrogen", "effort": "low" }

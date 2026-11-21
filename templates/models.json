@@ -14,7 +14,8 @@
         "inherit",
         "haiku",
         "sonnet",
-        "opus"
+        "opus",
+        "fable"
       ],
       "defaultSubagentSelector": "inherit"
     },
@@ -33,7 +34,7 @@
         "antigravity": "pro"
       }
     },
-    "gemini-4-argon": {
+    "gemini-4-neon": {
       "subagentSelector": {
         "antigravity": "pro"
       }
@@ -46,6 +47,12 @@
     "gemini-3-8-flash": {
       "subagentSelector": {
         "antigravity": "flash"
+      }
+    },
+    "claude-fable-5-2": {
+      "subagentSelector": {
+        "claude": "fable",
+        "antigravity": "pro"
       }
     },
     "claude-opus-5-5": {
@@ -66,7 +73,9 @@
         "antigravity": "flash"
       }
     },
-    "gpt-6-1-sol": {},
+    "gpt-6.2-astra": {},
+    "gpt-6.2-sol": {},
+    "gpt-6.1-terra": {},
     "gpt-6-luna": {},
     "grok-4-7": {},
     "composer-2-5": {}

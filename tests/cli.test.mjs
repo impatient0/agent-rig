@@ -587,21 +587,23 @@ test('loadCatalog, resolveSubagentModel, resolveProfile, and hydrateText enforce
   assert.ok(catalog.harnesses.antigravity);
   assert.ok(catalog.harnesses.claude);
   assert.ok(catalog.models['gemini-4-carbon']);
-  assert.ok(catalog.models['gemini-4-argon']);
+  assert.ok(catalog.models['gemini-4-neon']);
   assert.ok(catalog.models['gemini-4-hydrogen']);
+  assert.ok(catalog.models['claude-fable-5-2']);
   assert.ok(catalog.models['claude-opus-5-5']);
 
   // Builtin model mappings
   assert.equal(resolveSubagentModel('antigravity', 'gemini-4-carbon', null, { rigRoot: RIG_ROOT }), 'pro');
-  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-argon', null, { rigRoot: RIG_ROOT }), 'pro');
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-neon', null, { rigRoot: RIG_ROOT }), 'pro');
   assert.equal(resolveSubagentModel('antigravity', 'gemini-4-hydrogen', null, { rigRoot: RIG_ROOT }), 'flash');
   assert.equal(resolveSubagentModel('antigravity', 'gemini-3-8-flash', null, { rigRoot: RIG_ROOT }), 'flash');
+  assert.equal(resolveSubagentModel('claude', 'claude-fable-5-2', null, { rigRoot: RIG_ROOT }), 'fable');
   assert.equal(resolveSubagentModel('claude', 'claude-opus-5-5', null, { rigRoot: RIG_ROOT }), 'opus');
   assert.equal(resolveSubagentModel('claude', 'claude-sonnet-5-5', null, { rigRoot: RIG_ROOT }), 'sonnet');
   assert.equal(resolveSubagentModel('claude', 'claude-haiku-5-5', null, { rigRoot: RIG_ROOT }), 'haiku');
 
   // Explicit selector wins
-  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-argon', 'flash_lite', { rigRoot: RIG_ROOT }), 'flash_lite');
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-neon', 'flash_lite', { rigRoot: RIG_ROOT }), 'flash_lite');
 
   // Custom user-defined model from config
   const customConfig = {
@@ -679,7 +681,7 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
     assert.equal(existsSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules/AGENTS.md')), false);
     const hydratedWorker = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/agents/worker.md'), 'utf8');
     assert.match(hydratedWorker, /Profile: antigravity-ultra/);
-    assert.match(hydratedWorker, /Worker: gemini-4-argon/);
+    assert.match(hydratedWorker, /Worker: gemini-4-neon/);
 
     // Update role in profile
     setProfileRole('worker', 'claude-opus-5-5', { effort: 'medium', rigRoot: fakeRig, homeDir: fakeHome, harness: 'antigravity' });

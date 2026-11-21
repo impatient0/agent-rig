@@ -155,3 +155,17 @@ When a developer works across both rigged and deliberately unrigged repositories
 **Fix in [`docs/adr/0004-strict-unrigged-repository-isolation.md`](adr/0004-strict-unrigged-repository-isolation.md):**
 All three `PreToolUse` guards share canonical rigged-repository detection in `hooks/lib/hook-io.mjs` (`isRiggedRepo`, `isWorktreeRiggedRepo`, and `isDirectoryInRiggedRepo`), immediately allowing commands and edits when the target directory is not inside a rigged repository.
 Gate rules are pruned from global `rules/` directories and vendored per rigged repository under `.rig/rules/`, with `rewriteDocLinks` in `bin/rig.mjs` rewriting global skill and subagent links to `.rig/rules/`.
+
+---
+
+## 10. Why `AGENTS.md` Is Profile-Agnostic and Preset Profiles Are Never Copied Into Local Config
+
+When a developer works across multiple machines with different subscription tiers (or when teammates using Antigravity, Claude Code, Codex, and Cursor collaborate on the same rigged repository), two configuration anti-patterns emerged:
+1. **Full-copy local config shadowing upstream presets:**
+   Copying `templates/profiles.json` into a full local config file on first install meant that when upstream `agent-rig` updated its built-in presets (for example, migrating from `gemini-4-argon` to `gemini-4-neon` or `gpt-6-1-sol` to `gpt-6.2-astra`), machines with an existing local config file remained permanently stuck on stale models.
+2. **Cross-machine `AGENTS.md` ping-pong commits:**
+   Hydrating concrete profile and model names (`{{RIG_PROFILE}}`, `{{MODEL_*}}`) into the demarcated block of a repository's committed `AGENTS.md` coupled repository git state to whichever machine last ran `rig update --all`.
+
+**Fix in [`docs/adr/0005-workflow-only-opinionatedness-and-unified-profiles.md`](adr/0005-workflow-only-opinionatedness-and-unified-profiles.md):**
+`agent-rig` enforces workflow-only opinionatedness:
+the demarcated `AGENTS.md` block is 100% harness-agnostic and profile-agnostic, while concrete model bindings are hydrated into each machine's global harness skills and subagents from the unified [`templates/profiles.json`](../templates/profiles.json) catalog and sparse `~/.config/agent-rig/config.json` overrides (with copy-on-write pinning into `<harness>-custom` only when `rig profile set` is invoked).

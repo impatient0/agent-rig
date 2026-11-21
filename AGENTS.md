@@ -112,6 +112,7 @@ Every Markdown file in a rigged repository follows two mechanical invariants enf
 - [`docs/adr/0002-two-gear-execution-and-worker-subagent.md`](docs/adr/0002-two-gear-execution-and-worker-subagent.md) — ADR 0002: Two-Gear Execution Model and Isolated Worker Subagent — Two-gear execution model separating interactive pairing from autonomous dispatch with isolated worker subagents.
 - [`docs/adr/0003-conditional-markdown-hydration-and-marketplace-bundling.md`](docs/adr/0003-conditional-markdown-hydration-and-marketplace-bundling.md) — ADR 0003: Conditional Markdown Hydration and Standalone Marketplace Bundling — HTML-comment conditional hydration in canonical Markdown files and zero-maintenance standalone skill bundling under PolyForm Shield.
 - [`docs/adr/0004-strict-unrigged-repository-isolation.md`](docs/adr/0004-strict-unrigged-repository-isolation.md) — ADR 0004: Strict Unrigged Repository Isolation — Binary rigged-or-unrigged repository boundary eliminating global hook, rule, and skill leakage into unrigged repositories.
+- [`docs/adr/0005-workflow-only-opinionatedness-and-unified-profiles.md`](docs/adr/0005-workflow-only-opinionatedness-and-unified-profiles.md) — ADR 0005: Workflow-Only Opinionatedness, Unified Profile Presets, and Three-Mode Repository Adoption — Decouple committed repository rules from machine-specific model profiles, unify built-in presets in templates/profiles.json, and formalize the three repository adoption modes.
 <!-- AGENT-RIG:DOCS:END -->
 
 # Project Context (`agent-rig`)

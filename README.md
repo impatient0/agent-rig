@@ -4,17 +4,19 @@ Subagent-first, platform-agnostic workflow rig for agentic software engineering:
 multi-protocol `PreToolUse` guards, a **Tech Lead → Isolated Worker → Cold Verifier** dispatch pipeline, git worktree isolation locks, and documentation graph linters.
 Extracted from production agentic sessions after measuring where human time and agent mistakes actually went — see [`docs/field-notes.md`](docs/field-notes.md) for the failure modes and post-mortems behind each mechanism.
 
-## Design Stance: Audience of One
+## Design Stance: Audience of One & Workflow-Only Opinionatedness
 
 This repository is built for its author first and published in case its mechanisms are useful to you.
 If making a rule more universally appealing ever conflicts with keeping the author's own workflow sharp — such as requiring a cold read-only Verifier subagent in [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md) or restricting the root git checkout to merge commits only — universal appeal loses every time.
+At the same time, `agent-rig` follows a strict **principle of least opinionatedness outside workflow** ([`docs/adr/0005-workflow-only-opinionatedness-and-unified-profiles.md`](docs/adr/0005-workflow-only-opinionatedness-and-unified-profiles.md)):
+it is heavily opinionated about **engineering workflow and epistemic invariants** (investigation first, worktree isolation, two-gear execution, `Executor != Verifier`, human-gated boundaries, and the directed documentation graph), and deliberately **unopinionated about specific models, subscription tiers, harnesses, or project toolchains**.
 Nothing here is a speculative prompt template:
 every hook, skill, and check was added only after a simpler written rule failed in a real session.
 Where a default convention is too heavy for a small project, the CLI provides opt-out flags (`rig init --no-worktrees`) rather than watering down the defaults.
 
 ---
 
-## Architecture: Global Rig vs. Per-Project State
+## Architecture: Global Rig vs. Three-Mode Repository Adoption
 
 `agent-rig` separates **how you work across every project** from **what a specific project is about**:
 
@@ -22,9 +24,14 @@ Where a default convention is too heavy for a small project, the CLI provides op
    Installs all 8 skills (`skills/`), the Worker and Verifier subagent definitions ([`agents/worker.md`](agents/worker.md), [`agents/verifier.md`](agents/verifier.md)), and the multi-protocol `PreToolUse` guards (`hooks/`) into your harnesses' global configuration directories (`~/.gemini/config/`, `~/.claude/`, `~/.codex/`, `~/.cursor/`).
    Prompts, skills, and agent definitions are statically hydrated with your active model profile from `~/.config/agent-rig/config.json` (layered over the unified preset and model catalog [`templates/profiles.json`](templates/profiles.json) and validated by [`templates/profiles.schema.json`](templates/profiles.schema.json)).
    Running `rig update` or `rig profile use` re-hydrates your harnesses immediately with any changes.
-2. **Per-Project Layer (`rig init`):**
-   Touches a project repository as lightly as possible:
-   sets up git worktree commit hooks (`.rig/hooks/`), leaves the root checkout attached to `main` as a merge-only trunk for code, and provisions an `AGENTS.md` with a demarcated universal engineering rules block and an automated documentation index block alongside a project-context stub, [`docs/backlog.md`](docs/backlog.md), and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md).
+2. **Per-Project Layer (`rig init`) — Three Team & Solo Adoption Modes:**
+   - **Attached Mode (`rig init`, default):**
+     Commits `AGENTS.md` (with a profile-agnostic universal rules block and automated documentation index), [`docs/backlog.md`](docs/backlog.md), [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md), `.rig/hooks/pre-commit`, and `.rig/rules/` to the repository.
+     Every developer on the team shares the same repository workflow invariants while using their own global harness installation and personal model profile in `~/.config/agent-rig/config.json` without git conflicts.
+   - **Self-Contained Mode (`rig init --self-contained`):**
+     Vendors `.rig/bin/rig.mjs`, `.rig/templates/profiles.json`, `.rig/scripts/`, `.rig/hooks/`, and hydrated harness dot-directories (`.gemini/`, `.claude/`, `.codex/`, `.cursor/`) directly into the repository so teammates or CI environments without a global `agent-rig` install run with identical settings out of the box.
+   - **Stealth Mode (`rig init --stealth`):**
+     Scaffolds `AGENTS.md`, `docs/`, and `.rig/hooks/pre-commit` locally and excludes them via `.git/info/exclude`, keeping `git status` completely clean when working solo inside an unrigged team or open-source repository.
 
 ---
 

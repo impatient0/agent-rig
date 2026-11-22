@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, chmodSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { runPreCommitHook } from '../bin/rig.mjs';
+import { runPreCommitHook, verifyStamp, initRepo, attachRepo, ejectRepo } from '../bin/rig.mjs';
 
 const PRE_COMMIT = path.resolve(import.meta.dirname, '../.rig/hooks/pre-commit');
+const PRE_MERGE_COMMIT = path.resolve(import.meta.dirname, '../.rig/hooks/pre-merge-commit');
 const RIG_BIN = path.resolve(import.meta.dirname, '../bin/rig.mjs');
 const CHECK_DOC_LINKS = path.resolve(import.meta.dirname, '../scripts/check-doc-links.mjs');
 const REFLOW_DOCS = path.resolve(import.meta.dirname, '../scripts/reflow-docs.mjs');
@@ -30,6 +31,8 @@ function makeRiggedRepo() {
   mkdirSync(path.join(root, '.rig/hooks'), { recursive: true });
   copyFileSync(PRE_COMMIT, path.join(root, '.rig/hooks/pre-commit'));
   chmodSync(path.join(root, '.rig/hooks/pre-commit'), 0o755);
+  copyFileSync(PRE_MERGE_COMMIT, path.join(root, '.rig/hooks/pre-merge-commit'));
+  chmodSync(path.join(root, '.rig/hooks/pre-merge-commit'), 0o755);
 
   mkdirSync(path.join(root, '.rig/bin'), { recursive: true });
   copyFileSync(RIG_BIN, path.join(root, '.rig/bin/rig.mjs'));
@@ -43,6 +46,7 @@ function makeRiggedRepo() {
   git(root, 'add', '-A');
   git(root, 'commit', '-qm', 'initial');
   git(root, 'config', 'core.hooksPath', '.rig/hooks');
+  git(root, 'config', 'branch.main.mergeOptions', '--no-ff');
 
   const wt = path.join(root, '.worktrees/feat-1');
   git(root, 'worktree', 'add', '-q', '-b', 'feature/feat-1', wt, 'main');
@@ -66,13 +70,22 @@ test('pre-commit refuses direct commits in the main checkout but allows merge co
     const wtCommit = git(wt, 'commit', '-m', 'feat: valid worktree commit');
     assert.equal(wtCommit.status, 0, wtCommit.stderr);
 
-    // 3. Merging feature branch in root checkout via --no-commit then commit succeeds
+    // 3. Merging feature branch in root checkout via --no-commit then commit is blocked without stamp
+    const mergeNoCommitUnstamped = git(root, 'merge', '--no-commit', '--no-ff', 'feature/feat-1');
+    assert.equal(mergeNoCommitUnstamped.status, 0, mergeNoCommitUnstamped.stderr);
+    const blockedMergeCommit = git(root, 'commit', '-m', "Merge branch 'feature/feat-1' into main");
+    assert.notEqual(blockedMergeCommit.status, 0);
+    assert.match(blockedMergeCommit.stderr, /has not been stamped by the Cold Verifier/);
+    git(root, 'merge', '--abort');
+
+    // 4. After verifyStamp in worktree, merge --no-commit + commit succeeds
+    verifyStamp(wt, { homeDir: false });
     const mergeNoCommit = git(root, 'merge', '--no-commit', '--no-ff', 'feature/feat-1');
     assert.equal(mergeNoCommit.status, 0, mergeNoCommit.stderr);
     const mergeCommit = git(root, 'commit', '-m', "Merge branch 'feature/feat-1' into main");
     assert.equal(mergeCommit.status, 0, mergeCommit.stderr);
 
-    // 4. Safe branch deletion succeeds because root HEAD is at the merge commit
+    // 5. Safe branch deletion succeeds because root HEAD is at the merge commit
     git(root, 'worktree', 'remove', wt);
     const branchDel = git(root, 'branch', '-d', 'feature/feat-1');
     assert.equal(branchDel.status, 0, branchDel.stderr);
@@ -81,13 +94,21 @@ test('pre-commit refuses direct commits in the main checkout but allows merge co
   }
 });
 
-test('pre-commit allows plain git merge with auto-commit in the main checkout', () => {
+test('pre-merge-commit blocks unstamped auto-commit merge and allows stamped merge in the main checkout', () => {
   const { root, wt, git, cleanup } = makeRiggedRepo();
   try {
     writeFileSync(path.join(wt, 'feature.js'), 'export const f = 1;\n');
     git(wt, 'add', 'feature.js');
     assert.equal(git(wt, 'commit', '-m', 'feat: new feature').status, 0);
 
+    // Unstamped auto-commit merge is blocked by pre-merge-commit
+    const blockedAutoMerge = git(root, 'merge', '--no-ff', '-m', "Merge branch 'feature/feat-1' into main", 'feature/feat-1');
+    assert.notEqual(blockedAutoMerge.status, 0);
+    assert.match(blockedAutoMerge.stderr, /has not been stamped by the Cold Verifier/);
+    git(root, 'merge', '--abort');
+
+    // After verifyStamp, auto-commit merge succeeds
+    verifyStamp(wt, { homeDir: false });
     const autoMerge = git(root, 'merge', '--no-ff', '-m', "Merge branch 'feature/feat-1' into main", 'feature/feat-1');
     assert.equal(autoMerge.status, 0, autoMerge.stderr);
   } finally {
@@ -251,10 +272,12 @@ test('pre-commit shim non-rig fallback blocks direct commits on main/master whil
     git(root, 'config', 'user.email', 'test@example.com');
     git(root, 'config', 'user.name', 'Test');
 
-    // ONLY copy the 5-line pre-commit shim into .rig/hooks/pre-commit (no .rig/bin/rig.mjs)
+    // ONLY copy the pre-commit and pre-merge-commit shims into .rig/hooks/ (no .rig/bin/rig.mjs)
     mkdirSync(path.join(root, '.rig/hooks'), { recursive: true });
     copyFileSync(PRE_COMMIT, path.join(root, '.rig/hooks/pre-commit'));
     chmodSync(path.join(root, '.rig/hooks/pre-commit'), 0o755);
+    copyFileSync(PRE_MERGE_COMMIT, path.join(root, '.rig/hooks/pre-merge-commit'));
+    chmodSync(path.join(root, '.rig/hooks/pre-merge-commit'), 0o755);
     git(root, 'config', 'core.hooksPath', '.rig/hooks');
 
     // 1. Unborn repo allows initial commit even on main
@@ -278,8 +301,24 @@ test('pre-commit shim non-rig fallback blocks direct commits on main/master whil
     const featRes = git(root, 'commit', '-m', 'feature commit');
     assert.equal(featRes.status, 0, featRes.stderr);
 
-    // 4. Merge commit onto main is PERMITTED by non-rig fallback
+    // 4. Unstamped merge commit onto main is BLOCKED by non-rig fallback (both pre-commit and pre-merge-commit)
     git(root, 'checkout', 'main');
+    const featSha = git(root, 'rev-parse', 'feature/isolated-test').stdout.trim();
+    const blockedAuto = git(root, 'merge', '--no-ff', '-m', 'auto merge', 'feature/isolated-test');
+    assert.notEqual(blockedAuto.status, 0);
+    assert.match(blockedAuto.stderr, /pre-merge-commit: refusing merge onto main/);
+    git(root, 'merge', '--abort');
+
+    const mergeNoCommitBlocked = git(root, 'merge', '--no-commit', '--no-ff', 'feature/isolated-test');
+    assert.equal(mergeNoCommitBlocked.status, 0, mergeNoCommitBlocked.stderr);
+    const blockedCommit = git(root, 'commit', '-m', "Merge branch 'feature/isolated-test' into main");
+    assert.notEqual(blockedCommit.status, 0);
+    assert.match(blockedCommit.stderr, /pre-commit: refusing merge onto main/);
+    git(root, 'merge', '--abort');
+
+    // 5. After stamp file is written, merge commit onto main is PERMITTED by non-rig fallback
+    mkdirSync(path.join(root, '.git/rig/verified'), { recursive: true });
+    writeFileSync(path.join(root, `.git/rig/verified/${featSha}.json`), JSON.stringify({ sha: featSha }));
     const mergeNoCommit = git(root, 'merge', '--no-commit', '--no-ff', 'feature/isolated-test');
     assert.equal(mergeNoCommit.status, 0, mergeNoCommit.stderr);
     const mergeCommit = git(root, 'commit', '-m', "Merge branch 'feature/isolated-test' into main");
@@ -303,6 +342,7 @@ test('pre-commit allows .rig/ and legacy scripts/git-hooks deletion commits on m
     writeFileSync(path.join(wt, 'scripts/git-hooks/pre-commit'), '#!/bin/sh\n# legacy\n');
     git(wt, 'add', 'scripts/git-hooks/pre-commit');
     assert.equal(git(wt, 'commit', '-m', 'chore: add legacy hook in branch').status, 0);
+    verifyStamp(wt, { homeDir: false });
 
     const mergeRes = git(root, 'merge', '--no-commit', '--no-ff', 'feature/feat-1');
     assert.equal(mergeRes.status, 0, mergeRes.stderr);
@@ -356,5 +396,146 @@ test('pre-commit allows .rig/ and legacy scripts/git-hooks deletion commits on m
     assert.match(mixedCommit.stderr, /refusing direct commit in the main checkout/);
   } finally {
     cleanup();
+  }
+});
+
+test('bare git merge is forced to --no-ff and gated by rig verify-stamp, and additional commits invalidate the stamp', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'rig-noff-gate-'));
+  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+  try {
+    git(root, 'init', '-q', '-b', 'main');
+    git(root, 'config', 'user.email', 'test@example.com');
+    git(root, 'config', 'user.name', 'Test');
+    writeFileSync(path.join(root, 'app.js'), 'console.log(1);\n');
+    git(root, 'add', 'app.js');
+    git(root, 'commit', '-qm', 'initial');
+
+    // initRepo sets branch.main.mergeOptions = --no-ff and installs pre-commit + pre-merge-commit
+    const initRes = initRepo(root, { worktrees: true, homeDir: false });
+    assert.equal(initRes.hooksConfigured, true);
+    assert.equal(git(root, 'config', '--get', 'branch.main.mergeOptions').stdout.trim(), '--no-ff');
+
+    const wt = initRes.initWorktree.path;
+    git(wt, 'commit', '-qm', 'chore(rig): init rig');
+    verifyStamp(wt, { homeDir: false });
+    assert.equal(git(root, 'merge', '-m', "Merge branch 'chore/rig-init' into main", 'chore/rig-init').status, 0);
+    git(root, 'worktree', 'remove', wt);
+
+    // Create a new feature worktree ahead of main (fast-forward candidate!)
+    const featWt = path.join(root, '.worktrees/feat-ff');
+    git(root, 'worktree', 'add', '-q', '-b', 'feature/feat-ff', featWt, 'main');
+    writeFileSync(path.join(featWt, 'feat.js'), 'export const ff = true;\n');
+    git(featWt, 'add', 'feat.js');
+    assert.equal(git(featWt, 'commit', '-m', 'feat: ff candidate').status, 0);
+
+    // 1. Bare `git merge feature/feat-ff` on main is forced to --no-ff and blocked without stamp
+    const bareBlocked = git(root, 'merge', '-m', 'bare merge', 'feature/feat-ff');
+    assert.notEqual(bareBlocked.status, 0);
+    assert.match(bareBlocked.stderr, /has not been stamped by the Cold Verifier/);
+    git(root, 'merge', '--abort');
+
+    // 2. Stamp the feature worktree tip
+    const firstStamp = verifyStamp(featWt, { homeDir: false });
+    assert.ok(existsSync(firstStamp.stampPath));
+
+    // 3. Making another commit in the worktree invalidates the prior stamp
+    writeFileSync(path.join(featWt, 'feat.js'), 'export const ff = false;\n');
+    git(featWt, 'add', 'feat.js');
+    assert.equal(git(featWt, 'commit', '-m', 'feat: second commit').status, 0);
+
+    const invalidatedBlocked = git(root, 'merge', '-m', 'bare merge after 2nd commit', 'feature/feat-ff');
+    assert.notEqual(invalidatedBlocked.status, 0);
+    assert.match(invalidatedBlocked.stderr, /has not been stamped by the Cold Verifier/);
+    git(root, 'merge', '--abort');
+
+    // 4. Re-stamping the new HEAD allows bare `git merge` (creating a merge commit, not fast-forward)
+    const mainBefore = git(root, 'rev-parse', 'main').stdout.trim();
+    const featTip = git(featWt, 'rev-parse', 'HEAD').stdout.trim();
+    const secondStamp = verifyStamp(featWt, { homeDir: false });
+    assert.notEqual(secondStamp.sha, firstStamp.sha);
+    assert.equal(secondStamp.sha, featTip);
+
+    const bareOk = git(root, 'merge', '-m', "Merge branch 'feature/feat-ff' into main", 'feature/feat-ff');
+    assert.equal(bareOk.status, 0, bareOk.stderr);
+    const parents = git(root, 'rev-list', '--parents', '-n', '1', 'HEAD').stdout.trim().split(' ');
+    assert.equal(parents.length, 3, 'bare git merge must create a 2-parent merge commit via --no-ff');
+    assert.equal(parents[1], mainBefore);
+    assert.equal(parents[2], featTip);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('verifyStamp validates branch/cleanliness invariants, writes deterministic metadata, and gracefully falls back without profile catalog', () => {
+  const { root, wt, git, cleanup } = makeRiggedRepo();
+  try {
+    // 1. Refuses main in root checkout
+    assert.throws(() => verifyStamp(root, { homeDir: false }), /Refusing to stamp branch 'main' directly/);
+
+    // 2. Refuses master as well
+    git(root, 'branch', '-m', 'main', 'master');
+    assert.throws(() => verifyStamp(root, { homeDir: false }), /Refusing to stamp branch 'master' directly/);
+    git(root, 'branch', '-m', 'master', 'main');
+
+    // 3. Refuses dirty working tree (unstaged tracked modification & staged change)
+    writeFileSync(path.join(wt, 'app.js'), 'console.log(999);\n');
+    assert.throws(() => verifyStamp(wt, { homeDir: false }), /Refusing to stamp dirty working tree/);
+    git(wt, 'add', 'app.js');
+    assert.throws(() => verifyStamp(wt, { homeDir: false }), /Refusing to stamp dirty working tree/);
+    git(wt, 'commit', '-qm', 'feat: clean commit');
+
+    // 4. Untracked file does not block stamping
+    writeFileSync(path.join(wt, 'scratch.tmp'), 'untracked\n');
+
+    // 5. Graceful fallback when rigRoot lacks templates/profiles.json
+    const minimalRigRoot = mkdtempSync(path.join(tmpdir(), 'rig-minimal-root-'));
+    try {
+      const fallbackRes = verifyStamp(wt, { homeDir: false, rigRoot: minimalRigRoot });
+      const parsed = JSON.parse(readFileSync(fallbackRes.stampPath, 'utf8'));
+      assert.equal(parsed.sha, git(wt, 'rev-parse', 'HEAD').stdout.trim());
+      assert.equal(parsed.branch, 'feature/feat-1');
+      assert.equal(parsed.baseSha, git(root, 'rev-parse', 'main').stdout.trim());
+      assert.ok(Date.parse(parsed.timestamp) > 0);
+      assert.equal(parsed.profile, null);
+      assert.equal(parsed.workerModel, null);
+      assert.equal(parsed.verifierModel, null);
+    } finally {
+      rmSync(minimalRigRoot, { recursive: true, force: true });
+    }
+
+    // 6. Full profile metadata populated when catalog is present
+    const fullRes = verifyStamp(wt, { homeDir: false });
+    const fullParsed = JSON.parse(readFileSync(fullRes.stampPath, 'utf8'));
+    assert.equal(fullParsed.harness, 'antigravity');
+    assert.equal(fullParsed.profile, 'antigravity-pro');
+    assert.ok(fullParsed.workerModel);
+    assert.ok(fullParsed.verifierModel);
+  } finally {
+    cleanup();
+  }
+});
+
+test('ejectRepo unsets branch.main.mergeOptions when --no-ff while preserving custom mergeOptions', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'rig-eject-mergeopt-'));
+  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+  try {
+    git(root, 'init', '-q', '-b', 'main');
+    git(root, 'config', 'user.email', 'test@example.com');
+    git(root, 'config', 'user.name', 'Test');
+    writeFileSync(path.join(root, 'AGENTS.md'), '# App\n');
+    git(root, 'add', 'AGENTS.md');
+    git(root, 'commit', '-qm', 'init');
+
+    attachRepo(root, { homeDir: false });
+    assert.equal(git(root, 'config', '--get', 'branch.main.mergeOptions').stdout.trim(), '--no-ff');
+
+    // Set a custom non-rig mergeOptions on master to ensure ejectRepo leaves it untouched
+    git(root, 'config', 'branch.master.mergeOptions', '--ff-only');
+
+    ejectRepo(root, { homeDir: false });
+    assert.equal(git(root, 'config', '--get', 'branch.main.mergeOptions').stdout.trim(), '');
+    assert.equal(git(root, 'config', '--get', 'branch.master.mergeOptions').stdout.trim(), '--ff-only');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

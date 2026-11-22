@@ -26,6 +26,11 @@ in an unrigged repository, use standard git commands instead.
    Confirm you are on `main` (`git -C <root> symbolic-ref --short HEAD`), the working tree is clean (`git -C <root> status --short`), and no unresolved merge is in progress (`test ! -f "<root>/.git/MERGE_HEAD"`). *(If another session is mid-merge, stop and report rather than stacking merges).*
 3. **Optional remote pull:**
    If a remote tracking branch is configured, fast-forward `main` first (`git -C <root> pull --ff-only`).
+<!-- RIG:IF distribution=rig -->
+4. **Verify Cold Verifier stamp:**
+   Ensure the incoming branch tip (`$BRANCH`) has a Cold Verifier stamp at `<git-common-dir>/rig/verified/<head-sha>.json` recorded by `rig verify-stamp`.
+   Merges onto `main` or `master` are enforced by `.rig/hooks/pre-merge-commit` and `.rig/hooks/pre-commit`, and `branch.<main|master>.mergeOptions` is set to `--no-ff` so bare `git merge` cannot fast-forward past the gate.
+<!-- RIG:ENDIF -->
 
 ---
 
@@ -44,7 +49,10 @@ in an unrigged repository, use standard git commands instead.
    the main checkout edit guard refuses code modifications there, and the orchestrator lacks line-level slice context.
    All conflict resolution is owned by the authoring Worker whose incoming branch caused the conflict.
    Task that Worker inside its live worktree to run `git merge main`, resolve conflicting files using its direct domain context of the slice, verify tests, and commit the merge.
-   Spawn a fresh Cold Verifier subagent ([`agents/verifier.md`](../../agents/verifier.md)) to audit the resolved branch diff against `main` before re-attempting Step 2.
+   Spawn a fresh Cold Verifier subagent ([`agents/verifier.md`](../../agents/verifier.md)) to audit the resolved branch diff against `main` before re-attempting the merge.
+<!-- RIG:IF distribution=rig -->
+   Resolving conflicts in the worktree creates a new `HEAD` SHA that invalidates any prior stamp, so the fresh Cold Verifier pass must run `rig verify-stamp` on the new `HEAD` before re-attempting the merge.
+<!-- RIG:ENDIF -->
 3. **Verification gate:**
 <!-- RIG:IF distribution=rig -->
    Once git merges cleanly without conflicts, run the project's full test and documentation verification suite in `<root>` (`npm test`, `rig check-docs`, `rig reflow-docs --check`) on the uncommitted merge state.
@@ -88,6 +96,9 @@ Merging intermediate branches individually is unnecessary because the tip branch
 
 1. **Verify stack ancestry:**
    Confirm each branch in the stack is verified and forms a direct ancestry chain (`git merge-base --is-ancestor <ancestor-branch> <tip-branch>`).
+<!-- RIG:IF distribution=rig -->
+   Running `rig verify-stamp` on `$TIP_BRANCH` stamps the tip `HEAD` SHA checked in `MERGE_HEAD`.
+<!-- RIG:ENDIF -->
 2. **Merge the tip branch without committing:**
    ```bash
    git -C <root> merge --no-commit --no-ff "$TIP_BRANCH"

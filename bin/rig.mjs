@@ -10,6 +10,7 @@
 //   rig attach [<target-dir>] [--home <dir>] [--force]
 //   rig eject [<target-dir>] [--home <dir>]
 //   rig hook pre-commit [<target-dir>]
+//   rig verify-stamp [<target-dir>] [--harness <id>] [--home <dir>] [--json]
 //   rig check-docs [<target-dir>] [--fix]
 //   rig reflow-docs [<target-dir>] [--check]
 //   rig status [<target-dir>]
@@ -1582,6 +1583,7 @@ export const VENDORED_RIG_FILES = [
   { src: 'hooks/guard-remote-mutation.mjs', dest: '.rig/hooks/guard-remote-mutation.mjs' },
   { src: 'hooks/guard-main-checkout-edits.mjs', dest: '.rig/hooks/guard-main-checkout-edits.mjs' },
   { src: 'hooks/guard-symlinked-node-modules.mjs', dest: '.rig/hooks/guard-symlinked-node-modules.mjs' },
+  { src: '.rig/hooks/pre-merge-commit', dest: '.rig/hooks/pre-merge-commit' },
 ];
 
 export function isSelfContainedRepo(targetDir) {
@@ -1687,6 +1689,11 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
     const srcPreCommit = path.join(rigRoot, '.rig/hooks/pre-commit');
     if (checkFilePending(srcPreCommit, targetPreCommit)) {
       pendingFiles.push(targetPreCommit);
+    }
+    const targetPreMergeCommit = path.join(dir, '.rig/hooks/pre-merge-commit');
+    const srcPreMergeCommit = path.join(rigRoot, '.rig/hooks/pre-merge-commit');
+    if (checkFilePending(srcPreMergeCommit, targetPreMergeCommit)) {
+      pendingFiles.push(targetPreMergeCommit);
     }
   }
 
@@ -1973,6 +1980,12 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
 
   if (shouldWriteRigHook) {
     copyFileSafe(path.join(rigRoot, '.rig/hooks/pre-commit'), path.join(dir, '.rig/hooks/pre-commit'), {
+      force: true,
+      copied,
+      skipped,
+      executable: true,
+    });
+    copyFileSafe(path.join(rigRoot, '.rig/hooks/pre-merge-commit'), path.join(dir, '.rig/hooks/pre-merge-commit'), {
       force: true,
       copied,
       skipped,
@@ -2617,6 +2630,11 @@ export function worktreeInfo(dir) {
   };
 }
 
+function configureMainMergeOptions(mainDir, branch) {
+  if (branch !== 'main' && branch !== 'master') return;
+  spawnSync('git', ['-C', mainDir, 'config', `branch.${branch}.mergeOptions`, '--no-ff'], { encoding: 'utf8' });
+}
+
 export function attachMainCheckout(targetDir) {
   const dir = path.resolve(targetDir);
   const info = worktreeInfo(dir);
@@ -2630,6 +2648,7 @@ export function attachMainCheckout(targetDir) {
   const branchRes = spawnSync('git', ['-C', mainDir, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8' });
   const currentBranch = branchRes.status === 0 ? branchRes.stdout.trim() : null;
   if (currentBranch) {
+    configureMainMergeOptions(mainDir, currentBranch);
     return { attached: true, status: 'already-attached', branch: currentBranch };
   }
 
@@ -2646,8 +2665,10 @@ export function attachMainCheckout(targetDir) {
     if (sw.status !== 0) {
       return { attached: false, status: 'switch-failed', error: sw.stderr.trim() };
     }
+    configureMainMergeOptions(mainDir, 'master');
     return { attached: true, status: 'attached', branch: 'master' };
   }
+  configureMainMergeOptions(mainDir, 'main');
   return { attached: true, status: 'attached', branch: 'main' };
 }
 
@@ -2768,6 +2789,8 @@ export function getHookChainingGuidance(manager) {
       return [
         'To chain agent-rig with Husky, add the following line to .husky/pre-commit:',
         '  ./.rig/hooks/pre-commit "$@"',
+        'And add the following line to .husky/pre-merge-commit:',
+        '  ./.rig/hooks/pre-merge-commit "$@"',
       ].join('\n');
     case 'lefthook':
       return [
@@ -2776,6 +2799,10 @@ export function getHookChainingGuidance(manager) {
         '    commands:',
         '      agent-rig:',
         '        run: ./.rig/hooks/pre-commit',
+        '  pre-merge-commit:',
+        '    commands:',
+        '      agent-rig:',
+        '        run: ./.rig/hooks/pre-merge-commit',
       ].join('\n');
     case 'pre-commit':
       return [
@@ -2788,11 +2815,19 @@ export function getHookChainingGuidance(manager) {
         '        language: system',
         '        always_run: true',
         '        pass_filenames: false',
+        '      - id: agent-rig-merge',
+        '        name: agent-rig pre-merge-commit',
+        '        entry: ./.rig/hooks/pre-merge-commit',
+        '        language: system',
+        '        stages: [pre-merge-commit]',
+        '        always_run: true',
+        '        pass_filenames: false',
       ].join('\n');
     default:
       return [
         `To chain agent-rig with your existing hooks in '${manager.path}':`,
         '  Call ./.rig/hooks/pre-commit from your existing pre-commit hook script.',
+        '  Call ./.rig/hooks/pre-merge-commit from your existing pre-merge-commit hook script.',
       ].join('\n');
   }
 }
@@ -2820,17 +2855,19 @@ export function attachRepo(targetDir = process.cwd(), { homeDir = homedir(), for
     hooksConfigured = cfg.status === 0;
   }
 
-  const hookPath = path.join(mainCheckout, '.rig/hooks/pre-commit');
-  if (!existsSync(hookPath)) {
-    if (existsSync(path.join(mainCheckout, '.rig')) || existsSync(path.join(mainCheckout, 'AGENTS.md'))) {
-      const srcHook = path.join(rigRoot, '.rig/hooks/pre-commit');
-      if (existsSync(srcHook)) {
-        mkdirSync(path.dirname(hookPath), { recursive: true });
-        copyFileSync(srcHook, hookPath);
-        try {
-          chmodSync(hookPath, 0o755);
-        } catch {
-          // ignore
+  for (const hookName of ['pre-commit', 'pre-merge-commit']) {
+    const hookPath = path.join(mainCheckout, '.rig/hooks', hookName);
+    if (!existsSync(hookPath)) {
+      if (existsSync(path.join(mainCheckout, '.rig')) || existsSync(path.join(mainCheckout, 'AGENTS.md'))) {
+        const srcHook = path.join(rigRoot, '.rig/hooks', hookName);
+        if (existsSync(srcHook)) {
+          mkdirSync(path.dirname(hookPath), { recursive: true });
+          copyFileSync(srcHook, hookPath);
+          try {
+            chmodSync(hookPath, 0o755);
+          } catch {
+            // ignore
+          }
         }
       }
     }
@@ -2847,6 +2884,10 @@ export function attachRepo(targetDir = process.cwd(), { homeDir = homedir(), for
   }
 
   const mainCheckoutHead = attachMainCheckout(mainCheckout);
+  if (mainCheckoutHead.status === 'no-commits') {
+    const unbornBranch = gitOut(mainCheckout, ['symbolic-ref', '--short', '-q', 'HEAD']);
+    if (unbornBranch) configureMainMergeOptions(mainCheckout, unbornBranch);
+  }
 
   if (homeDir !== false) {
     writeRigState(homeDir || homedir(), { initializedRepos: [mainCheckout] });
@@ -2947,6 +2988,12 @@ export function initRepo(
 
   if (worktrees || stealth) {
     copyFileSafe(path.join(rigRoot, '.rig/hooks/pre-commit'), path.join(dir, '.rig/hooks/pre-commit'), {
+      force,
+      copied,
+      skipped,
+      executable: true,
+    });
+    copyFileSafe(path.join(rigRoot, '.rig/hooks/pre-merge-commit'), path.join(dir, '.rig/hooks/pre-merge-commit'), {
       force,
       copied,
       skipped,
@@ -3261,6 +3308,10 @@ export function initRepo(
   const mainCheckoutHead = worktrees && where.isRepo && !stealth
     ? attachMainCheckout(mainCheckout)
     : { attached: false, status: worktrees && !stealth ? 'not-a-git-repo' : 'skipped' };
+  if (worktrees && where.isRepo && !stealth && mainCheckoutHead.status === 'no-commits') {
+    const unbornBranch = gitOut(mainCheckout, ['symbolic-ref', '--short', '-q', 'HEAD']);
+    if (unbornBranch) configureMainMergeOptions(mainCheckout, unbornBranch);
+  }
 
   return {
     dir,
@@ -3299,6 +3350,17 @@ export function ejectRepo(targetDir = process.cwd(), { homeDir = homedir() } = {
       if (isRigHooks) {
         const unsetRes = spawnSync('git', ['-C', mainCheckout, 'config', '--unset', 'core.hooksPath'], { encoding: 'utf8' });
         hooksUnset = unsetRes.status === 0;
+      }
+    }
+
+    for (const mainBranch of ['main', 'master']) {
+      const mergeOptRes = spawnSync(
+        'git',
+        ['-C', mainCheckout, 'config', '--get', `branch.${mainBranch}.mergeOptions`],
+        { encoding: 'utf8' },
+      );
+      if (mergeOptRes.status === 0 && mergeOptRes.stdout.trim() === '--no-ff') {
+        spawnSync('git', ['-C', mainCheckout, 'config', '--unset', `branch.${mainBranch}.mergeOptions`], { encoding: 'utf8' });
       }
     }
 
@@ -3434,6 +3496,14 @@ export function statusRepo(targetDir = process.cwd(), { homeDir = homedir(), rig
   const activePreCommit = preCommitCandidates.find((c) => existsSync(c));
   const gitPreCommit = activePreCommit ? path.relative(dir, activePreCommit).replace(/\\/g, '/') : null;
 
+  const preMergeCommitCandidates = [
+    path.join(dir, '.rig/hooks/pre-merge-commit'),
+    path.join(dir, 'scripts/git-hooks/pre-merge-commit'),
+    path.join(dir, '.git/hooks/pre-merge-commit'),
+  ];
+  const activePreMergeCommit = preMergeCommitCandidates.find((c) => existsSync(c));
+  const gitPreMergeCommit = activePreMergeCommit ? path.relative(dir, activePreMergeCommit).replace(/\\/g, '/') : null;
+
   // Canonical rigged-repo check: unrigged repositories (even with their own AGENTS.md or
   // third-party core.hooksPath like .husky, or after rig eject) report mode: 'unrigged'
   // (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
@@ -3489,6 +3559,7 @@ export function statusRepo(targetDir = process.cwd(), { homeDir = homedir(), rig
     },
     hooks: {
       gitPreCommit,
+      gitPreMergeCommit,
       effectiveGuards: hooksEffective,
       local: hooksLocal,
       global: hooksGlobal,
@@ -3683,9 +3754,44 @@ export function runPreCommitHook(targetDir = process.cwd()) {
   const branch = branchRes.status === 0 ? branchRes.stdout.trim() : '';
 
   if (gitDir === commonDir) {
-    // In the main checkout, only merge commits onto main/master are allowed,
+    // In the main checkout, only Cold-Verifier-stamped merge commits onto main/master are allowed,
     // except for documentation, .rig/ assets, and legacy hook deletion commits.
-    if ((branch === 'main' || branch === 'master') && existsSync(path.join(gitDir, 'MERGE_HEAD'))) {
+    const mergeHeadPath = path.join(gitDir, 'MERGE_HEAD');
+    const hasMergeHeadFile = existsSync(mergeHeadPath);
+    const envMergeHeads = Object.keys(process.env)
+      .map((k) => {
+        const m = /^GITHEAD_([0-9a-f]{40,64})$/i.exec(k);
+        return m ? m[1] : null;
+      })
+      .filter(Boolean);
+
+    if ((branch === 'main' || branch === 'master') && (hasMergeHeadFile || envMergeHeads.length > 0)) {
+      const mergeHeads = hasMergeHeadFile
+        ? readFileSync(mergeHeadPath, 'utf8')
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+        : envMergeHeads;
+      if (mergeHeads.length === 0) {
+        return {
+          status: 1,
+          stdout: '',
+          stderr: `pre-commit: refusing merge onto '${branch}' because MERGE_HEAD is empty.\n`,
+        };
+      }
+      for (const sha of mergeHeads) {
+        const stampPath = path.join(commonDir, 'rig', 'verified', `${sha}.json`);
+        if (!existsSync(stampPath)) {
+          return {
+            status: 1,
+            stdout: '',
+            stderr:
+              `pre-commit: refusing merge onto '${branch}' because incoming commit ${sha} has not been stamped by the Cold Verifier.\n` +
+              `Missing verification stamp: ${stampPath}\n` +
+              `Spawn the Cold Verifier subagent (agents/verifier.md) on the target worktree so it runs 'rig verify-stamp' after passing all checks before merging to '${branch}'.\n`,
+          };
+        }
+      }
       return { status: 0, stdout: '', stderr: '' };
     }
 
@@ -3773,6 +3879,84 @@ export function runPreCommitHook(targetDir = process.cwd()) {
   }
 
   return { status: 0, stdout: '', stderr: '' };
+}
+
+export function verifyStamp(targetDir = process.cwd(), { harness = null, homeDir = homedir(), rigRoot = RIG_ROOT } = {}) {
+  const dir = path.resolve(targetDir || process.cwd());
+  if (!existsSync(dir) || gitOut(dir, ['rev-parse', '--is-inside-work-tree']) !== 'true') {
+    throw new Error(`Target directory is not inside a git repository: ${dir}`);
+  }
+
+  const sha = gitOut(dir, ['rev-parse', '--verify', '-q', 'HEAD']);
+  if (!sha) {
+    throw new Error(`Cannot verify-stamp repository '${dir}': no HEAD commit exists.`);
+  }
+
+  const branch = gitOut(dir, ['symbolic-ref', '--short', '-q', 'HEAD']);
+  if (branch === 'main' || branch === 'master') {
+    throw new Error(
+      `Refusing to stamp branch '${branch}' directly: run 'rig verify-stamp' inside a feature worktree before merging.`,
+    );
+  }
+
+  const statusRes = spawnSync('git', ['-C', dir, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' });
+  if (statusRes.status !== 0 || statusRes.stdout.trim().length > 0) {
+    throw new Error(
+      `Refusing to stamp dirty working tree in '${dir}': commit or discard tracked/staged modifications first.`,
+    );
+  }
+
+  const commonDir = gitOut(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (!commonDir) {
+    throw new Error(`Could not resolve git common directory for '${dir}'.`);
+  }
+
+  const baseSha =
+    gitOut(dir, ['merge-base', 'HEAD', 'main']) ||
+    gitOut(dir, ['merge-base', 'HEAD', 'master']) ||
+    null;
+
+  const repoRoot = path.dirname(commonDir);
+  const detectedHarness = harness || detectRepoHarness(dir) || detectRepoHarness(repoRoot) || null;
+  let resolvedHarness = detectedHarness;
+  let profile = null;
+  let workerModel = null;
+  let verifierModel = null;
+
+  try {
+    const effectiveRigRoot = existsSync(path.join(rigRoot, 'templates', 'profiles.json'))
+      ? rigRoot
+      : existsSync(path.join(repoRoot, '.rig', 'templates', 'profiles.json'))
+        ? path.join(repoRoot, '.rig')
+        : rigRoot;
+    const resolved = resolveProfile(detectedHarness || 'antigravity', { rigRoot: effectiveRigRoot, homeDir });
+    resolvedHarness = resolved.harness;
+    profile = resolved.profileName;
+    workerModel = resolved.roles?.worker?.model ?? null;
+    verifierModel = resolved.roles?.verifier?.model ?? null;
+  } catch {
+    // Gracefully fall back to nulls when profile catalog is unavailable in minimal test repos.
+  }
+
+  const stamp = {
+    sha,
+    branch: branch || 'HEAD',
+    baseSha,
+    timestamp: new Date().toISOString(),
+    harness: resolvedHarness,
+    profile,
+    workerModel,
+    verifierModel,
+  };
+
+  const stampPath = path.join(commonDir, 'rig', 'verified', `${sha}.json`);
+  mkdirSync(path.dirname(stampPath), { recursive: true });
+  writeFileSync(stampPath, JSON.stringify(stamp, null, 2) + '\n', 'utf8');
+
+  return {
+    stampPath,
+    ...stamp,
+  };
 }
 
 async function main() {
@@ -3982,6 +4166,37 @@ async function main() {
     process.exit(1);
   }
 
+  if (cmd === 'verify-stamp') {
+    const json = args.includes('--json');
+    const homeIdx = args.indexOf('--home');
+    const homeDir = homeIdx !== -1 && args[homeIdx + 1] ? path.resolve(args[homeIdx + 1]) : homedir();
+    const hIdx = args.findIndex((a) => a === '--harness' || a.startsWith('--harness='));
+    const harness = hIdx !== -1 ? (args[hIdx].includes('=') ? args[hIdx].split('=')[1] : args[hIdx + 1]) : null;
+    let pos = process.cwd();
+    for (let i = 1; i < args.length; i++) {
+      if (args[i] === '--home' || args[i] === '--harness') {
+        i++;
+        continue;
+      }
+      if (!args[i].startsWith('-')) {
+        pos = args[i];
+        break;
+      }
+    }
+    try {
+      const res = verifyStamp(pos, { harness, homeDir });
+      if (json) {
+        console.log(JSON.stringify(res, null, 2));
+      } else {
+        console.log(`rig verify-stamp: verified ${res.branch} (${res.sha}) -> ${res.stampPath}`);
+      }
+    } catch (err) {
+      console.error(`rig verify-stamp: ${err.message}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   if (cmd === 'check-docs') {
     const pos = args.slice(1).find((a) => !a.startsWith('-')) ?? process.cwd();
     const fix = args.includes('--fix');
@@ -4019,6 +4234,7 @@ async function main() {
   rig attach [<target-dir>] [--home <dir>] [--force]
   rig eject [<target-dir>] [--home <dir>]
   rig hook pre-commit [<target-dir>]
+  rig verify-stamp [<target-dir>] [--harness <id>] [--home <dir>] [--json]
   rig check-docs [<target-dir>] [--fix]
   rig reflow-docs [<target-dir>] [--check]
   rig status [<target-dir>]`);

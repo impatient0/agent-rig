@@ -8,4 +8,30 @@ if [ -f "$root/bin/rig.mjs" ] && command -v node >/dev/null 2>&1; then
 fi
 command -v rig >/dev/null 2>&1 && exec rig hook pre-commit "$@"
 [ -x "${HOME:-}/.local/bin/rig" ] && exec "$HOME/.local/bin/rig" hook pre-commit "$@"
-b="$(git symbolic-ref --short -q HEAD 2>/dev/null)" && { [ "$b" = main ] || [ "$b" = master ]; } && git rev-parse --verify -q HEAD >/dev/null 2>&1 && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] && { echo "pre-commit: refusing direct commit in the main checkout on $b." >&2; exit 1; } || exit 0
+b="$(git symbolic-ref --short -q HEAD 2>/dev/null)"
+if [ "$b" = main ] || [ "$b" = master ]; then
+  if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    gdir="$(git rev-parse --git-dir 2>/dev/null)"
+    cdir="$(git rev-parse --git-common-dir 2>/dev/null)"
+    if [ -f "$gdir/MERGE_HEAD" ]; then
+      found=0
+      while IFS= read -r sha || [ -n "$sha" ]; do
+        sha="$(printf '%s' "$sha" | tr -d '[:space:]')"
+        [ -z "$sha" ] && continue
+        found=1
+        if [ ! -f "$cdir/rig/verified/$sha.json" ]; then
+          echo "pre-commit: refusing merge onto $b; incoming commit $sha has no Cold Verifier stamp (run 'rig verify-stamp' in the worktree)." >&2
+          exit 1
+        fi
+      done < "$gdir/MERGE_HEAD"
+      if [ "$found" -eq 0 ]; then
+        echo "pre-commit: refusing merge onto $b; MERGE_HEAD is empty." >&2
+        exit 1
+      fi
+    else
+      echo "pre-commit: refusing direct commit in the main checkout on $b." >&2
+      exit 1
+    fi
+  fi
+fi
+exit 0

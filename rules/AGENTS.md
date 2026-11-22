@@ -17,7 +17,7 @@ By default, parallel agent sessions never share a working tree:
 
 1. **Root checkout stays attached to `main` as a merge-only trunk for code** and code files are never edited directly.
    Documentation, backlog, and project context files (`docs/`, `README.md`, `AGENTS.md`) may be edited and committed directly on `main`, guarded by automated doc linters in `.rig/hooks/pre-commit`.
-   `hooks/guard-main-checkout-edits.mjs` blocks direct code edits and edits to the demarcated agent-rig block in `AGENTS.md`, and `.rig/hooks/pre-commit` ensures only verified merge commits, verified doc-only commits, or `.rig/` / vendored harness asset updates land on `main`.
+   `hooks/guard-main-checkout-edits.mjs` blocks direct code edits and edits to the demarcated agent-rig block in `AGENTS.md`, and `.rig/hooks/pre-commit` (along with `.rig/hooks/pre-merge-commit`) ensures only Cold-Verifier-stamped merge commits, verified doc-only commits, or `.rig/` / vendored harness asset updates land on `main`.
    Standard operations (`git pull`, `git status`) work natively in the root checkout.
 2. **Work happens in a linked git worktree** on a `<type>/<slug>` branch (`feature/<slug>`, `fix/<slug>`, `docs/<slug>`, `chore/<slug>`):
 <!-- RIG:IF harness=antigravity,claude -->
@@ -79,6 +79,7 @@ Agents can discover and run core `rig` CLI commands directly across sessions and
 - `rig check-docs [<target-dir>]` — verify internal Markdown link resolution, heading anchors, and doc reachability.
 - `rig reflow-docs [<target-dir>] [--check]` — enforce or verify one-sentence-per-line Markdown formatting.
 - `rig attach [<target-dir>]` — configure `core.hooksPath .rig/hooks`, attach `main` in the root checkout, and register a cloned repository without creating scaffolding worktrees.
+- `rig verify-stamp [<target-dir>]` — record a Cold Verifier pass stamp (`<git-common-dir>/rig/verified/<head-sha>.json`) on a clean non-`main` branch before merging.
 - `rig update [--all] [--repo <target-dir>]` — refresh global harness plugins, check initialized repositories for pending updates, or selectively update clean repositories ([`skills/rig-update/SKILL.md`](../skills/rig-update/SKILL.md)).
 - `rig eject [<target-dir>]` — cleanly remove `.rig/` and unset `core.hooksPath` while preserving `AGENTS.md` and `docs/`.
 

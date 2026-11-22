@@ -162,7 +162,7 @@ rig init /path/to/your-project
 What `rig init` does by default:
 1. In a repository with existing commits, creates a linked git worktree at `.worktrees/rig-init` on branch `chore/rig-init` (and symlinks `node_modules` if present) so scaffolding can be committed without violating the main-checkout commit lock;
    in an unborn repository, scaffolds directly in the root checkout.
-2. Copies `.rig/hooks/pre-commit`, configures `git config core.hooksPath .rig/hooks` (preserving any existing third-party hook manager unless `--force` is passed), and normalizes `.gitignore` to ignore `.worktrees/` and symlinked `node_modules`.
+2. Copies `.rig/hooks/pre-commit` and `.rig/hooks/pre-merge-commit`, configures `git config core.hooksPath .rig/hooks` (preserving any existing third-party hook manager unless `--force` is passed) and `branch.<branch>.mergeOptions --no-ff`, and normalizes `.gitignore` to ignore `.worktrees/` and symlinked `node_modules`.
 3. Scaffolds and stages a demarcated `AGENTS.md` (combining universal engineering rules, an automated documentation index, and a project-context stub), [`docs/backlog.md`](docs/backlog.md), and [`docs/adr/0001-record-architecture-decisions.md`](docs/adr/0001-record-architecture-decisions.md) if they do not exist yet.
 4. Leaves the root checkout attached to `main` as a merge-only trunk for code and registers the repository in `~/.config/agent-rig/state.json`.
 
@@ -185,8 +185,8 @@ rig attach /path/to/your-project
 
 What `rig attach` does:
 1. Configures `git config core.hooksPath .rig/hooks` unless a third-party hook manager is detected.
-2. Ensures `.rig/hooks/pre-commit` exists in the main checkout when `AGENTS.md` or `.rig/` is present.
-3. Attaches `main` or `master` in the root checkout.
+2. Ensures `.rig/hooks/pre-commit` and `.rig/hooks/pre-merge-commit` exist in the main checkout when `AGENTS.md` or `.rig/` is present.
+3. Attaches `main` or `master` in the root checkout and configures `branch.<branch>.mergeOptions --no-ff` so bare `git merge` cannot fast-forward past the merge gate.
 4. Registers the root checkout in global rig state (`~/.config/agent-rig/state.json`).
 
 Note that `rig init` automatically detects already-rigged repositories and delegates to `rig attach`.
@@ -220,7 +220,7 @@ rig eject /path/to/your-project
 ```
 
 What `rig eject` does:
-1. Unsets `git config core.hooksPath` in the repository if it points to `.rig/hooks` or legacy git hooks.
+1. Unsets `git config core.hooksPath` in the repository if it points to `.rig/hooks` or legacy git hooks, and unsets `branch.main.mergeOptions` / `branch.master.mergeOptions` if set to `--no-ff`.
 2. Deletes `.rig/` and legacy git hooks from the repository.
 3. Removes the repository from global rig state (`~/.config/agent-rig/state.json`).
 4. Preserves `AGENTS.md` and `docs/` as durable documentation while leaving the git repository in a standard un-rigged state.
@@ -265,7 +265,7 @@ What `rig eject` does:
 
 1. **Root checkout stays attached to `main` as a merge-only trunk for code** and code files are never edited directly (`docs/`, `README.md`, and `AGENTS.md` project context may be edited and committed directly on `main`, guarded by automated doc linters).
 2. **Every session or Worker subagent operates in a linked git worktree** on a `<type>/<slug>` branch.
-   `hooks/guard-main-checkout-edits.mjs` blocks direct code edits in the root checkout, and `.rig/hooks/pre-commit` (`rig hook pre-commit`) ensures only verified merge commits, verified doc-only commits, or `.rig/` / vendored harness asset updates land on `main`.
+   `hooks/guard-main-checkout-edits.mjs` blocks direct code edits in the root checkout, and `.rig/hooks/pre-commit` / `.rig/hooks/pre-merge-commit` (`rig hook pre-commit`) ensure only Cold-Verifier-stamped merge commits (`rig verify-stamp`), verified doc-only commits, or `.rig/` / vendored harness asset updates land on `main`.
 3. **Shared dependency caching via symlinked `node_modules`:**
    If the repository has a `node_modules` directory at the root, symlink it into the worktree (`ln -s ../../node_modules node_modules`) unless the branch modifies dependencies (`hooks/guard-symlinked-node-modules.mjs` blocks package installs against a symlinked directory).
 4. **Merging happens directly in the root checkout** via [`skills/merge-to-main/SKILL.md`](skills/merge-to-main/SKILL.md):
@@ -320,7 +320,8 @@ cp templates/ci/rig-verify.yml .github/workflows/rig-verify.yml
 - `hooks/guard-remote-mutation.mjs` — Prompts (`ask`) before commands that mutate remote or shared state (`ssh`, `scp`, `rsync`, `crontab`, `docker -H`, `git push` to `main`, mutating `gh` calls).
 - `hooks/guard-main-checkout-edits.mjs` — Refuses (`deny`) code file edits in the root checkout while permitting `README.md`, `AGENTS.md` project context, and `docs/` edits (and auto-attaching `core.hooksPath` in fresh clones).
 - `hooks/guard-symlinked-node-modules.mjs` — Refuses (`deny`) `npm`, `pnpm`, `yarn`, and `bun` installs when `node_modules` is a shared symlink (including `cd .worktrees/<slug> && npm install` chains).
-- `.rig/hooks/pre-commit` — Invokes `rig hook pre-commit` (with POSIX shell fallback) to refuse direct code commits in the root checkout and direct commits on `main` in linked worktrees, while allowing verified merge commits, linter-verified doc commits (`docs/`, `README.md`, `AGENTS.md`), and `.rig/` or vendored harness asset updates on `main`/`master`.
+- `.rig/hooks/pre-commit` — Invokes `rig hook pre-commit` (with POSIX shell fallback) to refuse direct code commits in the root checkout and direct commits on `main` in linked worktrees, while allowing Cold-Verifier-stamped merge commits (`rig verify-stamp`), linter-verified doc commits (`docs/`, `README.md`, `AGENTS.md`), and `.rig/` or vendored harness asset updates on `main`/`master`.
+- `.rig/hooks/pre-merge-commit` — Invokes `rig hook pre-commit` (with POSIX shell fallback) on auto-committing merges onto `main`/`master` to enforce the Cold Verifier stamp gate (`<git-common-dir>/rig/verified/<head-sha>.json`).
 
 ### Documentation Graph Linters (`scripts/`)
 - `scripts/check-doc-links.mjs` — Enforces resolved relative links and `#fragment` headings, bans wiki-style refs/globs/bare backticked doc paths, verifies reachability from entry points, checks cited repo paths on disk, and enforces ADR byte budgets.

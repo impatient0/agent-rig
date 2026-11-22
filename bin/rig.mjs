@@ -338,7 +338,41 @@ export function migrateLegacyLocalConfig(rigRoot = RIG_ROOT, homeDir = homedir()
   }
 }
 
-export function loadUserConfig({ homeDir = homedir(), rigRoot = RIG_ROOT } = {}) {
+export function harnessConfigMirrorPath(harness, homeDir = homedir()) {
+  if (!homeDir || !harness) return null;
+  switch (harness) {
+    case 'antigravity':
+      return path.join(homeDir, '.gemini', 'config', 'plugins', 'agent-rig', 'config.json');
+    case 'claude':
+      return path.join(homeDir, '.claude', '.agent-rig-config.json');
+    case 'codex':
+      return path.join(homeDir, '.codex', '.agent-rig-config.json');
+    case 'cursor':
+      return path.join(homeDir, '.cursor', '.agent-rig-config.json');
+    default:
+      return null;
+  }
+}
+
+export function writeHarnessConfigMirror(harness, { homeDir = homedir(), updated = null } = {}) {
+  const mirrorPath = harnessConfigMirrorPath(harness, homeDir);
+  if (!mirrorPath) return null;
+  const userCfgPath = homeDir ? path.join(homeDir, '.config', 'agent-rig', 'config.json') : null;
+  let sparse = {};
+  if (userCfgPath && existsSync(userCfgPath)) {
+    try {
+      sparse = JSON.parse(readFileSync(userCfgPath, 'utf8'));
+    } catch {
+      sparse = {};
+    }
+  }
+  mkdirSync(path.dirname(mirrorPath), { recursive: true });
+  writeFileSync(mirrorPath, JSON.stringify(sparse, null, 2) + '\n', 'utf8');
+  if (Array.isArray(updated)) updated.push(mirrorPath);
+  return mirrorPath;
+}
+
+export function loadUserConfig({ homeDir = homedir(), rigRoot = RIG_ROOT, harness = null } = {}) {
   const userCfgPath = homeDir ? path.join(homeDir, '.config', 'agent-rig', 'config.json') : null;
   if (userCfgPath && existsSync(userCfgPath)) {
     try {
@@ -357,12 +391,30 @@ export function loadUserConfig({ homeDir = homedir(), rigRoot = RIG_ROOT } = {})
       }
     }
   }
+  // Sandboxed agent shells often hide ~/.config/agent-rig while keeping each harness's
+  // own plugin/config directory readable; fall back to the harness-local read-only mirror
+  // written during installation/profile updates (ADR 0005).
+  if (homeDir) {
+    const harnessOrder = harness
+      ? [harness, ...KNOWN_HARNESSES.map((h) => h.id).filter((id) => id !== harness)]
+      : KNOWN_HARNESSES.map((h) => h.id);
+    for (const hId of harnessOrder) {
+      const mirrorPath = harnessConfigMirrorPath(hId, homeDir);
+      if (mirrorPath && existsSync(mirrorPath)) {
+        try {
+          return JSON.parse(readFileSync(mirrorPath, 'utf8'));
+        } catch {
+          // ignore corrupted mirror and try next
+        }
+      }
+    }
+  }
   return {};
 }
 
-export function loadRigConfig(rigRoot = RIG_ROOT, { homeDir = homedir() } = {}) {
+export function loadRigConfig(rigRoot = RIG_ROOT, { homeDir = homedir(), harness = null } = {}) {
   const catalog = loadCatalog(rigRoot);
-  const userCfg = loadUserConfig({ homeDir, rigRoot });
+  const userCfg = loadUserConfig({ homeDir, rigRoot, harness });
 
   const builtinProfiles = catalog.profiles || {};
   const userProfiles = userCfg.profiles || {};
@@ -395,14 +447,25 @@ export function writeRigConfig(config, { homeDir = homedir() } = {}) {
   const targetHome = typeof homeDir === 'string' ? homeDir : homedir();
   const p = path.join(targetHome, '.config', 'agent-rig', 'config.json');
   mkdirSync(path.dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(config, null, 2) + '\n', 'utf8');
+  const serialized = JSON.stringify(config, null, 2) + '\n';
+  writeFileSync(p, serialized, 'utf8');
+  for (const h of KNOWN_HARNESSES) {
+    const mirrorPath = harnessConfigMirrorPath(h.id, targetHome);
+    if (mirrorPath && existsSync(mirrorPath)) {
+      try {
+        writeFileSync(mirrorPath, serialized, 'utf8');
+      } catch {
+        // best-effort mirror refresh
+      }
+    }
+  }
   return config;
 }
 
 export function resolveSubagentModel(harness, model, explicitSubagentModel = null, { rigRoot = RIG_ROOT, homeDir = homedir(), userConfig = null } = {}) {
   if (explicitSubagentModel) return explicitSubagentModel;
   const catalog = loadCatalog(rigRoot);
-  const effectiveUser = userConfig ?? loadUserConfig({ homeDir, rigRoot });
+  const effectiveUser = userConfig ?? loadUserConfig({ homeDir, rigRoot, harness });
   const userModels = effectiveUser?.models ?? {};
   const userHarnesses = effectiveUser?.harnesses ?? {};
 
@@ -438,12 +501,12 @@ export function resolveProfile(harness, { profileName = null, rigRoot = RIG_ROOT
   }
   const cfg = userConfig
     ? {
-        ...loadRigConfig(rigRoot, { homeDir }),
+        ...loadRigConfig(rigRoot, { homeDir, harness }),
         ...userConfig,
-        activeProfiles: { ...loadRigConfig(rigRoot, { homeDir }).activeProfiles, ...(userConfig.activeProfiles || {}) },
-        profiles: { ...loadRigConfig(rigRoot, { homeDir }).profiles, ...(userConfig.profiles || {}) },
+        activeProfiles: { ...loadRigConfig(rigRoot, { homeDir, harness }).activeProfiles, ...(userConfig.activeProfiles || {}) },
+        profiles: { ...loadRigConfig(rigRoot, { homeDir, harness }).profiles, ...(userConfig.profiles || {}) },
       }
-    : loadRigConfig(rigRoot, { homeDir });
+    : loadRigConfig(rigRoot, { homeDir, harness });
   const targetProfileName = profileName || cfg.activeProfiles?.[harness];
   if (!targetProfileName) {
     throw new Error(`No active profile configured for harness: ${harness}`);
@@ -1308,6 +1371,7 @@ function installForAntigravity(homeDir, { force = false, hydrated = [], linked =
   const merged = mergeAntigravityPluginsJson(current, pluginsDir);
   writeFileSync(pluginsJsonPath, JSON.stringify(merged, null, 2) + '\n', 'utf8');
   updated.push(pluginsJsonPath);
+  writeHarnessConfigMirror('antigravity', { homeDir, updated });
 }
 
 function installForClaude(homeDir, { force = false, hydrated = [], linked = [], skipped = [], updated = [], pruned = [], rigRoot = RIG_ROOT, obsoleteSkills = [], nodeBin = resolveNodeBinary() } = {}) {
@@ -1416,6 +1480,7 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
   const merged = mergeClaudeSettings(existing, globalHooks);
   writeFileSync(settingsPath, JSON.stringify(merged, null, 2) + '\n', 'utf8');
   updated.push(settingsPath);
+  writeHarnessConfigMirror('claude', { homeDir, updated });
 }
 
 function installForCodex(homeDir, { force = false, hydrated = [], skipped = [], pruned = [], rigRoot = RIG_ROOT, obsoleteSkills = [] }) {
@@ -1451,6 +1516,7 @@ function installForCodex(homeDir, { force = false, hydrated = [], skipped = [], 
       // ignore
     }
   }
+  writeHarnessConfigMirror('codex', { homeDir });
 }
 
 function installForCursor(homeDir, { force = false, hydrated = [], skipped = [], pruned = [], rigRoot = RIG_ROOT, obsoleteSkills = [] }) {
@@ -1486,6 +1552,7 @@ function installForCursor(homeDir, { force = false, hydrated = [], skipped = [],
       // ignore
     }
   }
+  writeHarnessConfigMirror('cursor', { homeDir });
 }
 
 export function installRig({
@@ -2554,7 +2621,7 @@ export function resolveRoleModel(role, { harness = null, profileName = null, rig
   if (!ROLES.includes(role)) {
     throw new Error(`Invalid role "${role}". Valid roles are: ${ROLES.join(', ')}`);
   }
-  const cfg = loadRigConfig(rigRoot, { homeDir });
+  const cfg = loadRigConfig(rigRoot, { homeDir, harness });
   let targetHarness = harness;
   if (!targetHarness) {
     if (profileName && cfg.profiles?.[profileName]) {

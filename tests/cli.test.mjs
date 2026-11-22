@@ -49,6 +49,7 @@ import {
   VENDORED_RIG_FILES,
   listSkills,
   isIgnoredFsEntry,
+  harnessConfigMirrorPath,
 } from '../bin/rig.mjs';
 import { isRiggedRepo } from '../hooks/guard-main-checkout-edits.mjs';
 
@@ -740,6 +741,71 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
     const migratedWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
     assert.equal(migratedWorker.profile, 'antigravity-pro');
     assert.equal(migratedWorker.model, 'gemini-4-hydrogen');
+  } finally {
+    rmSync(fakeRig, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('sandboxed model resolution falls back to harness-local config mirror when ~/.config/agent-rig is hidden', () => {
+  const fakeRig = mkdtempSync(path.join(tmpdir(), 'rig-sandbox-mirror-src-'));
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-sandbox-mirror-home-'));
+  try {
+    mkdirSync(path.join(fakeRig, 'templates'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'rules'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'agents'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'skills', 'dispatch'), { recursive: true });
+    mkdirSync(path.join(fakeRig, 'hooks', 'lib'), { recursive: true });
+    copyFileSync(path.join(RIG_ROOT, 'templates/profiles.json'), path.join(fakeRig, 'templates/profiles.json'));
+    copyFileSync(path.join(RIG_ROOT, 'plugin.json'), path.join(fakeRig, 'plugin.json'));
+    copyFileSync(path.join(RIG_ROOT, 'hooks.json'), path.join(fakeRig, 'hooks.json'));
+    writeFileSync(path.join(fakeRig, 'rules/AGENTS.md'), '# Rules\n');
+    writeFileSync(path.join(fakeRig, 'agents/worker.md'), '# Worker\nModel: {{MODEL_WORKER}}\n');
+    writeFileSync(path.join(fakeRig, 'skills/dispatch/SKILL.md'), '# Dispatch\nModel: {{SUBAGENT_MODEL_WORKER}}\n');
+
+    installRig({ homeDir: fakeHome, harnesses: ['antigravity', 'claude', 'codex', 'cursor'], rigRoot: fakeRig });
+    for (const h of ['antigravity', 'claude', 'codex', 'cursor']) {
+      assert.equal(existsSync(harnessConfigMirrorPath(h, fakeHome)), true, `mirror missing for ${h}`);
+    }
+
+    // Activate antigravity-ultra and claude-max on the host
+    useProfile('antigravity-ultra', { rigRoot: fakeRig, homeDir: fakeHome });
+    useProfile('claude-max', { rigRoot: fakeRig, homeDir: fakeHome });
+
+    // Simulate sandbox hiding ~/.config/agent-rig (ENOENT) while harness dirs remain readable
+    rmSync(path.join(fakeHome, '.config', 'agent-rig'), { recursive: true, force: true });
+
+    const agyWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
+    assert.equal(agyWorker.profile, 'antigravity-ultra');
+    assert.equal(agyWorker.model, 'gemini-4-neon');
+    assert.equal(agyWorker.subagentModel, 'pro');
+
+    const claudeWorker = resolveRoleModel('worker', { harness: 'claude', rigRoot: fakeRig, homeDir: fakeHome });
+    assert.equal(claudeWorker.profile, 'claude-max');
+    assert.equal(claudeWorker.model, 'claude-opus-5-5');
+    assert.equal(claudeWorker.subagentModel, 'opus');
+
+    const listed = listProfiles(fakeRig, { homeDir: fakeHome });
+    assert.equal(listed.activeProfiles.antigravity, 'antigravity-ultra');
+    assert.equal(listed.activeProfiles.claude, 'claude-max');
+
+    // Custom copy-on-write overrides also survive when ~/.config/agent-rig is hidden
+    setProfileRole('worker', 'claude-opus-5-5', { effort: 'medium', rigRoot: fakeRig, homeDir: fakeHome, harness: 'antigravity' });
+    rmSync(path.join(fakeHome, '.config', 'agent-rig'), { recursive: true, force: true });
+    const customWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
+    assert.equal(customWorker.profile, 'antigravity-custom');
+    assert.equal(customWorker.model, 'claude-opus-5-5');
+    assert.equal(customWorker.subagentModel, 'pro');
+
+    // Canonical ~/.config/agent-rig/config.json takes precedence over a stale harness mirror
+    mkdirSync(path.join(fakeHome, '.config', 'agent-rig'), { recursive: true });
+    writeFileSync(
+      path.join(fakeHome, '.config', 'agent-rig', 'config.json'),
+      JSON.stringify({ activeProfiles: { antigravity: 'antigravity-pro' } }, null, 2) + '\n',
+    );
+    const canonicalWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
+    assert.equal(canonicalWorker.profile, 'antigravity-pro');
+    assert.equal(canonicalWorker.model, 'gemini-4-hydrogen');
   } finally {
     rmSync(fakeRig, { recursive: true, force: true });
     rmSync(fakeHome, { recursive: true, force: true });

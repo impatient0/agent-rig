@@ -168,4 +168,4 @@ When a developer works across multiple machines with different subscription tier
 
 **Fix in [`docs/adr/0005-workflow-only-opinionatedness-and-unified-profiles.md`](adr/0005-workflow-only-opinionatedness-and-unified-profiles.md):**
 `agent-rig` enforces workflow-only opinionatedness:
-the demarcated `AGENTS.md` block is 100% harness-agnostic and profile-agnostic, while concrete model bindings are hydrated into each machine's global harness skills and subagents from the unified [`templates/profiles.json`](../templates/profiles.json) catalog and sparse `~/.config/agent-rig/config.json` overrides (with copy-on-write pinning into `<harness>-custom` only when `rig profile set` is invoked).
+the demarcated `AGENTS.md` block is 100% harness-agnostic and profile-agnostic, while concrete model bindings are hydrated into each machine's global harness skills and subagents from the unified `templates/profiles.json` catalog and sparse `~/.config/agent-rig/config.json` overrides (with copy-on-write pinning into `<harness>-custom` only when `rig profile set` is invoked).

@@ -1,0 +1,35 @@
+#!/usr/bin/env sh
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+if [ -f "$root/.rig/bin/rig.mjs" ] && command -v node >/dev/null 2>&1; then
+  exec node "$root/.rig/bin/rig.mjs" hook pre-commit "$@"
+fi
+if [ -f "$root/bin/rig.mjs" ] && command -v node >/dev/null 2>&1; then
+  exec node "$root/bin/rig.mjs" hook pre-commit "$@"
+fi
+command -v rig >/dev/null 2>&1 && exec rig hook pre-commit "$@"
+[ -x "${HOME:-}/.local/bin/rig" ] && exec "$HOME/.local/bin/rig" hook pre-commit "$@"
+b="$(git symbolic-ref --short -q HEAD 2>/dev/null)"
+if [ "$b" = main ] || [ "$b" = master ]; then
+  gdir="$(git rev-parse --git-dir 2>/dev/null)"
+  cdir="$(git rev-parse --git-common-dir 2>/dev/null)"
+  shas=""
+  if [ -f "$gdir/MERGE_HEAD" ]; then
+    shas="$(tr '\r\n' '  ' < "$gdir/MERGE_HEAD")"
+  else
+    shas="$(env | sed -n 's/^GITHEAD_\([0-9a-fA-F][0-9a-fA-F]*\)=.*/\1/p' | tr '\r\n' '  ')"
+  fi
+  found=0
+  for sha in $shas; do
+    [ -z "$sha" ] && continue
+    found=1
+    if [ ! -f "$cdir/rig/verified/$sha.json" ]; then
+      echo "pre-merge-commit: refusing merge onto $b; incoming commit $sha has no Cold Verifier stamp (run 'rig verify-stamp' in the worktree)." >&2
+      exit 1
+    fi
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "pre-merge-commit: refusing merge onto $b; no incoming merge parent SHA found." >&2
+    exit 1
+  fi
+fi
+exit 0

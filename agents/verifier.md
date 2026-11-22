@@ -59,6 +59,14 @@ Evaluate the diff against each check in order:
 4. **Mechanical Verification Gate:**
    - Confirm the test suite and documentation linters exit with status `0`.
 
+<!-- RIG:IF distribution=rig -->
+### Recording the Verification Stamp (`VERDICT: PASS` Only)
+
+When—and **only** when—all four mandatory audit checks above pass (`VERDICT: PASS`), run `rig verify-stamp` inside the target worktree before returning your report so `<git-common-dir>/rig/verified/<head-sha>.json` is recorded for the merge gate.
+If any check fails (`VERDICT: FAIL`), do **not** run `rig verify-stamp`.
+Do not modify any repository working-tree files, stage changes, or create commits.
+<!-- RIG:ENDIF -->
+
 ---
 
 ## Required Output Format

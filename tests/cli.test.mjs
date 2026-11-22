@@ -113,7 +113,7 @@ test('initRepo on a main checkout with history scaffolds into a linked worktree 
     // Scaffolding lands in the worktree, never in the main checkout.
     assert.ok(existsSync(path.join(wt, 'AGENTS.md')));
     assert.ok(existsSync(path.join(wt, '.rig/hooks/pre-commit')));
-    assert.equal(existsSync(path.join(wt, '.rig/hooks/pre-merge-commit')), false);
+    assert.ok(existsSync(path.join(wt, '.rig/hooks/pre-merge-commit')));
     assert.equal(existsSync(path.join(root, 'AGENTS.md')), false);
 
     // The worktree shares node_modules through a symlink, and .gitignore covers both it and .worktrees/.
@@ -530,11 +530,13 @@ test('self-contained initRepo bundles skills, subagents, rules, hooks, and linte
     assert.equal(st.hooks.effectiveGuards.length, 3);
     assert.equal(st.hooksPresent.length, 3);
     assert.equal(st.hooks.gitPreCommit, '.rig/hooks/pre-commit');
+    assert.equal(st.hooks.gitPreMergeCommit, '.rig/hooks/pre-merge-commit');
     assert.ok(existsSync(path.join(dir, '.claude/agents/verifier.md')));
     assert.ok(existsSync(path.join(dir, '.claude/agents/worker.md')));
     assert.ok(existsSync(path.join(dir, '.claude/rules/contract-change-gate.md')));
     assert.ok(existsSync(path.join(dir, '.rig/bin/rig.mjs')));
     assert.ok(existsSync(path.join(dir, '.rig/hooks/pre-commit')));
+    assert.ok(existsSync(path.join(dir, '.rig/hooks/pre-merge-commit')));
 
     const checkLinks = runCheckDocs(dir);
     assert.equal(checkLinks.status, 0, `${checkLinks.stdout}${checkLinks.stderr}`);
@@ -1154,9 +1156,11 @@ test('attachRepo configures hooks, re-attaches main, ensures pre-commit hook, an
     assert.equal(git(root, 'symbolic-ref', '--short', 'HEAD').stdout.trim(), 'main');
     assert.equal(git(root, 'config', '--get', 'core.hooksPath').stdout.trim(), '.rig/hooks');
 
-    // pre-commit hook copied and made executable
+    // pre-commit and pre-merge-commit hooks copied and made executable
     const hookPath = path.join(root, '.rig/hooks/pre-commit');
     assert.ok(existsSync(hookPath));
+    assert.ok(existsSync(path.join(root, '.rig/hooks/pre-merge-commit')));
+    assert.equal(git(root, 'config', '--get', 'branch.main.mergeOptions').stdout.trim(), '--no-ff');
 
     // Registered in fakeHome state
     assert.ok(readRigState(fakeHome).initializedRepos.includes(root));
@@ -1247,6 +1251,8 @@ test('ejectRepo unsets core.hooksPath, deletes .rig/, prunes state, preserves AG
     assert.equal(attachRes.hooksConfigured, true);
     assert.equal(isRiggedRepo(root), true);
     assert.equal(existsSync(path.join(root, '.rig/hooks/pre-commit')), true);
+    assert.equal(existsSync(path.join(root, '.rig/hooks/pre-merge-commit')), true);
+    assert.equal(git(root, 'config', '--get', 'branch.main.mergeOptions').stdout.trim(), '--no-ff');
     assert.ok(readRigState(fakeHome).initializedRepos.includes(root));
 
     // 2. Call ejectRepo on main checkout
@@ -1256,9 +1262,10 @@ test('ejectRepo unsets core.hooksPath, deletes .rig/, prunes state, preserves AG
     assert.ok(ejectRes.removedPaths.includes(path.join(root, '.rig')));
     assert.equal(ejectRes.stateRemoved, true);
 
-    // Verify git config core.hooksPath is unset
+    // Verify git config core.hooksPath and branch.main.mergeOptions are unset
     const hooksCfg = git(root, 'config', '--get', 'core.hooksPath');
     assert.equal(hooksCfg.stdout.trim(), '');
+    assert.equal(git(root, 'config', '--get', 'branch.main.mergeOptions').stdout.trim(), '');
 
     // Verify .rig/ is removed
     assert.equal(existsSync(path.join(root, '.rig')), false);
@@ -1816,10 +1823,13 @@ test('non-rig machine simulation with sanitized PATH and isolated empty HOME pro
       git(root, 'config', 'user.email', 'test@example.com');
       git(root, 'config', 'user.name', 'Test');
 
-      // Standard lightweight rigged repo: pre-commit shim only, NO .rig/bin/rig.mjs
+      // Standard lightweight rigged repo: pre-commit and pre-merge-commit shims only, NO .rig/bin/rig.mjs
       mkdirSync(path.join(root, '.rig/hooks'), { recursive: true });
       copyFileSync(PRE_COMMIT, path.join(root, '.rig/hooks/pre-commit'));
       chmodSync(path.join(root, '.rig/hooks/pre-commit'), 0o755);
+      const PRE_MERGE_COMMIT = path.resolve(RIG_ROOT, '.rig/hooks/pre-merge-commit');
+      copyFileSync(PRE_MERGE_COMMIT, path.join(root, '.rig/hooks/pre-merge-commit'));
+      chmodSync(path.join(root, '.rig/hooks/pre-merge-commit'), 0o755);
       git(root, 'config', 'core.hooksPath', '.rig/hooks');
 
       // 1. Initial commit on unborn repo succeeds on main/master
@@ -1843,8 +1853,16 @@ test('non-rig machine simulation with sanitized PATH and isolated empty HOME pro
       const featRes = git(root, 'commit', '-m', 'feat: feature branch commit');
       assert.equal(featRes.status, 0, featRes.stderr);
 
-      // 4. Merge commit onto main/master is permitted
+      // 4. Unstamped merge onto main/master is blocked, and stamped merge is permitted
       git(root, 'checkout', branchName);
+      const featSha = git(root, 'rev-parse', `feature/test-${branchName}`).stdout.trim();
+      const blockedAutoMerge = git(root, 'merge', '--no-ff', '-m', 'blocked', `feature/test-${branchName}`);
+      assert.notEqual(blockedAutoMerge.status, 0);
+      assert.match(blockedAutoMerge.stderr, new RegExp(`pre-merge-commit: refusing merge onto ${branchName}`));
+      git(root, 'merge', '--abort');
+
+      mkdirSync(path.join(root, '.git/rig/verified'), { recursive: true });
+      writeFileSync(path.join(root, `.git/rig/verified/${featSha}.json`), JSON.stringify({ sha: featSha }));
       const mergeNoCommit = git(root, 'merge', '--no-commit', '--no-ff', `feature/test-${branchName}`);
       assert.equal(mergeNoCommit.status, 0, mergeNoCommit.stderr);
       const mergeRes = git(root, 'commit', '-m', `Merge branch 'feature/test-${branchName}' into ${branchName}`);
@@ -1903,6 +1921,20 @@ test('non-rig machine simulation with sanitized PATH and isolated empty HOME pro
     gitWt(wt, 'add', 'feature.js');
     const featCommit = gitWt(wt, 'commit', '-m', 'feat: feature commit');
     assert.equal(featCommit.status, 0, featCommit.stderr);
+
+    // Unstamped merge onto main is blocked by vendored rig.mjs
+    const blockedMerge = gitNode(selfRepo, 'merge', '--no-ff', '-m', 'blocked merge', 'feature/sim-feature');
+    assert.notEqual(blockedMerge.status, 0);
+    assert.match(blockedMerge.stderr, /has not been stamped by the Cold Verifier/);
+    gitNode(selfRepo, 'merge', '--abort');
+
+    // Stamp inside worktree using vendored .rig/bin/rig.mjs (no global rig CLI needed)
+    const vendoredStamp = spawnSync(
+      path.join(isolatedNodeBin, 'node'),
+      [path.join(selfRepo, '.rig/bin/rig.mjs'), 'verify-stamp', wt],
+      { encoding: 'utf8', env: nodeEnv },
+    );
+    assert.equal(vendoredStamp.status, 0, vendoredStamp.stderr);
 
     const mergeNoCommit = gitNode(selfRepo, 'merge', '--no-commit', '--no-ff', 'feature/sim-feature');
     assert.equal(mergeNoCommit.status, 0, mergeNoCommit.stderr);
@@ -2376,6 +2408,62 @@ test('checkRepoPendingUpdates and updateRepo prune obsolete skills from self-con
     assert.equal(existsSync(legacySkillDir), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI rig verify-stamp writes stamp JSON, rejects main and dirty worktrees, and enables bare merge on main', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'rig-cli-stamp-'));
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-cli-stamp-home-'));
+  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const runRig = (...args) =>
+    spawnSync(process.execPath, [path.join(RIG_ROOT, 'bin/rig.mjs'), ...args], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: fakeHome },
+    });
+  try {
+    git(root, 'init', '-q', '-b', 'main');
+    git(root, 'config', 'user.email', 'test@example.com');
+    git(root, 'config', 'user.name', 'Test');
+    writeFileSync(path.join(root, 'app.js'), 'console.log(1);\n');
+    git(root, 'add', 'app.js');
+    git(root, 'commit', '-qm', 'initial');
+
+    const initRes = runRig('init', root, '--home', fakeHome);
+    assert.equal(initRes.status, 0, initRes.stderr);
+
+    const wt = path.join(root, '.worktrees/rig-init');
+    git(wt, 'commit', '-qm', 'chore(rig): initialize agent-rig');
+
+    // 1. CLI refuses main
+    const mainErr = runRig('verify-stamp', root, '--home', fakeHome);
+    assert.equal(mainErr.status, 1);
+    assert.match(mainErr.stderr, /Refusing to stamp branch 'main' directly/);
+
+    // 2. CLI refuses dirty worktree
+    writeFileSync(path.join(wt, 'app.js'), 'console.log(2);\n');
+    const dirtyErr = runRig('verify-stamp', wt, '--home', fakeHome);
+    assert.equal(dirtyErr.status, 1);
+    assert.match(dirtyErr.stderr, /Refusing to stamp dirty working tree/);
+    git(wt, 'checkout', '--', 'app.js');
+
+    // 3. CLI succeeds on clean worktree and prints JSON with --json
+    const okRes = runRig('verify-stamp', wt, '--home', fakeHome, '--json');
+    assert.equal(okRes.status, 0, okRes.stderr);
+    const stamp = JSON.parse(okRes.stdout);
+    assert.equal(stamp.branch, INIT_WORKTREE_BRANCH);
+    assert.ok(existsSync(stamp.stampPath));
+
+    // 4. Bare git merge succeeds after CLI stamp
+    const mergeRes = git(root, 'merge', '-m', 'Merge rig init', INIT_WORKTREE_BRANCH);
+    assert.equal(mergeRes.status, 0, mergeRes.stderr);
+
+    // 5. Eject cleans up branch.main.mergeOptions
+    const ejectRes = runRig('eject', root, '--home', fakeHome);
+    assert.equal(ejectRes.status, 0, ejectRes.stderr);
+    assert.equal(git(root, 'config', '--get', 'branch.main.mergeOptions').stdout.trim(), '');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
   }
 });
 

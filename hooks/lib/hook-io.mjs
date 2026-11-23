@@ -213,11 +213,21 @@ export function readHookInput(options = {}) {
 
 /**
  * Formats the PreToolUse decision object for stdout.
- * Returns null when the schema expects silent exit 0 on allow (Claude Code).
+ * Returns null when the schema expects silent exit 0 on allow (Claude Code),
+ * unless `explicitAllow: true` is passed to explicitly approve an allowlisted command.
  */
-export function formatDecision(schema, decision, reason) {
+export function formatDecision(schema, decision, reason, { explicitAllow = false } = {}) {
   if (schema === 'claude') {
-    if (decision === 'allow') return null;
+    if (decision === 'allow') {
+      if (!explicitAllow) return null;
+      return JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          ...(reason ? { permissionDecisionReason: reason } : {}),
+        },
+      });
+    }
     return JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -229,7 +239,10 @@ export function formatDecision(schema, decision, reason) {
 
   // Antigravity and generic JSON hook contract
   if (decision === 'allow') {
-    return JSON.stringify({ decision: 'allow' });
+    return JSON.stringify({
+      decision: 'allow',
+      ...(explicitAllow && reason ? { reason } : {}),
+    });
   }
   return JSON.stringify({
     decision,
@@ -237,8 +250,8 @@ export function formatDecision(schema, decision, reason) {
   });
 }
 
-export function emitDecision(schema, decision, reason) {
-  const out = formatDecision(schema, decision, reason);
+export function emitDecision(schema, decision, reason, options) {
+  const out = formatDecision(schema, decision, reason, options);
   if (out !== null) {
     process.stdout.write(`${out}\n`);
   }

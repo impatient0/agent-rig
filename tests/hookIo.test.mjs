@@ -39,6 +39,16 @@ test('parses Claude Code PreToolUse payload and formats hookSpecificOutput envel
   assert.equal(parsed.cwd, '/tmp/project');
 
   assert.equal(formatDecision(parsed.schema, 'allow'), null);
+  assert.deepEqual(
+    JSON.parse(formatDecision(parsed.schema, 'allow', 'allowlisted remote host', { explicitAllow: true })),
+    {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+        permissionDecisionReason: 'allowlisted remote host',
+      },
+    },
+  );
   assert.deepEqual(JSON.parse(formatDecision(parsed.schema, 'deny', 'worktree required')), {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',

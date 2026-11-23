@@ -116,7 +116,7 @@
       "harness": "antigravity",
       "roles": {
         "architect": { "model": "gemini-4-carbon", "effort": "high" },
-        "worker":    { "model": "gemini-4-hydrogen-tiered-xhigh", "subagentModel": "pro", "effort": "max" },
+        "worker":    { "model": "gemini-4-hydrogen-tiered-high", "subagentModel": "flash", "effort": "high" },
         "verifier":  { "model": "gemini-4-hydrogen-tiered-high", "subagentModel": "flash", "effort": "high" },
         "utility":   { "model": "gemini-3.5-flash-lite", "subagentModel": "flash_lite", "effort": "low" }
       }

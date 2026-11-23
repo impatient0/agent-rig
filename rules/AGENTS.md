@@ -80,6 +80,7 @@ Agents can discover and run core `rig` CLI commands directly across sessions and
 - `rig reflow-docs [<target-dir>] [--check]` — enforce or verify one-sentence-per-line Markdown formatting.
 - `rig attach [<target-dir>]` — configure `core.hooksPath .rig/hooks`, attach `main` in the root checkout, and register a cloned repository without creating scaffolding worktrees.
 - `rig verify-stamp [<target-dir>]` — record a Cold Verifier pass stamp (`<git-common-dir>/rig/verified/<head-sha>.json`) on a clean non-`main` branch before merging.
+- `rig allow remote <host> [--ttl <duration> | --permanent]` — temporarily allowlist a remote host in `<git-common-dir>/rig/allowed-remotes.json` (default `24h`, shared across worktrees; use `--list`, `--revoke <host>`, or `--clear` to inspect or revoke, or annotate exact `Host` stanzas in `~/.ssh/config` with `# agent-rig: allow` as a permanent manual fallback).
 - `rig update [--all] [--repo <target-dir>]` — refresh global harness plugins, check initialized repositories for pending updates, or selectively update clean repositories ([`skills/rig-update/SKILL.md`](../skills/rig-update/SKILL.md)).
 - `rig eject [<target-dir>]` — cleanly remove `.rig/` and unset `core.hooksPath` while preserving `AGENTS.md` and `docs/`.
 

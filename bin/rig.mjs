@@ -11,6 +11,10 @@
 //   rig eject [<target-dir>] [--home <dir>]
 //   rig hook pre-commit [<target-dir>]
 //   rig verify-stamp [<target-dir>] [--harness <id>] [--home <dir>] [--json]
+//   rig allow remote <host> [--ttl <duration> | --permanent] [<target-dir>] [--home <dir>] [--json]
+//   rig allow remote --list [<target-dir>] [--home <dir>] [--json]
+//   rig allow remote --revoke <host> [<target-dir>] [--home <dir>] [--json]
+//   rig allow remote --clear [<target-dir>] [--home <dir>] [--json]
 //   rig check-docs [<target-dir>] [--fix]
 //   rig reflow-docs [<target-dir>] [--check]
 //   rig status [<target-dir>]
@@ -779,6 +783,7 @@ export function rewriteDocLinks(
     result = result.replaceAll('`hooks/guard-symlinked-node-modules.mjs`', '`.rig/hooks/guard-symlinked-node-modules.mjs`');
     result = result.replaceAll('`hooks/guard-remote-mutation.mjs`', '`.rig/hooks/guard-remote-mutation.mjs`');
     result = result.replaceAll('`hooks/lib/hook-io.mjs`', '`.rig/hooks/lib/hook-io.mjs`');
+    result = result.replaceAll('`hooks/lib/remote-allowlist.mjs`', '`.rig/hooks/lib/remote-allowlist.mjs`');
   }
   if (harness === 'codex') {
     const isDirectAgentsMd = destPath && path.basename(destPath) === 'AGENTS.md' && !/[\\/]rules[\\/]/.test(destPath);
@@ -1647,6 +1652,7 @@ export const VENDORED_RIG_FILES = [
   { src: 'scripts/reflow-docs.mjs', dest: '.rig/scripts/reflow-docs.mjs' },
   { src: 'hooks/lib/hook-io.mjs', dest: '.rig/hooks/lib/hook-io.mjs' },
   { src: 'hooks/lib/hook-io.mjs', dest: '.rig/hooks/hook-io.mjs' },
+  { src: 'hooks/lib/remote-allowlist.mjs', dest: '.rig/hooks/lib/remote-allowlist.mjs' },
   { src: 'hooks/guard-remote-mutation.mjs', dest: '.rig/hooks/guard-remote-mutation.mjs' },
   { src: 'hooks/guard-main-checkout-edits.mjs', dest: '.rig/hooks/guard-main-checkout-edits.mjs' },
   { src: 'hooks/guard-symlinked-node-modules.mjs', dest: '.rig/hooks/guard-symlinked-node-modules.mjs' },
@@ -1864,6 +1870,7 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
         if (tHarness === 'claude') {
           const claudeHookFiles = [
             { src: 'hooks/lib/hook-io.mjs', dest: path.join(dotDir, 'hooks/lib/hook-io.mjs') },
+            { src: 'hooks/lib/remote-allowlist.mjs', dest: path.join(dotDir, 'hooks/lib/remote-allowlist.mjs') },
             { src: 'hooks/guard-remote-mutation.mjs', dest: path.join(dotDir, 'hooks/guard-remote-mutation.mjs') },
             { src: 'hooks/guard-main-checkout-edits.mjs', dest: path.join(dotDir, 'hooks/guard-main-checkout-edits.mjs') },
             { src: 'hooks/guard-symlinked-node-modules.mjs', dest: path.join(dotDir, 'hooks/guard-symlinked-node-modules.mjs') },
@@ -1931,6 +1938,9 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
       if (existsSync(path.join(dir, 'hooks'))) {
         if (checkFilePending(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dir, 'hooks/lib/hook-io.mjs'))) {
           pendingFiles.push(path.join(dir, 'hooks/lib/hook-io.mjs'));
+        }
+        if (checkFilePending(path.join(rigRoot, 'hooks/lib/remote-allowlist.mjs'), path.join(dir, 'hooks/lib/remote-allowlist.mjs'))) {
+          pendingFiles.push(path.join(dir, 'hooks/lib/remote-allowlist.mjs'));
         }
         for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
           if (existsSync(path.join(dir, 'hooks', hf))) {
@@ -2174,6 +2184,11 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
         copied,
         skipped,
       });
+      copyFileSafe(path.join(rigRoot, 'hooks/lib/remote-allowlist.mjs'), path.join(dir, '.rig/hooks/lib/remote-allowlist.mjs'), {
+        force: true,
+        copied,
+        skipped,
+      });
       for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
         copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dir, '.rig/hooks', hf), {
           force: true,
@@ -2263,6 +2278,11 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
             copied,
             skipped,
           });
+          copyFileSafe(path.join(rigRoot, 'hooks/lib/remote-allowlist.mjs'), path.join(dotDir, 'hooks/lib/remote-allowlist.mjs'), {
+            force: true,
+            copied,
+            skipped,
+          });
           for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
             copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dotDir, 'hooks', hf), {
               force: true,
@@ -2340,6 +2360,11 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
       });
       if (existsSync(path.join(dir, 'hooks'))) {
         copyFileSafe(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dir, 'hooks/lib/hook-io.mjs'), {
+          force: true,
+          copied,
+          skipped,
+        });
+        copyFileSafe(path.join(rigRoot, 'hooks/lib/remote-allowlist.mjs'), path.join(dir, 'hooks/lib/remote-allowlist.mjs'), {
           force: true,
           copied,
           skipped,
@@ -3215,6 +3240,11 @@ export function initRepo(
           copied,
           skipped,
         });
+        copyFileSafe(path.join(rigRoot, 'hooks/lib/remote-allowlist.mjs'), path.join(dotDir, 'hooks/lib/remote-allowlist.mjs'), {
+          force,
+          copied,
+          skipped,
+        });
         const hookFiles = worktrees
           ? ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']
           : ['guard-remote-mutation.mjs'];
@@ -3294,6 +3324,11 @@ export function initRepo(
     skipped,
   });
   copyFileSafe(path.join(rigRoot, 'hooks/lib/hook-io.mjs'), path.join(dir, '.rig/hooks/hook-io.mjs'), {
+    force,
+    copied,
+    skipped,
+  });
+  copyFileSafe(path.join(rigRoot, 'hooks/lib/remote-allowlist.mjs'), path.join(dir, '.rig/hooks/lib/remote-allowlist.mjs'), {
     force,
     copied,
     skipped,
@@ -4233,6 +4268,189 @@ async function main() {
     process.exit(1);
   }
 
+  if (cmd === 'allow') {
+    const {
+      DEFAULT_TTL_MS,
+      parseDurationMs,
+      allowRemoteHost,
+      revokeRemoteHost,
+      clearRemoteHosts,
+      listAllowedRemotes,
+    } = await import('../hooks/lib/remote-allowlist.mjs');
+
+    const scope = args[1];
+    if (scope !== 'remote') {
+      console.error(
+        `Unknown allow scope: ${scope || '(none)'}. Usage:\n` +
+          `  rig allow remote <host> [--ttl <duration> | --permanent] [<target-dir>] [--json]\n` +
+          `  rig allow remote --list [<target-dir>] [--home <dir>] [--json]\n` +
+          `  rig allow remote --revoke <host> [<target-dir>] [--json]\n` +
+          `  rig allow remote --clear [<target-dir>] [--json]`,
+      );
+      process.exit(1);
+    }
+
+    const rest = args.slice(2);
+    const json = rest.includes('--json');
+    let homeDir = homedir();
+    let ttlStr = null;
+    let permanent = false;
+    let listMode = false;
+    let clearMode = false;
+    let revokeHost = null;
+    let repoDir = null;
+    const positional = [];
+
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i];
+      if (a === '--json') continue;
+      if (a === '--list' || a === '-l') {
+        listMode = true;
+        continue;
+      }
+      if (a === '--clear') {
+        clearMode = true;
+        continue;
+      }
+      if (a === '--permanent') {
+        permanent = true;
+        continue;
+      }
+      if (a === '--home' && rest[i + 1]) {
+        homeDir = path.resolve(rest[++i]);
+        continue;
+      }
+      if (a.startsWith('--home=')) {
+        homeDir = path.resolve(a.slice('--home='.length));
+        continue;
+      }
+      if (a === '--repo' && rest[i + 1]) {
+        repoDir = rest[++i];
+        continue;
+      }
+      if (a.startsWith('--repo=')) {
+        repoDir = a.slice('--repo='.length);
+        continue;
+      }
+      if (a === '--ttl' && rest[i + 1]) {
+        ttlStr = rest[++i];
+        continue;
+      }
+      if (a.startsWith('--ttl=')) {
+        ttlStr = a.slice('--ttl='.length);
+        continue;
+      }
+      if (a === '--revoke' && rest[i + 1]) {
+        revokeHost = rest[++i];
+        continue;
+      }
+      if (a.startsWith('--revoke=')) {
+        revokeHost = a.slice('--revoke='.length);
+        continue;
+      }
+      if (!a.startsWith('-')) {
+        positional.push(a);
+      }
+    }
+
+    // Support natural subcommand aliases: `list`, `clear`, `revoke <host>`
+    if (!listMode && !clearMode && !revokeHost && positional.length > 0) {
+      if (positional[0] === 'list') {
+        listMode = true;
+        positional.shift();
+      } else if (positional[0] === 'clear') {
+        clearMode = true;
+        positional.shift();
+      } else if (positional[0] === 'revoke' && positional[1]) {
+        revokeHost = positional[1];
+        positional.splice(0, 2);
+      }
+    }
+
+    try {
+      if (listMode) {
+        const targetDir = repoDir || positional[0] || process.cwd();
+        const res = listAllowedRemotes(targetDir, { homeDir });
+        if (json) {
+          console.log(JSON.stringify(res, null, 2));
+        } else {
+          if (res.repoHosts.length === 0 && res.sshConfigHosts.length === 0) {
+            console.log('rig allow remote: no allowed remote hosts.');
+          } else {
+            if (res.repoHosts.length > 0) {
+              console.log(`Repo-scoped (${res.repoPath}):`);
+              for (const entry of res.repoHosts) {
+                const expLabel = entry.expiresAt ? `expires ${entry.expiresAt}` : 'permanent';
+                console.log(`  - ${entry.host} (${expLabel})`);
+              }
+            }
+            if (res.sshConfigHosts.length > 0) {
+              console.log(`SSH config (${res.sshConfigPath}, # agent-rig: allow):`);
+              for (const h of res.sshConfigHosts) {
+                console.log(`  - ${h} (permanent)`);
+              }
+            }
+          }
+        }
+        return;
+      }
+
+      if (clearMode) {
+        const targetDir = repoDir || positional[0] || process.cwd();
+        const res = clearRemoteHosts(targetDir);
+        if (json) {
+          console.log(JSON.stringify(res, null, 2));
+        } else {
+          console.log(`rig allow remote: cleared ${res.clearedCount} repo-scoped host(s) from ${res.filePath}`);
+        }
+        return;
+      }
+
+      if (revokeHost) {
+        const targetDir = repoDir || positional[0] || process.cwd();
+        const res = revokeRemoteHost(targetDir, revokeHost);
+        if (json) {
+          console.log(JSON.stringify(res, null, 2));
+        } else if (res.removed) {
+          console.log(`rig allow remote: revoked '${res.host}' from ${res.filePath}`);
+        } else {
+          console.log(`rig allow remote: '${res.host}' was not in ${res.filePath}`);
+        }
+        return;
+      }
+
+      const hostArg = positional[0];
+      if (!hostArg) {
+        console.error(
+          `Usage:\n` +
+            `  rig allow remote <host> [--ttl <duration> | --permanent] [<target-dir>] [--json]\n` +
+            `  rig allow remote --list [<target-dir>] [--home <dir>] [--json]\n` +
+            `  rig allow remote --revoke <host> [<target-dir>] [--json]\n` +
+            `  rig allow remote --clear [<target-dir>] [--json]`,
+        );
+        process.exit(1);
+      }
+
+      const targetDir = repoDir || positional[1] || process.cwd();
+      if (ttlStr && permanent) {
+        throw new Error('Cannot combine --ttl and --permanent.');
+      }
+      const isPermanent = permanent || (ttlStr && ttlStr.trim().toLowerCase() === 'permanent');
+      const ttlMs = isPermanent ? null : ttlStr ? parseDurationMs(ttlStr) : DEFAULT_TTL_MS;
+      const res = allowRemoteHost(targetDir, hostArg, { ttlMs: ttlMs ?? DEFAULT_TTL_MS, permanent: Boolean(isPermanent) });
+      if (json) {
+        console.log(JSON.stringify(res, null, 2));
+      } else {
+        const expLabel = res.expiresAt ? `expires ${res.expiresAt}` : 'permanent';
+        console.log(`rig allow remote: allowed '${res.host}' (${expLabel}) -> ${res.filePath}`);
+      }
+    } catch (err) {
+      console.error(`rig allow remote: ${err.message}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   if (cmd === 'verify-stamp') {
     const json = args.includes('--json');
     const homeIdx = args.indexOf('--home');
@@ -4302,6 +4520,8 @@ async function main() {
   rig eject [<target-dir>] [--home <dir>]
   rig hook pre-commit [<target-dir>]
   rig verify-stamp [<target-dir>] [--harness <id>] [--home <dir>] [--json]
+  rig allow remote <host> [--ttl <duration> | --permanent] [<target-dir>] [--json]
+  rig allow remote --list | --revoke <host> | --clear [<target-dir>] [--json]
   rig check-docs [<target-dir>] [--fix]
   rig reflow-docs [<target-dir>] [--check]
   rig status [<target-dir>]`);

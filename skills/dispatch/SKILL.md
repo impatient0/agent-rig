@@ -107,7 +107,11 @@ git worktree add .worktrees/<slug> -b <type>/<slug>
 <!-- RIG:ENDIF -->
 
 <!-- RIG:IF distribution=rig -->
+<!-- RIG:IF harness=antigravity -->
+Workers operate in execution tier `worker` (subagent tier `{{SUBAGENT_MODEL_WORKER}}` → `{{MODEL_WORKER}}`) governed by [`agents/worker.md`](../../agents/worker.md).
+<!-- RIG:ELSE -->
 Workers operate in execution tier `worker` (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`) governed by [`agents/worker.md`](../../agents/worker.md).
+<!-- RIG:ENDIF -->
 <!-- RIG:ELSE -->
 Workers operate in execution tier `worker` (subagent model `{{SUBAGENT_MODEL_WORKER}}`, target `{{MODEL_WORKER}}`, effort `{{EFFORT_WORKER}}`) governed by `./references/worker.md` passed inline in the subagent invocation prompt.
 <!-- RIG:ENDIF -->
@@ -138,7 +142,11 @@ If any stop trigger fires, the Worker halts immediately in its worktree and repo
 
 When a Worker reports completion, the Tech Lead **must not** trust the Worker's summary or review the diff inside the Worker's context.
 <!-- RIG:IF distribution=rig -->
+<!-- RIG:IF harness=antigravity -->
+Spawn a fresh **Verifier** subagent in execution tier `verifier` (subagent tier `{{SUBAGENT_MODEL_VERIFIER}}` → `{{MODEL_VERIFIER}}`) following the exact prompt and checklist in [`agents/verifier.md`](../../agents/verifier.md).
+<!-- RIG:ELSE -->
 Spawn a fresh **Verifier** subagent in execution tier `verifier` (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`) following the exact prompt and checklist in [`agents/verifier.md`](../../agents/verifier.md).
+<!-- RIG:ENDIF -->
 <!-- RIG:ELSE -->
 Spawn a fresh **Verifier** subagent in execution tier `verifier` (subagent model `{{SUBAGENT_MODEL_VERIFIER}}`, target `{{MODEL_VERIFIER}}`, effort `{{EFFORT_VERIFIER}}`) following the exact prompt and checklist in `./references/verifier.md` passed inline in the subagent invocation prompt.
 <!-- RIG:ENDIF -->

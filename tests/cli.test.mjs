@@ -603,15 +603,20 @@ test('loadCatalog, resolveSubagentModel, resolveProfile, and hydrateText enforce
   assert.ok(catalog.harnesses.claude);
   assert.ok(catalog.models['gemini-4-carbon']);
   assert.ok(catalog.models['gemini-4-neon']);
-  assert.ok(catalog.models['gemini-4-hydrogen']);
+  assert.ok(catalog.models['gemini-4-hydrogen-tiered-xhigh']);
+  assert.ok(catalog.models['gemini-4-hydrogen-tiered-high']);
+  assert.ok(catalog.models['gemini-3.5-flash-lite']);
   assert.ok(catalog.models['claude-fable-5-2']);
   assert.ok(catalog.models['claude-opus-5-5']);
 
   // Builtin model mappings
-  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-carbon', null, { rigRoot: RIG_ROOT }), 'pro');
-  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-neon', null, { rigRoot: RIG_ROOT }), 'pro');
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-carbon', null, { rigRoot: RIG_ROOT }), 'inherit');
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-neon', null, { rigRoot: RIG_ROOT }), 'inherit');
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-hydrogen-tiered-xhigh', null, { rigRoot: RIG_ROOT }), 'pro');
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-4-hydrogen-tiered-high', null, { rigRoot: RIG_ROOT }), 'flash');
   assert.equal(resolveSubagentModel('antigravity', 'gemini-4-hydrogen', null, { rigRoot: RIG_ROOT }), 'flash');
   assert.equal(resolveSubagentModel('antigravity', 'gemini-3-8-flash', null, { rigRoot: RIG_ROOT }), 'flash');
+  assert.equal(resolveSubagentModel('antigravity', 'gemini-3.5-flash-lite', null, { rigRoot: RIG_ROOT }), 'flash_lite');
   assert.equal(resolveSubagentModel('claude', 'claude-fable-5-2', null, { rigRoot: RIG_ROOT }), 'fable');
   assert.equal(resolveSubagentModel('claude', 'claude-opus-5-5', null, { rigRoot: RIG_ROOT }), 'opus');
   assert.equal(resolveSubagentModel('claude', 'claude-sonnet-5-5', null, { rigRoot: RIG_ROOT }), 'sonnet');
@@ -635,19 +640,49 @@ test('loadCatalog, resolveSubagentModel, resolveProfile, and hydrateText enforce
   // Fallback for unknown model to harness defaultSubagentSelector
   assert.equal(resolveSubagentModel('antigravity', 'completely-unknown-model', null, { rigRoot: RIG_ROOT }), 'inherit');
 
-  // Profile resolution
+  // Profile resolution across built-in presets
   const profile = resolveProfile('antigravity', { rigRoot: RIG_ROOT });
   assert.equal(profile.harness, 'antigravity');
   assert.equal(profile.profileName, 'antigravity-pro');
   assert.deepEqual(Object.keys(profile.roles).sort(), ['architect', 'utility', 'verifier', 'worker']);
-  assert.equal(profile.roles.worker.model, 'gemini-4-hydrogen');
+  assert.equal(profile.roles.worker.model, 'gemini-4-hydrogen-tiered-high');
   assert.equal(profile.roles.worker.subagentModel, 'flash');
+  assert.equal(profile.roles.verifier.model, 'gemini-4-hydrogen-tiered-high');
+  assert.equal(profile.roles.verifier.subagentModel, 'flash');
+  assert.equal(profile.roles.utility.model, 'gemini-3.5-flash-lite');
   assert.equal(profile.roles.utility.subagentModel, 'flash_lite');
+
+  const ultraProfile = resolveProfile('antigravity', { profileName: 'antigravity-ultra', rigRoot: RIG_ROOT });
+  assert.equal(ultraProfile.roles.worker.model, 'gemini-4-hydrogen-tiered-xhigh');
+  assert.equal(ultraProfile.roles.worker.subagentModel, 'pro');
+  assert.equal(ultraProfile.roles.worker.effort, 'max');
+  assert.equal(ultraProfile.roles.verifier.model, 'gemini-4-hydrogen-tiered-high');
+  assert.equal(ultraProfile.roles.verifier.subagentModel, 'flash');
+
+  const claudePro = resolveProfile('claude', { profileName: 'claude-pro', rigRoot: RIG_ROOT });
+  assert.equal(claudePro.roles.architect.model, 'claude-opus-5-5');
+  assert.equal(claudePro.roles.architect.effort, 'medium');
+  assert.equal(claudePro.roles.verifier.model, 'claude-sonnet-5-5');
+  assert.equal(claudePro.roles.verifier.effort, 'medium');
+
+  const claudeMax = resolveProfile('claude', { profileName: 'claude-max', rigRoot: RIG_ROOT });
+  assert.equal(claudeMax.roles.worker.model, 'claude-sonnet-5-5');
+  assert.equal(claudeMax.roles.worker.subagentModel, 'sonnet');
+  assert.equal(claudeMax.roles.worker.effort, 'high');
+  assert.equal(claudeMax.roles.verifier.effort, 'medium');
+
+  const codexDefault = resolveProfile('codex', { profileName: 'codex-default', rigRoot: RIG_ROOT });
+  assert.equal(codexDefault.roles.verifier.model, 'gpt-6.2-sol');
+  assert.equal(codexDefault.roles.verifier.effort, 'medium');
+
+  const cursorDefault = resolveProfile('cursor', { profileName: 'cursor-default', rigRoot: RIG_ROOT });
+  assert.equal(cursorDefault.roles.verifier.model, 'claude-sonnet-5-5');
+  assert.equal(cursorDefault.roles.verifier.effort, 'medium');
 
   // Hydration replaces all placeholders
   const sampleTemplate = 'Profile: {{RIG_PROFILE}} for {{RIG_HARNESS}}. Worker: {{SUBAGENT_MODEL_WORKER}} ({{MODEL_WORKER}}, {{EFFORT_WORKER}}). Verifier: {{SUBAGENT_MODEL_VERIFIER}}.';
   const hydrated = hydrateText(sampleTemplate, profile);
-  assert.equal(hydrated, 'Profile: antigravity-pro for antigravity. Worker: flash (gemini-4-hydrogen, high). Verifier: flash.');
+  assert.equal(hydrated, 'Profile: antigravity-pro for antigravity. Worker: flash (gemini-4-hydrogen-tiered-high, high). Verifier: flash.');
 
   // Hydration fails on unresolved token
   assert.throws(
@@ -686,7 +721,7 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
     assert.equal(initialProfiles.profiles['antigravity-pro'].isActive, true);
 
     const resolvedWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
-    assert.equal(resolvedWorker.model, 'gemini-4-hydrogen');
+    assert.equal(resolvedWorker.model, 'gemini-4-hydrogen-tiered-high');
     assert.equal(resolvedWorker.subagentModel, 'flash');
 
     // Switch profile to antigravity-ultra (stores only pointer in ~/.config/agent-rig/config.json)
@@ -696,18 +731,18 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
     assert.equal(existsSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/rules/AGENTS.md')), false);
     const hydratedWorker = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/agents/worker.md'), 'utf8');
     assert.match(hydratedWorker, /Profile: antigravity-ultra/);
-    assert.match(hydratedWorker, /Worker: gemini-4-neon/);
+    assert.match(hydratedWorker, /Worker: gemini-4-hydrogen-tiered-xhigh/);
 
     // Update role in profile -> copy-on-write forks built-in preset to pinned antigravity-custom
     setProfileRole('worker', 'claude-opus-5-5', { effort: 'medium', rigRoot: fakeRig, homeDir: fakeHome, harness: 'antigravity' });
     const afterSet = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
     assert.equal(afterSet.profile, 'antigravity-custom');
     assert.equal(afterSet.model, 'claude-opus-5-5');
-    assert.equal(afterSet.subagentModel, 'pro'); // claude-opus-5-5 mapped to pro on antigravity
+    assert.equal(afterSet.subagentModel, 'inherit'); // claude-opus-5-5 mapped to inherit on antigravity
     assert.equal(afterSet.effort, 'medium');
     // Built-in antigravity-ultra remains untouched
     const ultraWorker = resolveRoleModel('worker', { harness: 'antigravity', profileName: 'antigravity-ultra', rigRoot: fakeRig, homeDir: fakeHome });
-    assert.equal(ultraWorker.model, 'gemini-4-neon');
+    assert.equal(ultraWorker.model, 'gemini-4-hydrogen-tiered-xhigh');
 
     const rehydratedWorker = readFileSync(path.join(fakeHome, '.gemini/config/plugins/agent-rig/agents/worker.md'), 'utf8');
     assert.match(rehydratedWorker, /Profile: antigravity-custom/);
@@ -752,7 +787,7 @@ test('rig profile and rig model resolve inspect, switch, and set profile roles',
     assert.equal(existsSync(path.join(fakeHome, '.config/agent-rig/config.json')), true);
     const migratedWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
     assert.equal(migratedWorker.profile, 'antigravity-pro');
-    assert.equal(migratedWorker.model, 'gemini-4-hydrogen');
+    assert.equal(migratedWorker.model, 'gemini-4-hydrogen-tiered-high');
   } finally {
     rmSync(fakeRig, { recursive: true, force: true });
     rmSync(fakeHome, { recursive: true, force: true });
@@ -789,13 +824,14 @@ test('sandboxed model resolution falls back to harness-local config mirror when 
 
     const agyWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
     assert.equal(agyWorker.profile, 'antigravity-ultra');
-    assert.equal(agyWorker.model, 'gemini-4-neon');
+    assert.equal(agyWorker.model, 'gemini-4-hydrogen-tiered-xhigh');
     assert.equal(agyWorker.subagentModel, 'pro');
 
     const claudeWorker = resolveRoleModel('worker', { harness: 'claude', rigRoot: fakeRig, homeDir: fakeHome });
     assert.equal(claudeWorker.profile, 'claude-max');
-    assert.equal(claudeWorker.model, 'claude-opus-5-5');
-    assert.equal(claudeWorker.subagentModel, 'opus');
+    assert.equal(claudeWorker.model, 'claude-sonnet-5-5');
+    assert.equal(claudeWorker.subagentModel, 'sonnet');
+    assert.equal(claudeWorker.effort, 'high');
 
     const listed = listProfiles(fakeRig, { homeDir: fakeHome });
     assert.equal(listed.activeProfiles.antigravity, 'antigravity-ultra');
@@ -807,7 +843,7 @@ test('sandboxed model resolution falls back to harness-local config mirror when 
     const customWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
     assert.equal(customWorker.profile, 'antigravity-custom');
     assert.equal(customWorker.model, 'claude-opus-5-5');
-    assert.equal(customWorker.subagentModel, 'pro');
+    assert.equal(customWorker.subagentModel, 'inherit');
 
     // Canonical ~/.config/agent-rig/config.json takes precedence over a stale harness mirror
     mkdirSync(path.join(fakeHome, '.config', 'agent-rig'), { recursive: true });
@@ -817,7 +853,7 @@ test('sandboxed model resolution falls back to harness-local config mirror when 
     );
     const canonicalWorker = resolveRoleModel('worker', { harness: 'antigravity', rigRoot: fakeRig, homeDir: fakeHome });
     assert.equal(canonicalWorker.profile, 'antigravity-pro');
-    assert.equal(canonicalWorker.model, 'gemini-4-hydrogen');
+    assert.equal(canonicalWorker.model, 'gemini-4-hydrogen-tiered-high');
   } finally {
     rmSync(fakeRig, { recursive: true, force: true });
     rmSync(fakeHome, { recursive: true, force: true });
@@ -964,7 +1000,8 @@ test('initRepo and updateRepo accept --harness and probe target repo harness', (
     assert.match(verifierContent, /gemini-4-hydrogen/);
 
     const dispatchContent = readFileSync(path.join(dir, '.gemini/skills/dispatch/SKILL.md'), 'utf8');
-    assert.match(dispatchContent, /subagent model `flash`, target `gemini-4-hydrogen`/);
+    assert.match(dispatchContent, /subagent tier `flash` → `gemini-4-hydrogen-tiered-high`/);
+    assert.doesNotMatch(dispatchContent, /target `gemini-4-hydrogen`/);
 
     // Links inside self-contained repo retain relative repo structure and pass check-doc-links
     const checkLinks = runCheckDocs(dir);

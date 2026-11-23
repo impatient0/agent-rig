@@ -5,7 +5,13 @@ description: >-
   Cold, read-only verification subagent for the dispatch workflow. Audits an
   executor's git diff, commit trailers, and test output against the grounded task
   brief without access to the executor's chain of thought.
+<!-- RIG:IF harness=antigravity -->
+subagent: true
+mainAgent: false
+tools: [read_file, run_command, manage_task]
+<!-- RIG:ELSE -->
 tools: Read, Grep, Glob, Bash
+<!-- RIG:ENDIF -->
 ---
 
 # Cold Verifier Subagent (`verifier`)

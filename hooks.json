@@ -37,5 +37,18 @@
         ]
       }
     ]
+  },
+  "secret-exposure-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "read_file|view_file|view_file_outline|view_code_item|grep_search|edit_file|write_file|run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./hooks/guard-secret-exposure.mjs --harness=antigravity"
+          }
+        ]
+      }
+    ]
   }
 }

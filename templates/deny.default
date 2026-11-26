@@ -1,0 +1,59 @@
+# agent-rig built-in deny policy defaults (governed by docs/adr/0006-configurable-deny-policy-and-secops-guards.md)
+# Evaluated top-to-bottom where the last matching rule wins (.gitignore semantics).
+# Lines starting with `#` are comments.
+
+# --- Host credential stores ---
+~/.ssh/id_*
+~/.gnupg/**
+~/.aws/credentials
+~/.config/sops/age/**
+~/.kube/config
+~/.config/rclone/rclone.conf
+~/.netrc
+~/.npmrc
+~/.pypirc
+~/.docker/config.json
+~/.config/gh/hosts.yml
+
+# --- Repository & local secret files ---
+.env
+.env.*
+*.key
+*.p12
+*.pfx
+*.agekey
+*.tfstate
+*.tfstate.*
+*vault_pass*
+
+# --- Safe public keys, templates, and encrypted containers ---
+!*.pub
+!*.example
+!*.sample
+!*.template
+!*.dist
+!*.schema
+!*.sops.*
+!*.enc.*
+
+# --- Content-inspection detectors ---
+@content:private-key
+@content:unencrypted-sops
+@content:npmrc-auth
+
+# --- Shell secret-leak detectors ---
+@shell:file-read
+@shell:sops-decrypt
+@shell:env-dump
+@shell:cli-secret-dump
+
+# --- Remote & IaC orchestration guards ---
+@remote:ansible
+@remote:terraform
+@remote:terraform-plan
+@remote:kubectl
+@remote:kubectl-read
+@remote:helm
+@remote:helm-read
+@remote:rclone
+@remote:rclone-read

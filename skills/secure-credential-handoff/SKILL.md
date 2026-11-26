@@ -22,11 +22,22 @@ Never ask the user to paste a secret, password, or API key into the chat window,
    umask 077 && touch .env.local && chmod 600 .env.local
    ```
 3. **Ask the user to populate the file directly** in their editor or terminal, and wait for their confirmation.
-4. **Source the file inside subshells without echoing values:**
+4. **Verify variable presence without emitting values** using a zero-stdout check:
    ```bash
-   set -a && source .env.local && set +a && ./run-command-using-env
+   grep -q '^API_KEY=' .env.local
    ```
-   Never run `cat`, `env`, `printenv`, or `set -x` while secrets are loaded.
+   Never run `cat`, `head`, `tail`, `grep` without `-q`, `env`, `printenv`, or `set -x` on credential files or loaded secret environments.
+5. **Source `.env.local` or run SOPS-encrypted secrets inside subshells without echoing values:**
+   - For `.env.local`:
+     ```bash
+     set -a && source .env.local && set +a && ./run-command-using-env
+     ```
+   - For SOPS-encrypted files (`*.sops.*` / `*.enc.*`), never run `sops -d` to terminal stdout or pipe it into text printers;
+     instead, pass decrypted secrets directly to child processes with `sops exec-env` or `sops exec-file`:
+     ```bash
+     sops exec-env secrets.sops.yaml './run-command-using-env'
+     sops exec-file secrets.sops.yaml './run-command-with-file {}'
+     ```
 
 ---
 

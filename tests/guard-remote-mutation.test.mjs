@@ -441,3 +441,292 @@ test('rig allow remote CLI manages repo-scoped entries and lists ~/.ssh/config f
     rmSync(fakeHome, { recursive: true, force: true });
   }
 });
+
+test('ansible and ansible-playbook gate remote execution while allowing local inspection flags', () => {
+  const { root, cleanup } = makeRepoWithBranch({ rigged: true });
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-home-'));
+  try {
+    const opts = { homeDir: fakeHome };
+
+    // Offline / local-only flags pass unprompted
+    assert.equal(checkCommand('ansible --version', root, opts), null);
+    assert.equal(checkCommand('ansible-playbook --help', root, opts), null);
+    assert.equal(checkCommand('ansible-playbook -h', root, opts), null);
+    assert.equal(checkCommand('ansible-playbook -i inv.ini --syntax-check site.yml', root, opts), null);
+    assert.equal(checkCommand('ansible-playbook -i inv.ini --list-tasks site.yml', root, opts), null);
+    assert.equal(checkCommand('ansible-playbook -i inv.ini --list-tags site.yml', root, opts), null);
+    assert.equal(checkCommand('ansible all -i inv.ini --list-hosts', root, opts), null);
+
+    // Live runs and --check / -C open SSH connections and prompt
+    assert.match(checkCommand('ansible-playbook -i inv.ini site.yml', root, opts), /@remote:ansible/);
+    assert.match(checkCommand('ansible-playbook -i inv.ini --check site.yml', root, opts), /@remote:ansible/);
+    assert.match(checkCommand('ansible-playbook -i inv.ini -C site.yml', root, opts), /@remote:ansible/);
+    assert.match(checkCommand('ansible all -i inv.ini -m ping', root, opts), /@remote:ansible/);
+    assert.match(checkCommand('ansible-playbook site.yml -e "note=--help"', root, opts), /@remote:ansible/);
+
+    // Disabling !@remote:ansible in .rig/deny allows live Ansible invocations
+    writeFileSync(path.join(root, '.rig', 'deny'), '@defaults\n!@remote:ansible\n', 'utf8');
+    assert.equal(checkCommand('ansible-playbook -i inv.ini site.yml', root, opts), null);
+  } finally {
+    cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('terraform, tofu, and terragrunt gate plan and mutations with -chdir and .rig/deny overrides', () => {
+  const rigged = makeRepoWithBranch({ rigged: true });
+  const unrigged = makeRepoWithBranch({ rigged: false });
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-home-'));
+  try {
+    const opts = { homeDir: fakeHome };
+
+    // Offline commands pass unprompted
+    for (const bin of ['terraform', 'tofu', 'terragrunt']) {
+      assert.equal(checkCommand(`${bin} validate`, rigged.root, opts), null);
+      assert.equal(checkCommand(`${bin} fmt -check`, rigged.root, opts), null);
+      assert.equal(checkCommand(`${bin} version`, rigged.root, opts), null);
+      assert.equal(checkCommand(`${bin} --version`, rigged.root, opts), null);
+      assert.equal(checkCommand(`${bin} -version`, rigged.root, opts), null);
+      assert.equal(checkCommand(`${bin} -v`, rigged.root, opts), null);
+      assert.equal(checkCommand(`${bin} --help`, rigged.root, opts), null);
+      assert.equal(checkCommand(`${bin} -h`, rigged.root, opts), null);
+      assert.equal(checkCommand(`${bin} providers`, rigged.root, opts), null);
+      assert.equal(checkCommand(`${bin} init -backend=false`, rigged.root, opts), null);
+    }
+    assert.equal(checkCommand('terragrunt hclfmt --terragrunt-check', rigged.root, opts), null);
+    assert.equal(checkCommand('terraform workspace list', rigged.root, opts), null);
+
+    // Plan is gated under @remote:terraform-plan
+    assert.match(checkCommand('terraform plan', rigged.root, opts), /@remote:terraform-plan/);
+    assert.match(checkCommand('tofu plan -out=tfplan', rigged.root, opts), /@remote:terraform-plan/);
+    assert.match(checkCommand('terragrunt plan', rigged.root, opts), /@remote:terraform-plan/);
+    assert.match(checkCommand('terragrunt run-all plan', rigged.root, opts), /@remote:terraform-plan/);
+    assert.match(checkCommand('terragrunt run --all plan', rigged.root, opts), /@remote:terraform-plan/);
+
+    // State/infra mutations are gated under @remote:terraform
+    for (const cmd of [
+      'terraform apply',
+      'tofu destroy -auto-approve',
+      'terraform import aws_s3_bucket.b bucket',
+      'terraform refresh',
+      'terraform taint aws_instance.web',
+      'terraform untaint aws_instance.web',
+      'terraform force-unlock LOCK_ID',
+      'terraform console',
+      'terraform init',
+      'terraform workspace new staging',
+      'terraform workspace delete old',
+      'terraform workspace select prod',
+      'terraform state rm aws_instance.web',
+      'terraform state mv a b',
+      'terraform state push terraform.tfstate',
+      'terraform state replace-provider hashicorp/aws registry.terraform.io/hashicorp/aws',
+      'terragrunt run-all apply',
+    ]) {
+      assert.match(checkCommand(cmd, rigged.root, opts), /@remote:terraform/, `expected ask for: ${cmd}`);
+    }
+
+    // -chdir and --terragrunt-working-dir resolve relative to activeCwd into/out of rigged repos
+    assert.match(
+      checkCommand(`terraform -chdir="${rigged.root}" apply`, unrigged.root, opts),
+      /@remote:terraform/,
+    );
+    assert.match(
+      checkCommand(`tofu -chdir "${rigged.root}" plan`, unrigged.root, opts),
+      /@remote:terraform-plan/,
+    );
+    assert.match(
+      checkCommand(`terragrunt --terragrunt-working-dir "${rigged.root}" apply`, unrigged.root, opts),
+      /@remote:terraform/,
+    );
+    assert.equal(checkCommand(`terraform -chdir="${unrigged.root}" apply`, rigged.root, opts), null);
+
+    // Negating !@remote:terraform-plan allows plan while keeping apply gated
+    writeFileSync(path.join(rigged.root, '.rig', 'deny'), '@defaults\n!@remote:terraform-plan\n', 'utf8');
+    assert.equal(checkCommand('terraform plan', rigged.root, opts), null);
+    assert.equal(checkCommand('terragrunt run-all plan', rigged.root, opts), null);
+    assert.match(checkCommand('terraform apply', rigged.root, opts), /@remote:terraform/);
+
+    // Negating !@remote:terraform allows mutations
+    writeFileSync(path.join(rigged.root, '.rig', 'deny'), '@defaults\n!@remote:terraform\n', 'utf8');
+    assert.equal(checkCommand('terraform apply', rigged.root, opts), null);
+    assert.equal(checkCommand(`terraform -chdir="${rigged.root}" destroy`, unrigged.root, opts), null);
+  } finally {
+    rigged.cleanup();
+    unrigged.cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('kubectl and helm parse global flags, allow client-only invocations, and honor @remote:*-read overrides', () => {
+  const { root, cleanup } = makeRepoWithBranch({ rigged: true });
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-home-'));
+  try {
+    const opts = { homeDir: fakeHome };
+
+    // kubectl offline invocations
+    assert.equal(checkCommand('kubectl --help', root, opts), null);
+    assert.equal(checkCommand('kubectl help get', root, opts), null);
+    assert.equal(checkCommand('kubectl apply -f app.yaml --dry-run=client', root, opts), null);
+    assert.equal(checkCommand('kubectl version --client', root, opts), null);
+    assert.equal(checkCommand('kubectl version --client=true', root, opts), null);
+    assert.equal(checkCommand('kubectl config current-context', root, opts), null);
+    assert.equal(checkCommand('kubectl config get-contexts', root, opts), null);
+    assert.equal(checkCommand('kubectl config get-clusters', root, opts), null);
+    assert.equal(checkCommand('kubectl config view', root, opts), null);
+
+    // kubectl live reads with global flags before subcommand (@remote:kubectl-read)
+    assert.match(
+      checkCommand('kubectl --kubeconfig /tmp/kc --context prod -n web get pods', root, opts),
+      /@remote:kubectl-read/,
+    );
+    assert.match(checkCommand('kubectl -n web describe pod api-1', root, opts), /@remote:kubectl-read/);
+    assert.match(checkCommand('kubectl logs deploy/api', root, opts), /@remote:kubectl-read/);
+    assert.match(checkCommand('kubectl top nodes', root, opts), /@remote:kubectl-read/);
+    assert.match(checkCommand('kubectl auth can-i create pods', root, opts), /@remote:kubectl-read/);
+    assert.match(checkCommand('kubectl auth whoami', root, opts), /@remote:kubectl-read/);
+    assert.match(checkCommand('kubectl version', root, opts), /@remote:kubectl-read/);
+    assert.match(checkCommand('kubectl rollout status deploy/api', root, opts), /@remote:kubectl-read/);
+
+    // kubectl mutators and server dry-run (@remote:kubectl)
+    for (const cmd of [
+      'kubectl -n prod apply -f app.yaml',
+      'kubectl apply -f app.yaml --dry-run=server',
+      'kubectl -n prod delete pod api-1',
+      'kubectl drain node-1 --ignore-daemonsets',
+      'kubectl rollout restart deploy/api',
+      'kubectl exec -it api-1 -- sh',
+      'kubectl port-forward svc/api 8080:80',
+      'kubectl auth reconcile -f rbac.yaml',
+      'kubectl config use-context prod',
+    ]) {
+      assert.match(checkCommand(cmd, root, opts), /@remote:kubectl(?!-read)/, `expected @remote:kubectl for: ${cmd}`);
+    }
+
+    // helm offline invocations
+    for (const cmd of [
+      'helm --help',
+      'helm lint ./chart',
+      'helm template rel ./chart',
+      'helm show values ./chart',
+      'helm inspect values ./chart',
+      'helm search hub nginx',
+      'helm version',
+      'helm env',
+      'helm verify ./chart-0.1.0.tgz',
+      'helm create mychart',
+      'helm package ./chart',
+      'helm dependency list ./chart',
+      'helm upgrade --install rel ./chart --dry-run',
+      'helm install rel ./chart --dry-run=client',
+    ]) {
+      assert.equal(checkCommand(cmd, root, opts), null, `expected allow for: ${cmd}`);
+    }
+
+    // helm live reads (@remote:helm-read)
+    for (const cmd of [
+      'helm -n prod --kube-context staging list',
+      'helm ls -A',
+      'helm status rel',
+      'helm history rel',
+      'helm get values rel',
+    ]) {
+      assert.match(checkCommand(cmd, root, opts), /@remote:helm-read/, `expected @remote:helm-read for: ${cmd}`);
+    }
+
+    // helm mutators & --dry-run=server (@remote:helm)
+    for (const cmd of [
+      'helm install rel ./chart',
+      'helm upgrade --install rel ./chart --dry-run=server',
+      'helm uninstall rel',
+      'helm rollback rel 1',
+      'helm dependency update ./chart',
+      'helm repo add bitnami https://charts.bitnami.com/bitnami',
+    ]) {
+      assert.match(checkCommand(cmd, root, opts), /@remote:helm(?!-read)/, `expected @remote:helm for: ${cmd}`);
+    }
+
+    // Negate read-only switches while keeping mutations gated
+    writeFileSync(
+      path.join(root, '.rig', 'deny'),
+      '@defaults\n!@remote:kubectl-read\n!@remote:helm-read\n',
+      'utf8',
+    );
+    assert.equal(checkCommand('kubectl -n web get pods', root, opts), null);
+    assert.equal(checkCommand('helm -n web list', root, opts), null);
+    assert.match(checkCommand('kubectl -n web apply -f app.yaml', root, opts), /@remote:kubectl/);
+    assert.match(checkCommand('helm upgrade rel ./chart', root, opts), /@remote:helm/);
+
+    // Negate mutation switches
+    writeFileSync(
+      path.join(root, '.rig', 'deny'),
+      '@defaults\n!@remote:kubectl\n!@remote:helm\n',
+      'utf8',
+    );
+    assert.equal(checkCommand('kubectl -n web drain node-1', root, opts), null);
+    assert.equal(checkCommand('helm upgrade rel ./chart', root, opts), null);
+  } finally {
+    cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('rclone allows local operations, detects <remote>: and :backend: targets, and honors @remote:rclone* rules', () => {
+  const { root, cleanup } = makeRepoWithBranch({ rigged: true });
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-home-'));
+  try {
+    const opts = { homeDir: fakeHome };
+
+    // Purely local commands and local-to-local transfers pass unprompted
+    assert.equal(checkCommand('rclone version', root, opts), null);
+    assert.equal(checkCommand('rclone --version', root, opts), null);
+    assert.equal(checkCommand('rclone -V', root, opts), null);
+    assert.equal(checkCommand('rclone --help', root, opts), null);
+    assert.equal(checkCommand('rclone listremotes', root, opts), null);
+    assert.equal(checkCommand('rclone obscure secret', root, opts), null);
+    assert.equal(checkCommand('rclone genautocomplete bash', root, opts), null);
+    assert.equal(checkCommand('rclone copy ./src ./dst', root, opts), null);
+    assert.equal(checkCommand('rclone sync C:\\src D:\\dst', root, opts), null);
+    assert.equal(checkCommand('rclone copy ./dir/file:v1 ./dst', root, opts), null);
+    assert.equal(checkCommand('rclone serve http ./local --addr :8080', root, opts), null);
+
+    // Remote read-only commands (@remote:rclone-read)
+    assert.match(checkCommand('rclone ls gdrive:backups', root, opts), /@remote:rclone-read/);
+    assert.match(checkCommand('rclone lsd :s3,env_auth=true:my-bucket', root, opts), /@remote:rclone-read/);
+    assert.match(checkCommand('rclone lsjson b2:bucket/path', root, opts), /@remote:rclone-read/);
+    assert.match(checkCommand('rclone check ./dist s3:bucket/dist', root, opts), /@remote:rclone-read/);
+
+    // Remote mutating / data-access commands (@remote:rclone)
+    assert.match(checkCommand('rclone sync ./dist s3:bucket/dist', root, opts), /@remote:rclone(?!-read)/);
+    assert.match(checkCommand('rclone copy :sftp,host=box:/data ./local', root, opts), /@remote:rclone(?!-read)/);
+    assert.match(checkCommand('rclone purge b2:old-bucket', root, opts), /@remote:rclone(?!-read)/);
+
+    // !@remote:rclone-read allows remote reads while keeping sync/purge gated
+    writeFileSync(path.join(root, '.rig', 'deny'), '@defaults\n!@remote:rclone-read\n', 'utf8');
+    assert.equal(checkCommand('rclone ls gdrive:backups', root, opts), null);
+    assert.match(checkCommand('rclone sync ./dist s3:bucket/dist', root, opts), /@remote:rclone(?!-read)/);
+
+    // !@remote:rclone allows remote mutations
+    writeFileSync(path.join(root, '.rig', 'deny'), '@defaults\n!@remote:rclone\n', 'utf8');
+    assert.equal(checkCommand('rclone sync ./dist s3:bucket/dist', root, opts), null);
+  } finally {
+    cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
+test('IaC and remote orchestration guards remain silent in unrigged repositories', () => {
+  const unrigged = makeRepoWithBranch({ rigged: false });
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-home-'));
+  try {
+    const opts = { homeDir: fakeHome };
+    assert.equal(checkCommand('ansible-playbook -i inv.ini site.yml', unrigged.root, opts), null);
+    assert.equal(checkCommand('terraform apply -auto-approve', unrigged.root, opts), null);
+    assert.equal(checkCommand('kubectl delete pod api-1', unrigged.root, opts), null);
+    assert.equal(checkCommand('helm upgrade --install rel ./chart', unrigged.root, opts), null);
+    assert.equal(checkCommand('rclone sync ./dist s3:bucket/dist', unrigged.root, opts), null);
+  } finally {
+    unrigged.cleanup();
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});

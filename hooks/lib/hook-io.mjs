@@ -105,6 +105,7 @@ export function isRiggedRepo(repoRoot) {
   if (isWorktreeRiggedRepo(repoRoot)) return true;
   if (
     existsSync(path.join(repoRoot, '.rig/hooks/guard-remote-mutation.mjs')) ||
+    existsSync(path.join(repoRoot, '.rig/hooks/guard-secret-exposure.mjs')) ||
     existsSync(path.join(repoRoot, '.rig/bin/rig.mjs'))
   ) {
     return true;
@@ -153,11 +154,42 @@ export function resolveHarness(argv = process.argv.slice(2), env = process.env) 
   return 'generic';
 }
 
+function firstNonEmptyString(...values) {
+  for (const v of values) {
+    if (typeof v === 'string' && v.trim()) return v;
+  }
+  return '';
+}
+
+function normalizeGlobList(toolName, args) {
+  if (!args || typeof args !== 'object') return [];
+  const globs = [];
+  const pushGlobs = (val) => {
+    if (typeof val === 'string' && val.trim()) {
+      globs.push(val.trim());
+    } else if (Array.isArray(val)) {
+      for (const item of val) {
+        if (typeof item === 'string' && item.trim()) globs.push(item.trim());
+      }
+    }
+  };
+  pushGlobs(args.Includes);
+  pushGlobs(args.includes);
+  pushGlobs(args.glob);
+  pushGlobs(args.searchGlobs);
+  const lowerTool = (toolName || '').toLowerCase();
+  if (lowerTool === 'glob' || lowerTool === 'find_by_name') {
+    pushGlobs(args.pattern);
+    pushGlobs(args.Pattern);
+  }
+  return globs;
+}
+
 /**
  * Parses a PreToolUse hook stdin payload according to documented schemas:
- * - Antigravity: { toolCall: { name, args: { CommandLine, Path } }, workspacePaths: [...] }
- * - Claude Code: { hook_event_name, tool_name, tool_input: { command, file_path }, cwd }
- * - Generic fallback: { command, filePath, cwd }
+ * - Antigravity: { toolCall: { name, args: { CommandLine, Path, AbsolutePath, SearchPath, ... } }, workspacePaths: [...] }
+ * - Claude Code: { hook_event_name, tool_name, tool_input: { command, file_path, path, glob, ... }, cwd }
+ * - Generic fallback: { command, filePath, searchPath, searchGlobs, cwd }
  */
 export function parseHookInput(rawText, { argv = process.argv.slice(2), env = process.env, defaultCwd = process.cwd() } = {}) {
   const harness = resolveHarness(argv, env);
@@ -165,15 +197,38 @@ export function parseHookInput(rawText, { argv = process.argv.slice(2), env = pr
 
   if (raw && typeof raw.toolCall === 'object' && raw.toolCall !== null) {
     const args = raw.toolCall.args ?? {};
+    const toolName = typeof raw.toolCall.name === 'string' ? raw.toolCall.name : '';
     const ws = Array.isArray(raw.workspacePaths) && typeof raw.workspacePaths[0] === 'string' && raw.workspacePaths[0]
       ? raw.workspacePaths[0]
       : defaultCwd;
+    const filePath = firstNonEmptyString(
+      args.Path,
+      args.AbsolutePath,
+      args.TargetFile,
+      args.File,
+      args.FilePath,
+      args.SearchPath,
+      args.DirectoryPath,
+      args.SearchDirectory,
+      args.file_path,
+      args.path,
+    );
+    const searchPath = firstNonEmptyString(
+      args.SearchPath,
+      args.SearchDirectory,
+      args.DirectoryPath,
+      args.Path,
+      args.AbsolutePath,
+      args.path,
+    );
     return {
       harness: harness === 'generic' ? 'antigravity' : harness,
       schema: 'antigravity',
-      toolName: typeof raw.toolCall.name === 'string' ? raw.toolCall.name : '',
-      command: typeof args.CommandLine === 'string' ? args.CommandLine : (typeof args.command === 'string' ? args.command : ''),
-      filePath: typeof args.Path === 'string' ? args.Path : (typeof args.file_path === 'string' ? args.file_path : ''),
+      toolName,
+      command: firstNonEmptyString(args.CommandLine, args.command),
+      filePath,
+      searchPath,
+      searchGlobs: normalizeGlobList(toolName, args),
       cwd: ws,
       toolArgs: args,
       raw,
@@ -182,26 +237,68 @@ export function parseHookInput(rawText, { argv = process.argv.slice(2), env = pr
 
   if (raw && (typeof raw.tool_input === 'object' || typeof raw.hook_event_name === 'string')) {
     const ti = raw.tool_input ?? {};
+    const toolName = typeof raw.tool_name === 'string' ? raw.tool_name : '';
+    const filePath = firstNonEmptyString(ti.file_path, ti.path, ti.Path, ti.filePath);
+    const searchPath = firstNonEmptyString(ti.path, ti.file_path, ti.Path, ti.filePath);
     return {
       harness,
       schema: 'claude',
-      toolName: typeof raw.tool_name === 'string' ? raw.tool_name : '',
-      command: typeof ti.command === 'string' ? ti.command : '',
-      filePath: typeof ti.file_path === 'string' ? ti.file_path : '',
+      toolName,
+      command: firstNonEmptyString(ti.command),
+      filePath,
+      searchPath,
+      searchGlobs: normalizeGlobList(toolName, ti),
       cwd: typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : defaultCwd,
       toolArgs: ti,
       raw,
     };
   }
 
+  const toolName = typeof raw?.toolName === 'string' ? raw.toolName : '';
+  const toolArgs = raw?.toolArgs ?? raw?.args ?? raw?.tool_input ?? {};
+  const filePath = firstNonEmptyString(
+    raw?.filePath,
+    raw?.Path,
+    raw?.AbsolutePath,
+    raw?.TargetFile,
+    raw?.File,
+    raw?.SearchPath,
+    raw?.DirectoryPath,
+    raw?.SearchDirectory,
+    raw?.file_path,
+    raw?.path,
+    toolArgs?.Path,
+    toolArgs?.AbsolutePath,
+    toolArgs?.TargetFile,
+    toolArgs?.File,
+    toolArgs?.SearchPath,
+    toolArgs?.DirectoryPath,
+    toolArgs?.SearchDirectory,
+    toolArgs?.file_path,
+    toolArgs?.path,
+  );
+  const searchPath = firstNonEmptyString(
+    raw?.searchPath,
+    raw?.SearchPath,
+    raw?.SearchDirectory,
+    raw?.DirectoryPath,
+    raw?.path,
+    toolArgs?.SearchPath,
+    toolArgs?.SearchDirectory,
+    toolArgs?.DirectoryPath,
+    toolArgs?.path,
+    filePath,
+  );
   return {
     harness,
     schema: 'generic',
-    toolName: typeof raw?.toolName === 'string' ? raw.toolName : '',
-    command: typeof raw?.command === 'string' ? raw.command : (typeof raw?.CommandLine === 'string' ? raw.CommandLine : ''),
-    filePath: typeof raw?.filePath === 'string' ? raw.filePath : (typeof raw?.Path === 'string' ? raw.Path : ''),
+    toolName,
+    command: firstNonEmptyString(raw?.command, raw?.CommandLine),
+    filePath,
+    searchPath,
+    searchGlobs: normalizeGlobList(toolName, { ...toolArgs, ...raw }),
     cwd: typeof raw?.cwd === 'string' && raw.cwd ? raw.cwd : defaultCwd,
-    toolArgs: raw?.toolArgs ?? raw?.args ?? raw?.tool_input ?? {},
+    toolArgs,
     raw,
   };
 }

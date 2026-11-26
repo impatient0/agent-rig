@@ -1,0 +1,6 @@
+# agent-rig deny policy (last matching rule wins, .gitignore semantics)
+# - `@defaults` inherits built-in secret paths and guard rules (updates via `rig update`).
+# - Add `pattern` to deny paths or `!pattern` after `@defaults` to allow fixtures/files.
+# - Use `!@rule-id` (e.g. `!@remote:terraform-plan`) to disable a named detector,
+#   or remove `@defaults` entirely for a blank-slate policy.
+@defaults

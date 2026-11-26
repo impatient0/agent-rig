@@ -68,17 +68,20 @@ function makeRepoWithHistory(prefix) {
   return { root, git, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-test('normalizeGitignore ignores .worktrees/ and drops the trailing slash from node_modules/', () => {
+test('normalizeGitignore ignores .worktrees/ and .rig/deny.local and drops the trailing slash from node_modules/', () => {
   assert.deepEqual(normalizeGitignore('node_modules/\n*.log\n'), {
-    content: 'node_modules\n*.log\n.worktrees/\n',
+    content: 'node_modules\n*.log\n.worktrees/\n.rig/deny.local\n',
     changed: true,
   });
-  assert.deepEqual(normalizeGitignore('/node_modules/\n'), { content: '/node_modules\n.worktrees/\n', changed: true });
-  assert.deepEqual(normalizeGitignore('node_modules\n.worktrees/\n'), {
-    content: 'node_modules\n.worktrees/\n',
+  assert.deepEqual(normalizeGitignore('/node_modules/\n'), {
+    content: '/node_modules\n.worktrees/\n.rig/deny.local\n',
+    changed: true,
+  });
+  assert.deepEqual(normalizeGitignore('node_modules\n.worktrees/\n.rig/deny.local\n'), {
+    content: 'node_modules\n.worktrees/\n.rig/deny.local\n',
     changed: false,
   });
-  assert.deepEqual(normalizeGitignore(''), { content: '.worktrees/\n', changed: true });
+  assert.deepEqual(normalizeGitignore(''), { content: '.worktrees/\n.rig/deny.local\n', changed: true });
 });
 
 test('attachMainCheckout re-attaches a detached clean checkout to main and detects dirty state', () => {
@@ -117,9 +120,9 @@ test('initRepo on a main checkout with history scaffolds into a linked worktree 
     assert.ok(existsSync(path.join(wt, '.rig/hooks/pre-merge-commit')));
     assert.equal(existsSync(path.join(root, 'AGENTS.md')), false);
 
-    // The worktree shares node_modules through a symlink, and .gitignore covers both it and .worktrees/.
+    // The worktree shares node_modules through a symlink, and .gitignore covers it, .worktrees/, and .rig/deny.local.
     assert.ok(lstatSync(path.join(wt, 'node_modules')).isSymbolicLink());
-    assert.equal(readFileSync(path.join(wt, '.gitignore'), 'utf8'), 'node_modules\n*.log\n.worktrees/\n');
+    assert.equal(readFileSync(path.join(wt, '.gitignore'), 'utf8'), 'node_modules\n*.log\n.worktrees/\n.rig/deny.local\n');
 
     // The main checkout stays attached to main, and the worktree stays on its branch.
     assert.equal(res.mainCheckoutHead.status, 'already-attached');
@@ -253,7 +256,7 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     assert.equal(existsSync(path.join(fakeHome, '.claude/rules/contract-change-gate.md')), false);
     assert.equal(existsSync(path.join(fakeHome, '.claude/rules/ui-change-gate.md')), false);
     const claudeSettings = JSON.parse(readFileSync(path.join(fakeHome, '.claude/settings.json'), 'utf8'));
-    assert.equal(claudeSettings.hooks.PreToolUse.length, 2);
+    assert.equal(claudeSettings.hooks.PreToolUse.length, 3);
     assert.match(claudeSettings.hooks.PreToolUse[0].hooks[0].command, /Run 'rig update'/);
 
     // Plant a dangling symlink and verify updateRig prunes it without prompting
@@ -271,7 +274,7 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     const updatedAgyHooks = JSON.parse(readFileSync(path.join(agyPluginDir, 'hooks.json'), 'utf8'));
     assert.match(updatedAgyHooks['remote-mutation-guard'].PreToolUse[0].hooks[0].command, /NODE="\/mock\/node\/updated"/);
     const updatedClaudeSettings = JSON.parse(readFileSync(path.join(fakeHome, '.claude/settings.json'), 'utf8'));
-    assert.equal(updatedClaudeSettings.hooks.PreToolUse[0].hooks.length, 2);
+    assert.equal(updatedClaudeSettings.hooks.PreToolUse[0].hooks.length, 3);
     assert.match(updatedClaudeSettings.hooks.PreToolUse[0].hooks[0].command, /NODE="\/mock\/node\/updated"/);
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
@@ -539,9 +542,9 @@ test('self-contained initRepo bundles skills, subagents, rules, hooks, and linte
     assert.equal(st.skills.effective.length, listSkills(path.join(RIG_ROOT, 'skills')).length);
     assert.equal(st.skillsPresent.length, listSkills(path.join(RIG_ROOT, 'skills')).length);
     assert.ok(st.skillsPresent.includes('rig-onboard'));
-    assert.equal(st.hooks.local.length, 3);
-    assert.equal(st.hooks.effectiveGuards.length, 3);
-    assert.equal(st.hooksPresent.length, 3);
+    assert.equal(st.hooks.local.length, 4);
+    assert.equal(st.hooks.effectiveGuards.length, 4);
+    assert.equal(st.hooksPresent.length, 4);
     assert.equal(st.hooks.gitPreCommit, '.rig/hooks/pre-commit');
     assert.equal(st.hooks.gitPreMergeCommit, '.rig/hooks/pre-merge-commit');
     assert.ok(existsSync(path.join(dir, '.claude/agents/verifier.md')));
@@ -586,6 +589,7 @@ test('both Antigravity and Claude Code plugin manifests are valid and point to e
   assert.ok(agyHooks['remote-mutation-guard']);
   assert.ok(agyHooks['main-checkout-edits-guard']);
   assert.ok(agyHooks['symlinked-node-modules-guard']);
+  assert.ok(agyHooks['secret-exposure-guard']);
 
   const claudePlugin = JSON.parse(readFileSync(path.join(RIG_ROOT, '.claude-plugin/plugin.json'), 'utf8'));
   assert.equal(claudePlugin.skills, './skills');
@@ -2298,16 +2302,19 @@ test('statusRepo reports mode (attached vs self-contained vs unrigged) with loca
     assert.deepEqual(attachedStatus.hooks.global, [
       'guard-main-checkout-edits.mjs',
       'guard-remote-mutation.mjs',
+      'guard-secret-exposure.mjs',
       'guard-symlinked-node-modules.mjs',
     ]);
     assert.deepEqual(attachedStatus.hooks.effectiveGuards, [
       'guard-main-checkout-edits.mjs',
       'guard-remote-mutation.mjs',
+      'guard-secret-exposure.mjs',
       'guard-symlinked-node-modules.mjs',
     ]);
     assert.deepEqual(attachedStatus.hooksPresent, [
       'guard-main-checkout-edits.mjs',
       'guard-remote-mutation.mjs',
+      'guard-secret-exposure.mjs',
       'guard-symlinked-node-modules.mjs',
     ]);
     assert.equal(attachedStatus.hooks.gitPreCommit, '.rig/hooks/pre-commit');
@@ -2326,6 +2333,7 @@ test('statusRepo reports mode (attached vs self-contained vs unrigged) with loca
     assert.deepEqual(parsedCli.hooks.effectiveGuards, [
       'guard-main-checkout-edits.mjs',
       'guard-remote-mutation.mjs',
+      'guard-secret-exposure.mjs',
       'guard-symlinked-node-modules.mjs',
     ]);
   } finally {
@@ -2582,6 +2590,64 @@ test('CLI rig verify-stamp writes stamp JSON, rejects main and dirty worktrees, 
     rmSync(fakeHome, { recursive: true, force: true });
   }
 });
+
+test('initRepo and updateRepo seed .rig/deny when missing and never clobber existing .rig/deny', () => {
+  const repo = mkdtempSync(path.join(tmpdir(), 'rig-deny-seed-'));
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-deny-home-'));
+  try {
+    mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
+    installRig({ homeDir: fakeHome, harnesses: ['antigravity'] });
+
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    spawnSync('git', ['-C', repo, 'config', 'user.email', 'test@example.com']);
+    spawnSync('git', ['-C', repo, 'config', 'user.name', 'Test']);
+
+    // 1. initRepo seeds .rig/deny, .rig/templates/deny.default, and parser/policy libs
+    const initRes = initRepo(repo, { selfContained: true, worktrees: true, harness: 'claude', homeDir: fakeHome });
+    const denyPath = path.join(repo, '.rig/deny');
+    assert.ok(existsSync(denyPath));
+    assert.ok(initRes.staged.includes('.rig/deny'));
+    const seededText = readFileSync(denyPath, 'utf8');
+    assert.match(seededText, /@defaults/);
+    assert.match(seededText, /!pattern/);
+    assert.match(seededText, /!@rule-id/);
+
+    assert.ok(existsSync(path.join(repo, '.rig/templates/deny.default')));
+    assert.ok(existsSync(path.join(repo, '.rig/hooks/lib/shell-parser.mjs')));
+    assert.ok(existsSync(path.join(repo, '.rig/hooks/lib/deny-policy.mjs')));
+    assert.ok(existsSync(path.join(repo, '.claude/hooks/lib/shell-parser.mjs')));
+    assert.ok(existsSync(path.join(repo, '.claude/hooks/lib/deny-policy.mjs')));
+
+    // 2. Customize .rig/deny (blank-slate without @defaults), commit, and run updateRepo -> must NOT clobber
+    const customDeny = '# custom blank-slate policy\n*.secret\n!@remote:terraform-plan\n';
+    writeFileSync(denyPath, customDeny, 'utf8');
+    spawnSync('git', ['-C', repo, 'add', '-A']);
+    spawnSync('git', ['-C', repo, 'commit', '-qm', 'chore: init with custom deny']);
+
+    const updCustom = updateRepo(repo, { harness: 'claude', autoCommit: true, homeDir: fakeHome });
+    assert.equal(readFileSync(denyPath, 'utf8'), customDeny);
+    assert.ok(!updCustom.copied.includes(denyPath));
+
+    // 3. Simulate pre-existing repo without .rig/deny -> checkRepoPendingUpdates flags it, updateRepo seeds it
+    rmSync(denyPath, { force: true });
+    spawnSync('git', ['-C', repo, 'add', '-A']);
+    spawnSync('git', ['-C', repo, 'commit', '-qm', 'chore: remove deny for legacy simulation']);
+
+    const pending = checkRepoPendingUpdates(repo, { harness: 'claude' });
+    assert.equal(pending.hasPendingUpdates, true);
+    assert.ok(pending.pendingFiles.includes(denyPath));
+
+    const updSeed = updateRepo(repo, { harness: 'claude', autoCommit: true, homeDir: fakeHome });
+    assert.equal(updSeed.committed, true, updSeed.commitError);
+    assert.ok(existsSync(denyPath));
+    assert.match(readFileSync(denyPath, 'utf8'), /@defaults/);
+    assert.equal(checkRepoPendingUpdates(repo, { harness: 'claude' }).hasPendingUpdates, false);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
 
 
 

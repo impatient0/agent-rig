@@ -6,7 +6,12 @@
 ## Do next
 <!-- High-leverage, unblocked, spec-complete items ready for immediate execution or dispatch (Open Decisions = 0, identified Core files, and verification command). -->
 
-- None currently queued.
+- **Shared pipeline-aware shell parser (`shell-parser.mjs`) and configurable `.rig/deny` policy engine (`deny-policy.mjs` + `deny.default`):**
+  Governed by [`docs/adr/0006-configurable-deny-policy-and-secops-guards.md`](adr/0006-configurable-deny-policy-and-secops-guards.md).
+  Extract duplicated shell tokenization from `hooks/guard-remote-mutation.mjs` and `hooks/guard-symlinked-node-modules.mjs` into `shell-parser.mjs` under `hooks/lib/` preserving list separators (`;`, `&&`, `||`, `\n`), pipeline stages (`|`, `|&`), per-stage redirections (`<`, `>`, `>>`, `2>&1`, `/dev/null`), subshells, nested shells, wrappers, and `cd` tracking, and migrate both existing shell hooks onto it with zero behavior regressions.
+  Implement `deny-policy.mjs` under `hooks/lib/` and `deny.default` under `templates/` supporting `@defaults` expansion, top-to-bottom last-match-wins path/directory globs (`~/` expansion and `!pattern` negations), named `@content:<id>`, `@shell:<id>`, and `@remote:<id>` switches (and `!@<category>:<id>` negations), `--stealth` `repoRoot` fallback via `hooks/lib/hook-io.mjs` (`resolveGitRoots`), `.rig/deny.local` untracked overrides, and `.rig/deny` seeding on `rig init` and `rig update --repo` in `bin/rig.mjs` (plus `VENDORED_RIG_FILES` and `rewriteDocLinks`).
+  Core files: `hooks/guard-remote-mutation.mjs`, `hooks/guard-symlinked-node-modules.mjs`, `hooks/lib/hook-io.mjs`, `bin/rig.mjs`.
+  Verification: `npm test`.
 
 ## Ready, unblocked
 <!-- Clear scope, identified Core files, and unambiguous acceptance criteria (Open Decisions = 0); can be picked up by a Worker subagent at any time without human input. -->
@@ -16,7 +21,19 @@
 ## Gated on an in-flight milestone
 <!-- Clear scope, but blocked until a named feature or refactor lands; must state the exact unblocking condition. -->
 
-- None currently queued.
+- **Cross-harness `PreToolUse` secret-exposure guard (`guard-secret-exposure.mjs`), `.rig/deny` anti-tamper lock, and SOPS handoff skill updates:**
+  Unblocked once the shared shell parser and `.rig/deny` policy engine slice lands (or stacked linearly on its branch) per [`docs/adr/0006-configurable-deny-policy-and-secops-guards.md`](adr/0006-configurable-deny-policy-and-secops-guards.md).
+  Extend `parseHookInput` in `hooks/lib/hook-io.mjs` for cross-harness read/search arguments (`read_file`, `view_file`, `view_file_outline`, `view_code_item`, `grep_search`, `Read`, `Grep`), implement `guard-secret-exposure.mjs` under `hooks/` gated on `isDirectoryInRiggedRepo(cwd) || (targetPath && isDirectoryInRiggedRepo(targetPath))` covering `.rig/deny` globs, `@content:*` header checks (`private-key`, `unencrypted-sops`, `npmrc-auth`), `@shell:*` stdout leak rules (`file-read`, `sops-decrypt`, `env-dump`, `cli-secret-dump`), and hardcoded anti-tamper denial on `.rig/deny` / `.rig/deny.local` mutations across both `hooks/guard-main-checkout-edits.mjs` and shell commands.
+  Wire `guard-secret-exposure.mjs` into `hooks.json`, `hooks/claude-hooks.json`, and `bin/rig.mjs` (`installForClaude`, `mergeClaudeSettings`, `VENDORED_RIG_FILES`, `isRiggedRepo`, `checkRepoPendingUpdates`, `updateRepo`, `initRepo`, `rewriteDocLinks`), and update [`skills/secure-credential-handoff/SKILL.md`](../skills/secure-credential-handoff/SKILL.md) with `sops exec-env` / `sops exec-file` and `grep -q` patterns.
+  Core files: `hooks/lib/hook-io.mjs`, `hooks/guard-main-checkout-edits.mjs`, `hooks.json`, `hooks/claude-hooks.json`, `bin/rig.mjs`, [`skills/secure-credential-handoff/SKILL.md`](../skills/secure-credential-handoff/SKILL.md).
+  Verification: `npm test`.
+
+- **IaC & remote orchestration guards in `hooks/guard-remote-mutation.mjs` and comprehensive `.rig/deny` / SecOps documentation:**
+  Unblocked once the `.rig/deny` policy engine and `guard-secret-exposure.mjs` slices land (or stacked linearly on Slice 2) per [`docs/adr/0006-configurable-deny-policy-and-secops-guards.md`](adr/0006-configurable-deny-policy-and-secops-guards.md).
+  Add token-aware checks to `hooks/guard-remote-mutation.mjs` gated on `isDirectoryInRiggedRepo(activeCwd)` and `@remote:*` switches in `.rig/deny` for `ansible`/`ansible-playbook`, `terraform`/`tofu`/`terragrunt` (including `-chdir=<dir>` and `@remote:terraform-plan`), `kubectl`/`helm` (offline allowlist + `@remote:kubectl-read`/`@remote:helm-read` + mutation `ask`), and `rclone` (`<remote>:` and `:backend:` specs with `@remote:rclone-read` + mutation `ask`).
+  Document how `.rig/deny` (`@defaults`, last-match-wins globs, `!pattern` and `!@rule-id` overrides, `.rig/deny.local`, `--stealth` behavior, and anti-tamper rules), `guard-secret-exposure.mjs` (SOPS workflows, file/content/shell rules), and the IaC remote guards work and how to use them in [`README.md`](../README.md) and [`docs/field-notes.md`](field-notes.md).
+  Core files: `hooks/guard-remote-mutation.mjs`, [`README.md`](../README.md), [`docs/field-notes.md`](field-notes.md).
+  Verification: `npm test`.
 
 ## Needs a decision
 <!-- Blocked on an explicit product, UX, or architectural question; must state the concrete question to ask the user. -->

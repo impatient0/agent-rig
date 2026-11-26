@@ -12,198 +12,19 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readHookInput, emitDecision, isDirectoryInRiggedRepo } from './lib/hook-io.mjs';
 import { getAllowedHosts, normalizeHost } from './lib/remote-allowlist.mjs';
+import {
+  stripHeredocs,
+  maskQuotes,
+  tokenize,
+  stripWrappers,
+  parseCdSegment,
+  parseNestedCommand,
+  extractSubshells,
+  parseCommandLists,
+} from './lib/shell-parser.mjs';
 
-function stripHeredocs(cmd) {
-  const lines = cmd.split('\n');
-  const out = [];
-  let endToken = null;
-  for (const line of lines) {
-    if (endToken !== null) {
-      if (line.trim() === endToken) endToken = null;
-      continue;
-    }
-    const m = line.match(/<<-?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/);
-    if (m) endToken = m[1] ?? m[2] ?? m[3];
-    out.push(line);
-  }
-  return out.join('\n');
-}
-
-function maskQuotes(s) {
-  return s.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, '""');
-}
-
-function tokenize(seg) {
-  const tokens = [];
-  const re = /'([^']*)'|"((?:\\.|[^"\\])*)"|(\S+)/g;
-  let m;
-  while ((m = re.exec(seg)) !== null) {
-    tokens.push(m[1] ?? m[2] ?? m[3]);
-  }
-  return tokens;
-}
-
-const WRAPPERS = new Set(['sudo', 'env', 'nohup', 'time', 'command', 'exec']);
-const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
-
-function stripWrappers(tokens) {
-  let i = 0;
-  const envAssignments = [];
-  while (i < tokens.length) {
-    const t = tokens[i];
-    if (ASSIGN_RE.test(t)) {
-      envAssignments.push(t);
-      i++;
-      continue;
-    }
-    if (WRAPPERS.has(t)) {
-      i++;
-      continue;
-    }
-    break;
-  }
-  return {
-    bin: tokens[i] ? path.basename(tokens[i]) : null,
-    rest: tokens.slice(i + 1),
-    envAssignments,
-  };
-}
-
-function parseCdSegment(seg) {
-  const { bin, rest } = stripWrappers(tokenize(seg));
-  if (bin !== 'cd') return null;
-  for (const tok of rest) {
-    if (tok.startsWith('-')) continue;
-    return tok;
-  }
-  return null;
-}
-
-function parseNestedCommand(seg) {
-  const { bin, rest } = stripWrappers(tokenize(seg));
-  if (!bin) return null;
-  if (bin === 'bash' || bin === 'sh' || bin === 'zsh' || bin === 'dash') {
-    for (let j = 0; j < rest.length - 1; j++) {
-      if (rest[j] === '-c') return rest[j + 1];
-    }
-    return null;
-  }
-  if (bin === 'eval' && rest.length > 0) {
-    return rest.join(' ');
-  }
-  return null;
-}
-
-function splitSegments(cmd) {
-  const masked = cmd.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, (m) => ' '.repeat(m.length));
-  const cuts = [0];
-  const sepRe = /[;&|\n]+/g;
-  let m;
-  while ((m = sepRe.exec(masked)) !== null) {
-    cuts.push(m.index, m.index + m[0].length);
-  }
-  cuts.push(cmd.length);
-  const segs = [];
-  for (let i = 0; i < cuts.length; i += 2) {
-    const s = cmd.slice(cuts[i], cuts[i + 1]).trim();
-    if (s) segs.push(s);
-  }
-  return segs;
-}
-
-function extractSubshells(str) {
-  const subshells = [];
-  let i = 0;
-  let inDoubleQuote = false;
-
-  while (i < str.length) {
-    const ch = str[i];
-
-    if (!inDoubleQuote && ch === "'") {
-      i++;
-      while (i < str.length && str[i] !== "'") {
-        i++;
-      }
-      if (i < str.length) i++;
-      continue;
-    }
-
-    if (ch === '"') {
-      inDoubleQuote = !inDoubleQuote;
-      i++;
-      continue;
-    }
-
-    if (ch === '\\') {
-      i += 2;
-      continue;
-    }
-
-    if (ch === '$' && str[i + 1] === '(') {
-      let depth = 1;
-      let j = i + 2;
-      const start = j;
-      let innerInDoubleQuote = false;
-
-      while (j < str.length && depth > 0) {
-        const c = str[j];
-
-        if (!innerInDoubleQuote && c === "'") {
-          j++;
-          while (j < str.length && str[j] !== "'") j++;
-          if (j < str.length) j++;
-          continue;
-        }
-
-        if (c === '"') {
-          innerInDoubleQuote = !innerInDoubleQuote;
-          j++;
-          continue;
-        }
-
-        if (c === '\\') {
-          j += 2;
-          continue;
-        }
-
-        if (c === '(') {
-          depth++;
-        } else if (c === ')') {
-          depth--;
-          if (depth === 0) {
-            break;
-          }
-        }
-        j++;
-      }
-
-      subshells.push(str.slice(start, j));
-      i = j + 1;
-      continue;
-    }
-
-    if (ch === '`') {
-      let j = i + 1;
-      const start = j;
-      while (j < str.length) {
-        if (str[j] === '\\') {
-          j += 2;
-          continue;
-        }
-        if (str[j] === '`') {
-          break;
-        }
-        j++;
-      }
-      subshells.push(str.slice(start, j));
-      i = j + 1;
-      continue;
-    }
-
-    i++;
-  }
-
-  return subshells;
+function toTokens(segOrTokens) {
+  return Array.isArray(segOrTokens) ? segOrTokens : tokenize(segOrTokens);
 }
 
 function getCurrentBranch(cwd) {
@@ -230,8 +51,8 @@ const PUSH_FLAGS_WITH_ARG = new Set([
   '--exec',
 ]);
 
-function checkGitPush(seg, cwd) {
-  const tokens = tokenize(seg);
+function checkGitPush(segOrTokens, cwd) {
+  const tokens = toTokens(segOrTokens);
   const { bin, rest } = stripWrappers(tokens);
   if (bin !== 'git') return null;
 
@@ -333,8 +154,8 @@ function checkGitPush(seg, cwd) {
  * Prevents agents from silently mutating the agent-rig remote host allowlist itself.
  * Read-only `--list` / `list` / `--help` invocations pass unprompted.
  */
-function checkRigAllowMutation(seg) {
-  const { bin, rest } = stripWrappers(tokenize(seg));
+function checkRigAllowMutation(segOrTokens) {
+  const { bin, rest } = stripWrappers(toTokens(segOrTokens));
   if (!bin) return null;
 
   let subIdx = -1;
@@ -524,8 +345,8 @@ function extractRemoteSpecHost(arg, { allowDoubleColon = false } = {}) {
   return { isRemote: false, host: null };
 }
 
-function checkSshTransport(seg, allowedHosts) {
-  const { bin, rest } = stripWrappers(tokenize(seg));
+function checkSshTransport(segOrTokens, allowedHosts) {
+  const { bin, rest } = stripWrappers(toTokens(segOrTokens));
   if (bin !== 'ssh' && bin !== 'scp' && bin !== 'sftp' && bin !== 'rsync') {
     return null;
   }
@@ -668,8 +489,8 @@ function checkSshTransport(seg, allowedHosts) {
 const DOCKER_HOST_ENV_REASON = 'sets `DOCKER_HOST` to target a non-default Docker daemon';
 const DOCKER_FLAG_REASON = 'targets a remote Docker daemon (`-H` / `--host` / `--context`)';
 
-function checkDockerRemote(seg, allowedHosts) {
-  const tokens = tokenize(seg);
+function checkDockerRemote(segOrTokens, allowedHosts) {
+  const tokens = toTokens(segOrTokens);
   const { bin, rest, envAssignments } = stripWrappers(tokens);
 
   let foundEnv = false;
@@ -785,84 +606,91 @@ export function evaluateCommand(command, cwd = process.cwd(), options = {}, _dep
     return allowlistCache.get(dir);
   };
 
-  const segs = splitSegments(stripped);
-  for (const seg of segs) {
-    const cdTarget = parseCdSegment(seg);
-    if (cdTarget) {
-      activeCwd = path.resolve(activeCwd, cdTarget);
-      continue;
-    }
-
-    // 1. Check extracted subshells ($( ... ) and ` ... `) in this segment recursively
-    const subshells = extractSubshells(seg);
-    for (const sub of subshells) {
-      const subEval = evaluateCommand(sub, activeCwd, options, _depth + 1);
-      if (subEval.decision === 'ask') return subEval;
-      if (!subEval.explicitAllow) {
-        allSegmentsAllowlistedOrCd = false;
+  const lists = parseCommandLists(stripped);
+  for (const list of lists) {
+    if (list.stages.length === 1) {
+      const cdTarget = parseCdSegment(list.stages[0].tokens);
+      if (cdTarget) {
+        activeCwd = path.resolve(activeCwd, cdTarget);
+        continue;
       }
     }
 
-    // 2. Check git push (resolves -C <dir> relative to activeCwd and checks rigged status)
-    const pushReason = checkGitPush(seg, activeCwd);
-    if (pushReason) {
-      return { decision: 'ask', explicitAllow: false, reason: pushReason };
-    }
+    for (const stage of list.stages) {
+      const seg = stage.raw;
+      const tokens = stage.tokens;
 
-    // 3. Check nested commands (bash -c, eval)
-    const nested = parseNestedCommand(seg);
-    if (nested) {
-      const nestedEval = evaluateCommand(nested, activeCwd, options, _depth + 1);
-      if (nestedEval.decision === 'ask') return nestedEval;
-      if (nestedEval.explicitAllow) {
-        matchedAllowlistedRemote = true;
+      // 1. Check extracted subshells ($( ... ) and ` ... `) in this stage recursively
+      const subshells = extractSubshells(seg);
+      for (const sub of subshells) {
+        const subEval = evaluateCommand(sub, activeCwd, options, _depth + 1);
+        if (subEval.decision === 'ask') return subEval;
+        if (!subEval.explicitAllow) {
+          allSegmentsAllowlistedOrCd = false;
+        }
+      }
+
+      // 2. Check git push (resolves -C <dir> relative to activeCwd and checks rigged status)
+      const pushReason = checkGitPush(tokens, activeCwd);
+      if (pushReason) {
+        return { decision: 'ask', explicitAllow: false, reason: pushReason };
+      }
+
+      // 3. Check nested commands (bash -c, eval)
+      const nested = parseNestedCommand(tokens);
+      if (nested) {
+        const nestedEval = evaluateCommand(nested, activeCwd, options, _depth + 1);
+        if (nestedEval.decision === 'ask') return nestedEval;
+        if (nestedEval.explicitAllow) {
+          matchedAllowlistedRemote = true;
+        } else {
+          allSegmentsAllowlistedOrCd = false;
+        }
+        continue;
+      }
+
+      // 4. Enforce general remote/shared-state rules only when activeCwd is in a rigged repository
+      // (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
+      if (isDirectoryInRiggedRepo(activeCwd)) {
+        const rigAllowReason = checkRigAllowMutation(tokens);
+        if (rigAllowReason) {
+          return { decision: 'ask', explicitAllow: false, reason: rigAllowReason };
+        }
+
+        const allowedHosts = getCachedAllowedHosts(activeCwd);
+        let segAllowlisted = false;
+
+        const sshRes = checkSshTransport(tokens, allowedHosts);
+        if (sshRes) {
+          if (sshRes.status === 'ask') {
+            return { decision: 'ask', explicitAllow: false, reason: sshRes.reason };
+          }
+          segAllowlisted = true;
+          matchedAllowlistedRemote = true;
+        }
+
+        const dockerRes = checkDockerRemote(tokens, allowedHosts);
+        if (dockerRes) {
+          if (dockerRes.status === 'ask') {
+            return { decision: 'ask', explicitAllow: false, reason: dockerRes.reason };
+          }
+          segAllowlisted = true;
+          matchedAllowlistedRemote = true;
+        }
+
+        const scrubbed = maskQuotes(seg);
+        for (const { re, reason } of RULES) {
+          if (re.test(scrubbed)) {
+            return { decision: 'ask', explicitAllow: false, reason };
+          }
+        }
+
+        if (!segAllowlisted) {
+          allSegmentsAllowlistedOrCd = false;
+        }
       } else {
         allSegmentsAllowlistedOrCd = false;
       }
-      continue;
-    }
-
-    // 4. Enforce general remote/shared-state rules only when activeCwd is in a rigged repository
-    // (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
-    if (isDirectoryInRiggedRepo(activeCwd)) {
-      const rigAllowReason = checkRigAllowMutation(seg);
-      if (rigAllowReason) {
-        return { decision: 'ask', explicitAllow: false, reason: rigAllowReason };
-      }
-
-      const allowedHosts = getCachedAllowedHosts(activeCwd);
-      let segAllowlisted = false;
-
-      const sshRes = checkSshTransport(seg, allowedHosts);
-      if (sshRes) {
-        if (sshRes.status === 'ask') {
-          return { decision: 'ask', explicitAllow: false, reason: sshRes.reason };
-        }
-        segAllowlisted = true;
-        matchedAllowlistedRemote = true;
-      }
-
-      const dockerRes = checkDockerRemote(seg, allowedHosts);
-      if (dockerRes) {
-        if (dockerRes.status === 'ask') {
-          return { decision: 'ask', explicitAllow: false, reason: dockerRes.reason };
-        }
-        segAllowlisted = true;
-        matchedAllowlistedRemote = true;
-      }
-
-      const scrubbed = maskQuotes(seg);
-      for (const { re, reason } of RULES) {
-        if (re.test(scrubbed)) {
-          return { decision: 'ask', explicitAllow: false, reason };
-        }
-      }
-
-      if (!segAllowlisted) {
-        allSegmentsAllowlistedOrCd = false;
-      }
-    } else {
-      allSegmentsAllowlistedOrCd = false;
     }
   }
 

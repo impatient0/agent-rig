@@ -12,6 +12,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readHookInput, emitDecision, isDirectoryInRiggedRepo } from './lib/hook-io.mjs';
 import { getAllowedHosts, normalizeHost } from './lib/remote-allowlist.mjs';
+import { loadDenyPolicy, isRuleEnabled } from './lib/deny-policy.mjs';
 import {
   stripHeredocs,
   maskQuotes,
@@ -569,6 +570,362 @@ function checkDockerRemote(segOrTokens, allowedHosts) {
   return { status: 'ask', reason };
 }
 
+const ANSIBLE_VALUE_FLAGS = new Set([
+  '-e', '--extra-vars', '-i', '--inventory', '--inventory-file',
+  '-u', '--user', '-l', '--limit', '-t', '--tags', '--skip-tags',
+  '--vault-password-file', '--vault-id', '-M', '--module-path',
+  '-f', '--forks', '--private-key', '--key-file', '-T', '--timeout',
+  '-c', '--connection', '-m', '--module-name', '-a', '--args',
+  '--become-method', '--become-user', '--ssh-common-args',
+  '--sftp-extra-args', '--scp-extra-args', '--ssh-extra-args',
+  '--start-at-task', '-B', '--background', '-P', '--poll',
+]);
+const ANSIBLE_OFFLINE_FLAGS = new Set([
+  '--syntax-check', '--version', '--help', '-h',
+  '--list-tasks', '--list-tags', '--list-hosts',
+]);
+
+const TERRAFORM_DIR_FLAGS = new Set(['-chdir', '--terragrunt-working-dir', '--working-dir']);
+const TERRAFORM_VALUE_FLAGS = new Set([
+  '-chdir', '--terragrunt-working-dir', '--working-dir',
+  '--terragrunt-config', '--config', '--terragrunt-tfpath', '--terragrunt-download-dir',
+  '--terragrunt-iam-role', '--terragrunt-iam-assume-role-duration',
+  '--terragrunt-iam-assume-role-session-name', '--terragrunt-source',
+  '--terragrunt-include-dir', '--terragrunt-exclude-dir',
+  '--terragrunt-log-level', '--log-level',
+  '-var', '-var-file', '-backend', '--backend', '-backend-config',
+  '-target', '-out', '-state', '-state-out', '-backup',
+  '-lock-timeout', '-parallelism', '-plugin-dir', '-platform',
+]);
+const TERRAFORM_OFFLINE_SUBS = new Set([
+  'validate', 'fmt', 'hclfmt', 'version', 'providers',
+  'graph', 'show', 'output', 'validate-inputs', 'graph-dependencies',
+]);
+
+const KUBECTL_VALUE_FLAGS = new Set([
+  '-n', '--namespace', '--context', '--kubeconfig', '--cluster', '--user',
+  '-s', '--server', '--as', '--as-group', '--as-uid', '-v', '--v',
+  '-o', '--output', '--request-timeout', '--cache-dir', '--token',
+  '--username', '--password', '--client-certificate', '--client-key',
+  '--certificate-authority', '--tls-server-name', '--vmodule',
+  '--log-dir', '--log-file', '--profile', '--profile-output',
+  '--match-server-version', '-f', '--filename', '-k', '--kustomize',
+  '-l', '--selector', '--field-selector', '--dry-run',
+  '-c', '--container', '--sort-by', '--template',
+  '--kube-apiserver', '--registry-config', '--repository-cache', '--repository-config',
+]);
+const KUBECTL_READ_SUBS = new Set([
+  'get', 'describe', 'logs', 'top', 'events', 'explain',
+  'diff', 'wait', 'api-resources', 'api-versions', 'cluster-info',
+]);
+const KUBECTL_OFFLINE_CONFIG_SUBS = new Set([
+  'current-context', 'get-contexts', 'get-clusters', 'get-users', 'view',
+]);
+
+const HELM_VALUE_FLAGS = new Set([
+  '-n', '--namespace', '--kube-context', '--kubeconfig', '--kube-apiserver',
+  '--kube-as-user', '--kube-as-group', '--kube-ca-file', '--kube-token',
+  '--kube-tls-server-name', '--registry-config', '--repository-cache',
+  '--repository-config', '--content-cache', '--burst-limit', '--qps',
+  '-o', '--output', '-f', '--values', '--set', '--set-string',
+  '--set-file', '--set-json', '--set-literal', '--version', '--repo',
+  '--username', '--password', '--ca-file', '--cert-file', '--key-file',
+  '--timeout', '--description', '--post-renderer', '-l', '--selector',
+]);
+const HELM_OFFLINE_SUBS = new Set([
+  'help', 'lint', 'template', 'show', 'inspect', 'search',
+  'version', 'env', 'verify', 'create', 'package', 'completion',
+]);
+const HELM_READ_SUBS = new Set(['list', 'ls', 'status', 'history', 'get']);
+
+const RCLONE_VALUE_FLAGS = new Set([
+  '--config', '--log-file', '--log-level', '--log-format',
+  '--filter', '--filter-from', '--include', '--include-from',
+  '--exclude', '--exclude-from', '--files-from', '--files-from-raw',
+  '--transfers', '--checkers', '--bwlimit', '--tpslimit', '--user-agent',
+  '--addr', '--baseurl', '--bind', '--rc-addr', '--rc-user', '--rc-pass',
+  '--password-command', '--cache-dir', '--temp-dir', '--backup-dir',
+  '--suffix', '--compare-dest', '--copy-dest', '--max-age', '--min-age',
+  '--max-size', '--min-size', '--max-depth', '--contimeout', '--timeout',
+  '--order-by', '--stats', '--stats-unit', '--header',
+  '--header-download', '--header-upload', '--dump', '--rc-files', '-o', '--output',
+]);
+const RCLONE_LOCAL_SUBS = new Set(['version', 'help', 'listremotes', 'obscure', 'genautocomplete']);
+const RCLONE_READ_SUBS = new Set([
+  'ls', 'lsd', 'lsf', 'lsl', 'lsjson', 'md5sum', 'sha1sum',
+  'hashsum', 'size', 'stat', 'about', 'check', 'cryptcheck', 'tree', 'ncdu',
+]);
+
+function consumeFlagArg(rest, index, valueFlags) {
+  const tok = rest[index];
+  const eqIdx = tok.indexOf('=');
+  const flag = eqIdx === -1 ? tok : tok.slice(0, eqIdx);
+  const inlineVal = eqIdx === -1 ? null : tok.slice(eqIdx + 1);
+  if (eqIdx === -1 && valueFlags.has(flag) && index + 1 < rest.length) {
+    return { flag, value: rest[index + 1], nextIndex: index + 1 };
+  }
+  return { flag, value: inlineVal, nextIndex: index };
+}
+
+/**
+ * Checks `ansible` / `ansible-playbook` invocations under `@remote:ansible`
+ * (governed by docs/adr/0006-configurable-deny-policy-and-secops-guards.md Decision 5).
+ */
+function checkAnsible(tokens, policy) {
+  const { bin, rest } = stripWrappers(tokens);
+  if (bin !== 'ansible' && bin !== 'ansible-playbook') return null;
+  if (!isRuleEnabled(policy, 'remote:ansible')) return null;
+
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (tok === '--') break;
+    if (ANSIBLE_OFFLINE_FLAGS.has(tok)) return null;
+    if (tok.startsWith('-') && tok !== '-') {
+      i = consumeFlagArg(rest, i, ANSIBLE_VALUE_FLAGS).nextIndex;
+    }
+  }
+
+  return `runs Ansible (\`${bin}\`) against managed hosts (\`@remote:ansible\`)`;
+}
+
+/**
+ * Checks `terraform` / `tofu` / `terragrunt` invocations under `@remote:terraform` and
+ * `@remote:terraform-plan`, resolving `-chdir` and `--terragrunt-working-dir` before
+ * checking rigged isolation (governed by docs/adr/0006-configurable-deny-policy-and-secops-guards.md Decision 5).
+ */
+function checkTerraformRemote(tokens, activeCwd, getPolicy) {
+  const { bin, rest } = stripWrappers(tokens);
+  if (bin !== 'terraform' && bin !== 'tofu' && bin !== 'terragrunt') return null;
+
+  let effectiveCwd = activeCwd;
+  let hasHelpOrVersion = false;
+  let hasShortVBeforeSub = false;
+  let hasBackendFalse = false;
+  const positional = [];
+
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (tok === '--') {
+      positional.push(...rest.slice(i + 1));
+      break;
+    }
+    if (tok.startsWith('-') && tok !== '-') {
+      const { flag, value, nextIndex } = consumeFlagArg(rest, i, TERRAFORM_VALUE_FLAGS);
+      i = nextIndex;
+      if (TERRAFORM_DIR_FLAGS.has(flag) && value) {
+        effectiveCwd = path.resolve(activeCwd, value);
+      } else if ((flag === '-backend' || flag === '--backend') && value === 'false') {
+        hasBackendFalse = true;
+      } else if (
+        flag === '--help' ||
+        flag === '-h' ||
+        flag === '-help' ||
+        flag === '--version' ||
+        flag === '-version'
+      ) {
+        hasHelpOrVersion = true;
+      } else if (flag === '-v' && positional.length === 0) {
+        hasShortVBeforeSub = true;
+      }
+      continue;
+    }
+    positional.push(tok);
+  }
+
+  if (!isDirectoryInRiggedRepo(effectiveCwd)) return null;
+  if (hasHelpOrVersion || hasShortVBeforeSub || positional.length === 0) return null;
+
+  const policy = getPolicy(effectiveCwd);
+  let effectivePos = positional;
+  if (bin === 'terragrunt' && (effectivePos[0] === 'run-all' || effectivePos[0] === 'run')) {
+    effectivePos = effectivePos.slice(1);
+  }
+
+  const sub = effectivePos[0];
+  const sub2 = effectivePos[1];
+
+  if (sub && TERRAFORM_OFFLINE_SUBS.has(sub)) return null;
+  if (sub === 'init' && hasBackendFalse) return null;
+  if (sub === 'workspace' && (sub2 === 'list' || sub2 === 'show')) return null;
+  if (sub === 'state' && (sub2 === 'list' || sub2 === 'show')) return null;
+  if (bin === 'terragrunt' && sub === 'hcl' && (sub2 === 'fmt' || sub2 === 'validate')) return null;
+
+  if (sub === 'plan') {
+    if (!isRuleEnabled(policy, 'remote:terraform-plan')) return null;
+    return `runs \`${bin} plan\` against remote state/providers (\`@remote:terraform-plan\`)`;
+  }
+
+  if (!isRuleEnabled(policy, 'remote:terraform')) return null;
+  const label = sub
+    ? `${bin} ${sub}${sub2 && (sub === 'workspace' || sub === 'state') ? ` ${sub2}` : ''}`
+    : bin;
+  return `runs \`${label}\` modifying infrastructure or remote state (\`@remote:terraform\`)`;
+}
+
+/**
+ * Checks `kubectl` invocations under `@remote:kubectl` and `@remote:kubectl-read`
+ * (governed by docs/adr/0006-configurable-deny-policy-and-secops-guards.md Decision 5).
+ */
+function checkKubectl(tokens, policy) {
+  const { bin, rest } = stripWrappers(tokens);
+  if (bin !== 'kubectl') return null;
+
+  let hasHelp = false;
+  let dryRunMode = null;
+  let hasClientFlag = false;
+  const positional = [];
+
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (tok === '--') {
+      positional.push(...rest.slice(i + 1));
+      break;
+    }
+    if (tok.startsWith('-') && tok !== '-') {
+      const { flag, value, nextIndex } = consumeFlagArg(rest, i, KUBECTL_VALUE_FLAGS);
+      i = nextIndex;
+      if (flag === '--help' || flag === '-h') {
+        hasHelp = true;
+      } else if (flag === '--dry-run' && value !== null) {
+        dryRunMode = value.toLowerCase();
+      } else if (flag === '--client' && (value === null || value.toLowerCase() === 'true')) {
+        hasClientFlag = true;
+      }
+      continue;
+    }
+    positional.push(tok);
+  }
+
+  const sub = positional[0];
+  const sub2 = positional[1];
+
+  if (hasHelp || !sub || sub === 'help') return null;
+  if (dryRunMode === 'client') return null;
+  if (sub === 'version' && hasClientFlag) return null;
+  if (sub === 'config' && sub2 && KUBECTL_OFFLINE_CONFIG_SUBS.has(sub2)) return null;
+
+  const isReadOnly =
+    KUBECTL_READ_SUBS.has(sub) ||
+    sub === 'version' ||
+    (sub === 'auth' && (sub2 === 'can-i' || sub2 === 'whoami')) ||
+    (sub === 'rollout' && (sub2 === 'status' || sub2 === 'history'));
+
+  if (isReadOnly) {
+    if (!isRuleEnabled(policy, 'remote:kubectl-read')) return null;
+    const label = sub2 && (sub === 'auth' || sub === 'rollout') ? `${sub} ${sub2}` : sub;
+    return `queries a live Kubernetes cluster via \`kubectl ${label}\` (\`@remote:kubectl-read\`)`;
+  }
+
+  if (!isRuleEnabled(policy, 'remote:kubectl')) return null;
+  const label = sub2 && (sub === 'auth' || sub === 'rollout' || sub === 'config') ? `${sub} ${sub2}` : sub;
+  return `mutates or connects to a Kubernetes cluster via \`kubectl ${label}\` (\`@remote:kubectl\`)`;
+}
+
+/**
+ * Checks `helm` invocations under `@remote:helm` and `@remote:helm-read`
+ * (governed by docs/adr/0006-configurable-deny-policy-and-secops-guards.md Decision 5).
+ */
+function checkHelm(tokens, policy) {
+  const { bin, rest } = stripWrappers(tokens);
+  if (bin !== 'helm') return null;
+
+  let hasHelp = false;
+  let dryRunMode = null;
+  const positional = [];
+
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (tok === '--') {
+      positional.push(...rest.slice(i + 1));
+      break;
+    }
+    if (tok.startsWith('-') && tok !== '-') {
+      if (tok === '--dry-run') {
+        dryRunMode = 'client';
+        continue;
+      }
+      const { flag, value, nextIndex } = consumeFlagArg(rest, i, HELM_VALUE_FLAGS);
+      i = nextIndex;
+      if (flag === '--help' || flag === '-h') {
+        hasHelp = true;
+      } else if (flag === '--dry-run' && value !== null) {
+        dryRunMode = value.toLowerCase();
+      }
+      continue;
+    }
+    positional.push(tok);
+  }
+
+  const sub = positional[0];
+  const sub2 = positional[1];
+
+  if (hasHelp || !sub || HELM_OFFLINE_SUBS.has(sub)) return null;
+  if ((sub === 'dependency' || sub === 'dep') && (sub2 === 'list' || sub2 === 'ls')) return null;
+  if (dryRunMode === 'client' || dryRunMode === 'true') return null;
+
+  if (HELM_READ_SUBS.has(sub)) {
+    if (!isRuleEnabled(policy, 'remote:helm-read')) return null;
+    return `queries live Helm releases via \`helm ${sub}\` (\`@remote:helm-read\`)`;
+  }
+
+  if (!isRuleEnabled(policy, 'remote:helm')) return null;
+  const label = sub2 && (sub === 'dependency' || sub === 'dep') ? `${sub} ${sub2}` : sub;
+  return `mutates Helm releases or repositories via \`helm ${label}\` (\`@remote:helm\`)`;
+}
+
+function isRcloneRemoteSpec(arg) {
+  if (typeof arg !== 'string' || !arg) return false;
+  if (arg.startsWith(':') && arg.length > 1) return true;
+  const colonIdx = arg.indexOf(':');
+  if (colonIdx <= 0) return false;
+  const before = arg.slice(0, colonIdx);
+  if (before.includes('/') || /^[A-Za-z]$/.test(before)) return false;
+  return true;
+}
+
+/**
+ * Checks `rclone` invocations under `@remote:rclone` and `@remote:rclone-read`
+ * (governed by docs/adr/0006-configurable-deny-policy-and-secops-guards.md Decision 5).
+ */
+function checkRclone(tokens, policy) {
+  const { bin, rest } = stripWrappers(tokens);
+  if (bin !== 'rclone') return null;
+
+  let hasHelpOrVersion = false;
+  const positional = [];
+
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (tok === '--') {
+      positional.push(...rest.slice(i + 1));
+      break;
+    }
+    if (tok.startsWith('-') && tok !== '-') {
+      const { flag, nextIndex } = consumeFlagArg(rest, i, RCLONE_VALUE_FLAGS);
+      i = nextIndex;
+      if (flag === '--help' || flag === '-h' || flag === '--version' || flag === '-V') {
+        hasHelpOrVersion = true;
+      }
+      continue;
+    }
+    positional.push(tok);
+  }
+
+  const sub = positional[0];
+  if (hasHelpOrVersion || !sub || RCLONE_LOCAL_SUBS.has(sub)) return null;
+
+  const hasRemoteTarget = positional.slice(1).some(isRcloneRemoteSpec);
+  if (!hasRemoteTarget) return null;
+
+  if (RCLONE_READ_SUBS.has(sub)) {
+    if (!isRuleEnabled(policy, 'remote:rclone-read')) return null;
+    return `reads remote storage via \`rclone ${sub}\` (\`@remote:rclone-read\`)`;
+  }
+
+  if (!isRuleEnabled(policy, 'remote:rclone')) return null;
+  return `accesses or mutates remote storage via \`rclone ${sub}\` (\`@remote:rclone\`)`;
+}
+
 const SEG_START = `(?:^|[;&|]+|\\$\\(|\\b(?:sudo|env|nohup|time|command|exec)\\s+)+\\s*`;
 const atSegStart = (body) => new RegExp(`${SEG_START}${body}`, 'm');
 
@@ -587,7 +944,7 @@ const RULES = [
   },
 ];
 
-export function evaluateCommand(command, cwd = process.cwd(), options = {}, _depth = 0) {
+export function evaluateCommand(command, cwd = process.cwd(), options = {}, _depth = 0, _state = null) {
   if (typeof command !== 'string' || !command.trim() || _depth > 10) {
     return { decision: 'allow', explicitAllow: false, reason: null };
   }
@@ -597,13 +954,24 @@ export function evaluateCommand(command, cwd = process.cwd(), options = {}, _dep
   let activeCwd = cwd;
   let matchedAllowlistedRemote = false;
   let allSegmentsAllowlistedOrCd = true;
-  const allowlistCache = new Map();
+  const state = _state ?? { allowlistCache: new Map(), policyCache: new Map() };
 
   const getCachedAllowedHosts = (dir) => {
-    if (!allowlistCache.has(dir)) {
-      allowlistCache.set(dir, getAllowedHosts(dir, options));
+    if (!state.allowlistCache.has(dir)) {
+      state.allowlistCache.set(dir, getAllowedHosts(dir, options));
     }
-    return allowlistCache.get(dir);
+    return state.allowlistCache.get(dir);
+  };
+
+  const getCachedPolicy = (dir) => {
+    const key = path.resolve(dir || cwd || process.cwd());
+    if (!state.policyCache.has(key)) {
+      state.policyCache.set(
+        key,
+        loadDenyPolicy({ cwd: key, homeDir: options.homeDir, rigRoot: options.rigRoot }),
+      );
+    }
+    return state.policyCache.get(key);
   };
 
   const lists = parseCommandLists(stripped);
@@ -623,23 +991,28 @@ export function evaluateCommand(command, cwd = process.cwd(), options = {}, _dep
       // 1. Check extracted subshells ($( ... ) and ` ... `) in this stage recursively
       const subshells = extractSubshells(seg);
       for (const sub of subshells) {
-        const subEval = evaluateCommand(sub, activeCwd, options, _depth + 1);
+        const subEval = evaluateCommand(sub, activeCwd, options, _depth + 1, state);
         if (subEval.decision === 'ask') return subEval;
         if (!subEval.explicitAllow) {
           allSegmentsAllowlistedOrCd = false;
         }
       }
 
-      // 2. Check git push (resolves -C <dir> relative to activeCwd and checks rigged status)
+      // 2. Check git push and terraform/tofu/terragrunt (both resolve target dirs relative to activeCwd)
       const pushReason = checkGitPush(tokens, activeCwd);
       if (pushReason) {
         return { decision: 'ask', explicitAllow: false, reason: pushReason };
       }
 
+      const terraformReason = checkTerraformRemote(tokens, activeCwd, getCachedPolicy);
+      if (terraformReason) {
+        return { decision: 'ask', explicitAllow: false, reason: terraformReason };
+      }
+
       // 3. Check nested commands (bash -c, eval)
       const nested = parseNestedCommand(tokens);
       if (nested) {
-        const nestedEval = evaluateCommand(nested, activeCwd, options, _depth + 1);
+        const nestedEval = evaluateCommand(nested, activeCwd, options, _depth + 1, state);
         if (nestedEval.decision === 'ask') return nestedEval;
         if (nestedEval.explicitAllow) {
           matchedAllowlistedRemote = true;
@@ -676,6 +1049,16 @@ export function evaluateCommand(command, cwd = process.cwd(), options = {}, _dep
           }
           segAllowlisted = true;
           matchedAllowlistedRemote = true;
+        }
+
+        const policy = getCachedPolicy(activeCwd);
+        const iacReason =
+          checkAnsible(tokens, policy) ||
+          checkKubectl(tokens, policy) ||
+          checkHelm(tokens, policy) ||
+          checkRclone(tokens, policy);
+        if (iacReason) {
+          return { decision: 'ask', explicitAllow: false, reason: iacReason };
         }
 
         const scrubbed = maskQuotes(seg);

@@ -69,3 +69,54 @@ test('a third-party harness using Claude JSON schema without --harness=claude ke
   assert.equal(parsed.harness, 'generic');
   assert.equal(resolveHarness([], {}), 'generic');
 });
+
+test('normalizes Antigravity and Claude Code read and search tool arguments', () => {
+  const agyView = parseHookInput(
+    JSON.stringify({
+      workspacePaths: ['/tmp/project'],
+      toolCall: { name: 'view_file', args: { AbsolutePath: '/tmp/project/.env' } },
+    }),
+    { argv: ['--harness=antigravity'], env: {} },
+  );
+  assert.equal(agyView.toolName, 'view_file');
+  assert.equal(agyView.filePath, '/tmp/project/.env');
+  assert.deepEqual(agyView.searchGlobs, []);
+
+  const agyGrep = parseHookInput(
+    JSON.stringify({
+      workspacePaths: ['/tmp/project'],
+      toolCall: {
+        name: 'grep_search',
+        args: { SearchPath: '/tmp/project', Includes: ['*.env', '*.key'], Query: 'SECRET' },
+      },
+    }),
+    { argv: ['--harness=antigravity'], env: {} },
+  );
+  assert.equal(agyGrep.searchPath, '/tmp/project');
+  assert.equal(agyGrep.filePath, '/tmp/project');
+  assert.deepEqual(agyGrep.searchGlobs, ['*.env', '*.key']);
+
+  const claudeGrep = parseHookInput(
+    JSON.stringify({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Grep',
+      tool_input: { path: '/tmp/project', glob: '*.tfstate', pattern: 'password' },
+      cwd: '/tmp/project',
+    }),
+    { argv: ['--harness=claude'], env: {} },
+  );
+  assert.equal(claudeGrep.searchPath, '/tmp/project');
+  assert.deepEqual(claudeGrep.searchGlobs, ['*.tfstate']);
+
+  const claudeGlob = parseHookInput(
+    JSON.stringify({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Glob',
+      tool_input: { path: '/tmp/project', pattern: '**/.env*' },
+      cwd: '/tmp/project',
+    }),
+    { argv: ['--harness=claude'], env: {} },
+  );
+  assert.equal(claudeGlob.searchPath, '/tmp/project');
+  assert.deepEqual(claudeGlob.searchGlobs, ['**/.env*']);
+});

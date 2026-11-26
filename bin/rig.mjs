@@ -784,6 +784,9 @@ export function rewriteDocLinks(
     result = result.replaceAll('`hooks/guard-remote-mutation.mjs`', '`.rig/hooks/guard-remote-mutation.mjs`');
     result = result.replaceAll('`hooks/lib/hook-io.mjs`', '`.rig/hooks/lib/hook-io.mjs`');
     result = result.replaceAll('`hooks/lib/remote-allowlist.mjs`', '`.rig/hooks/lib/remote-allowlist.mjs`');
+    result = result.replaceAll('`hooks/lib/shell-parser.mjs`', '`.rig/hooks/lib/shell-parser.mjs`');
+    result = result.replaceAll('`hooks/lib/deny-policy.mjs`', '`.rig/hooks/lib/deny-policy.mjs`');
+    result = result.replaceAll('`templates/deny.default`', '`.rig/templates/deny.default`');
   }
   if (harness === 'codex') {
     const isDirectAgentsMd = destPath && path.basename(destPath) === 'AGENTS.md' && !/[\\/]rules[\\/]/.test(destPath);
@@ -1642,17 +1645,42 @@ export function installRig({
 
 export const installGlobal = installRig;
 
+export const DENY_POLICY_STUB = [
+  '# agent-rig deny policy (last matching rule wins, .gitignore semantics)',
+  '# - `@defaults` inherits built-in secret paths and guard rules (updates via `rig update`).',
+  '# - Add `pattern` to deny paths or `!pattern` after `@defaults` to allow fixtures/files.',
+  '# - Use `!@rule-id` (e.g. `!@remote:terraform-plan`) to disable a named detector,',
+  '#   or remove `@defaults` entirely for a blank-slate policy.',
+  '@defaults',
+  '',
+].join('\n');
+
+function seedDenyPolicyIfMissing(dir, { copied = [], skipped = [] } = {}) {
+  const denyPath = path.join(dir, '.rig', 'deny');
+  if (existsSync(denyPath)) {
+    skipped.push(denyPath);
+    return false;
+  }
+  mkdirSync(path.dirname(denyPath), { recursive: true });
+  writeFileSync(denyPath, DENY_POLICY_STUB, 'utf8');
+  copied.push(denyPath);
+  return true;
+}
+
 export const VENDORED_RIG_FILES = [
   { src: 'bin/rig.mjs', dest: '.rig/bin/rig.mjs' },
   { src: 'rules/AGENTS.md', dest: '.rig/rules/AGENTS.md' },
   { src: 'rules/ui-change-gate.md', dest: '.rig/rules/ui-change-gate.md' },
   { src: 'rules/contract-change-gate.md', dest: '.rig/rules/contract-change-gate.md' },
   { src: 'templates/profiles.json', dest: '.rig/templates/profiles.json' },
+  { src: 'templates/deny.default', dest: '.rig/templates/deny.default' },
   { src: 'scripts/check-doc-links.mjs', dest: '.rig/scripts/check-doc-links.mjs' },
   { src: 'scripts/reflow-docs.mjs', dest: '.rig/scripts/reflow-docs.mjs' },
   { src: 'hooks/lib/hook-io.mjs', dest: '.rig/hooks/lib/hook-io.mjs' },
   { src: 'hooks/lib/hook-io.mjs', dest: '.rig/hooks/hook-io.mjs' },
   { src: 'hooks/lib/remote-allowlist.mjs', dest: '.rig/hooks/lib/remote-allowlist.mjs' },
+  { src: 'hooks/lib/shell-parser.mjs', dest: '.rig/hooks/lib/shell-parser.mjs' },
+  { src: 'hooks/lib/deny-policy.mjs', dest: '.rig/hooks/lib/deny-policy.mjs' },
   { src: 'hooks/guard-remote-mutation.mjs', dest: '.rig/hooks/guard-remote-mutation.mjs' },
   { src: 'hooks/guard-main-checkout-edits.mjs', dest: '.rig/hooks/guard-main-checkout-edits.mjs' },
   { src: 'hooks/guard-symlinked-node-modules.mjs', dest: '.rig/hooks/guard-symlinked-node-modules.mjs' },
@@ -1791,6 +1819,13 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
 
   const isSelfContained = !isRigRoot && isSelfContainedRepo(dir);
 
+  if (!isRigRoot && (existsSync(path.join(dir, '.rig')) || isRiggedRepo(dir))) {
+    const denyPath = path.join(dir, '.rig', 'deny');
+    if (!existsSync(denyPath)) {
+      pendingFiles.push(denyPath);
+    }
+  }
+
   if (isSelfContained) {
     if (existsSync(path.join(dir, '.rig/bin/rig.mjs')) || existsSync(path.join(dir, '.rig'))) {
       for (const f of VENDORED_RIG_FILES) {
@@ -1871,6 +1906,8 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
           const claudeHookFiles = [
             { src: 'hooks/lib/hook-io.mjs', dest: path.join(dotDir, 'hooks/lib/hook-io.mjs') },
             { src: 'hooks/lib/remote-allowlist.mjs', dest: path.join(dotDir, 'hooks/lib/remote-allowlist.mjs') },
+            { src: 'hooks/lib/shell-parser.mjs', dest: path.join(dotDir, 'hooks/lib/shell-parser.mjs') },
+            { src: 'hooks/lib/deny-policy.mjs', dest: path.join(dotDir, 'hooks/lib/deny-policy.mjs') },
             { src: 'hooks/guard-remote-mutation.mjs', dest: path.join(dotDir, 'hooks/guard-remote-mutation.mjs') },
             { src: 'hooks/guard-main-checkout-edits.mjs', dest: path.join(dotDir, 'hooks/guard-main-checkout-edits.mjs') },
             { src: 'hooks/guard-symlinked-node-modules.mjs', dest: path.join(dotDir, 'hooks/guard-symlinked-node-modules.mjs') },
@@ -1941,6 +1978,12 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
         }
         if (checkFilePending(path.join(rigRoot, 'hooks/lib/remote-allowlist.mjs'), path.join(dir, 'hooks/lib/remote-allowlist.mjs'))) {
           pendingFiles.push(path.join(dir, 'hooks/lib/remote-allowlist.mjs'));
+        }
+        if (checkFilePending(path.join(rigRoot, 'hooks/lib/shell-parser.mjs'), path.join(dir, 'hooks/lib/shell-parser.mjs'))) {
+          pendingFiles.push(path.join(dir, 'hooks/lib/shell-parser.mjs'));
+        }
+        if (checkFilePending(path.join(rigRoot, 'hooks/lib/deny-policy.mjs'), path.join(dir, 'hooks/lib/deny-policy.mjs'))) {
+          pendingFiles.push(path.join(dir, 'hooks/lib/deny-policy.mjs'));
         }
         for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
           if (existsSync(path.join(dir, 'hooks', hf))) {
@@ -2155,6 +2198,13 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
           skipped,
         });
       }
+      if (existsSync(path.join(rigRoot, 'templates/deny.default'))) {
+        copyFileSafe(path.join(rigRoot, 'templates/deny.default'), path.join(dir, '.rig/templates/deny.default'), {
+          force: true,
+          copied,
+          skipped,
+        });
+      }
       for (const legacyTpl of ['models.json', 'rig-config.default.json']) {
         const legacyDest = path.join(dir, '.rig/templates', legacyTpl);
         if (existsSync(legacyDest)) {
@@ -2185,6 +2235,16 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
         skipped,
       });
       copyFileSafe(path.join(rigRoot, 'hooks/lib/remote-allowlist.mjs'), path.join(dir, '.rig/hooks/lib/remote-allowlist.mjs'), {
+        force: true,
+        copied,
+        skipped,
+      });
+      copyFileSafe(path.join(rigRoot, 'hooks/lib/shell-parser.mjs'), path.join(dir, '.rig/hooks/lib/shell-parser.mjs'), {
+        force: true,
+        copied,
+        skipped,
+      });
+      copyFileSafe(path.join(rigRoot, 'hooks/lib/deny-policy.mjs'), path.join(dir, '.rig/hooks/lib/deny-policy.mjs'), {
         force: true,
         copied,
         skipped,
@@ -2283,6 +2343,16 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
             copied,
             skipped,
           });
+          copyFileSafe(path.join(rigRoot, 'hooks/lib/shell-parser.mjs'), path.join(dotDir, 'hooks/lib/shell-parser.mjs'), {
+            force: true,
+            copied,
+            skipped,
+          });
+          copyFileSafe(path.join(rigRoot, 'hooks/lib/deny-policy.mjs'), path.join(dotDir, 'hooks/lib/deny-policy.mjs'), {
+            force: true,
+            copied,
+            skipped,
+          });
           for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
             copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dotDir, 'hooks', hf), {
               force: true,
@@ -2369,6 +2439,16 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
           copied,
           skipped,
         });
+        copyFileSafe(path.join(rigRoot, 'hooks/lib/shell-parser.mjs'), path.join(dir, 'hooks/lib/shell-parser.mjs'), {
+          force: true,
+          copied,
+          skipped,
+        });
+        copyFileSafe(path.join(rigRoot, 'hooks/lib/deny-policy.mjs'), path.join(dir, 'hooks/lib/deny-policy.mjs'), {
+          force: true,
+          copied,
+          skipped,
+        });
         for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
           if (existsSync(path.join(dir, 'hooks', hf))) {
             copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dir, 'hooks', hf), {
@@ -2381,6 +2461,10 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
         }
       }
     }
+  }
+
+  if (!isRigRoot && (existsSync(path.join(dir, '.rig')) || shouldWriteRigHook || isRiggedRepo(dir))) {
+    seedDenyPolicyIfMissing(dir, { copied, skipped });
   }
 
   const attachRes = attachMainCheckout(dir);
@@ -2780,6 +2864,10 @@ export function normalizeGitignore(content) {
   });
   if (!out.some((line) => /^\/?\.worktrees\/?\s*$/.test(line))) {
     out.push('.worktrees/');
+    changed = true;
+  }
+  if (!out.some((line) => /^\/?\.rig\/deny\.local\s*$/.test(line))) {
+    out.push('.rig/deny.local');
     changed = true;
   }
   return { content: out.join('\n') + '\n', changed };
@@ -3245,6 +3333,16 @@ export function initRepo(
           copied,
           skipped,
         });
+        copyFileSafe(path.join(rigRoot, 'hooks/lib/shell-parser.mjs'), path.join(dotDir, 'hooks/lib/shell-parser.mjs'), {
+          force,
+          copied,
+          skipped,
+        });
+        copyFileSafe(path.join(rigRoot, 'hooks/lib/deny-policy.mjs'), path.join(dotDir, 'hooks/lib/deny-policy.mjs'), {
+          force,
+          copied,
+          skipped,
+        });
         const hookFiles = worktrees
           ? ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']
           : ['guard-remote-mutation.mjs'];
@@ -3306,6 +3404,13 @@ export function initRepo(
       skipped,
     });
   }
+  if (existsSync(path.join(rigRoot, 'templates/deny.default'))) {
+    copyFileSafe(path.join(rigRoot, 'templates/deny.default'), path.join(dir, '.rig/templates/deny.default'), {
+      force,
+      copied,
+      skipped,
+    });
+  }
   copyFileSafe(path.join(rigRoot, 'scripts/check-doc-links.mjs'), path.join(dir, '.rig/scripts/check-doc-links.mjs'), {
     force,
     copied,
@@ -3333,6 +3438,17 @@ export function initRepo(
     copied,
     skipped,
   });
+  copyFileSafe(path.join(rigRoot, 'hooks/lib/shell-parser.mjs'), path.join(dir, '.rig/hooks/lib/shell-parser.mjs'), {
+    force,
+    copied,
+    skipped,
+  });
+  copyFileSafe(path.join(rigRoot, 'hooks/lib/deny-policy.mjs'), path.join(dir, '.rig/hooks/lib/deny-policy.mjs'), {
+    force,
+    copied,
+    skipped,
+  });
+  seedDenyPolicyIfMissing(dir, { copied, skipped });
   const rigHookFiles = worktrees
     ? ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']
     : ['guard-remote-mutation.mjs'];

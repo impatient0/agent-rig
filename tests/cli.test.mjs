@@ -68,17 +68,20 @@ function makeRepoWithHistory(prefix) {
   return { root, git, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-test('normalizeGitignore ignores .worktrees/ and drops the trailing slash from node_modules/', () => {
+test('normalizeGitignore ignores .worktrees/ and .rig/deny.local and drops the trailing slash from node_modules/', () => {
   assert.deepEqual(normalizeGitignore('node_modules/\n*.log\n'), {
-    content: 'node_modules\n*.log\n.worktrees/\n',
+    content: 'node_modules\n*.log\n.worktrees/\n.rig/deny.local\n',
     changed: true,
   });
-  assert.deepEqual(normalizeGitignore('/node_modules/\n'), { content: '/node_modules\n.worktrees/\n', changed: true });
-  assert.deepEqual(normalizeGitignore('node_modules\n.worktrees/\n'), {
-    content: 'node_modules\n.worktrees/\n',
+  assert.deepEqual(normalizeGitignore('/node_modules/\n'), {
+    content: '/node_modules\n.worktrees/\n.rig/deny.local\n',
+    changed: true,
+  });
+  assert.deepEqual(normalizeGitignore('node_modules\n.worktrees/\n.rig/deny.local\n'), {
+    content: 'node_modules\n.worktrees/\n.rig/deny.local\n',
     changed: false,
   });
-  assert.deepEqual(normalizeGitignore(''), { content: '.worktrees/\n', changed: true });
+  assert.deepEqual(normalizeGitignore(''), { content: '.worktrees/\n.rig/deny.local\n', changed: true });
 });
 
 test('attachMainCheckout re-attaches a detached clean checkout to main and detects dirty state', () => {
@@ -117,9 +120,9 @@ test('initRepo on a main checkout with history scaffolds into a linked worktree 
     assert.ok(existsSync(path.join(wt, '.rig/hooks/pre-merge-commit')));
     assert.equal(existsSync(path.join(root, 'AGENTS.md')), false);
 
-    // The worktree shares node_modules through a symlink, and .gitignore covers both it and .worktrees/.
+    // The worktree shares node_modules through a symlink, and .gitignore covers it, .worktrees/, and .rig/deny.local.
     assert.ok(lstatSync(path.join(wt, 'node_modules')).isSymbolicLink());
-    assert.equal(readFileSync(path.join(wt, '.gitignore'), 'utf8'), 'node_modules\n*.log\n.worktrees/\n');
+    assert.equal(readFileSync(path.join(wt, '.gitignore'), 'utf8'), 'node_modules\n*.log\n.worktrees/\n.rig/deny.local\n');
 
     // The main checkout stays attached to main, and the worktree stays on its branch.
     assert.equal(res.mainCheckoutHead.status, 'already-attached');
@@ -2582,6 +2585,64 @@ test('CLI rig verify-stamp writes stamp JSON, rejects main and dirty worktrees, 
     rmSync(fakeHome, { recursive: true, force: true });
   }
 });
+
+test('initRepo and updateRepo seed .rig/deny when missing and never clobber existing .rig/deny', () => {
+  const repo = mkdtempSync(path.join(tmpdir(), 'rig-deny-seed-'));
+  const fakeHome = mkdtempSync(path.join(tmpdir(), 'rig-deny-home-'));
+  try {
+    mkdirSync(path.join(fakeHome, '.gemini'), { recursive: true });
+    installRig({ homeDir: fakeHome, harnesses: ['antigravity'] });
+
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    spawnSync('git', ['-C', repo, 'config', 'user.email', 'test@example.com']);
+    spawnSync('git', ['-C', repo, 'config', 'user.name', 'Test']);
+
+    // 1. initRepo seeds .rig/deny, .rig/templates/deny.default, and parser/policy libs
+    const initRes = initRepo(repo, { selfContained: true, worktrees: true, harness: 'claude', homeDir: fakeHome });
+    const denyPath = path.join(repo, '.rig/deny');
+    assert.ok(existsSync(denyPath));
+    assert.ok(initRes.staged.includes('.rig/deny'));
+    const seededText = readFileSync(denyPath, 'utf8');
+    assert.match(seededText, /@defaults/);
+    assert.match(seededText, /!pattern/);
+    assert.match(seededText, /!@rule-id/);
+
+    assert.ok(existsSync(path.join(repo, '.rig/templates/deny.default')));
+    assert.ok(existsSync(path.join(repo, '.rig/hooks/lib/shell-parser.mjs')));
+    assert.ok(existsSync(path.join(repo, '.rig/hooks/lib/deny-policy.mjs')));
+    assert.ok(existsSync(path.join(repo, '.claude/hooks/lib/shell-parser.mjs')));
+    assert.ok(existsSync(path.join(repo, '.claude/hooks/lib/deny-policy.mjs')));
+
+    // 2. Customize .rig/deny (blank-slate without @defaults), commit, and run updateRepo -> must NOT clobber
+    const customDeny = '# custom blank-slate policy\n*.secret\n!@remote:terraform-plan\n';
+    writeFileSync(denyPath, customDeny, 'utf8');
+    spawnSync('git', ['-C', repo, 'add', '-A']);
+    spawnSync('git', ['-C', repo, 'commit', '-qm', 'chore: init with custom deny']);
+
+    const updCustom = updateRepo(repo, { harness: 'claude', autoCommit: true, homeDir: fakeHome });
+    assert.equal(readFileSync(denyPath, 'utf8'), customDeny);
+    assert.ok(!updCustom.copied.includes(denyPath));
+
+    // 3. Simulate pre-existing repo without .rig/deny -> checkRepoPendingUpdates flags it, updateRepo seeds it
+    rmSync(denyPath, { force: true });
+    spawnSync('git', ['-C', repo, 'add', '-A']);
+    spawnSync('git', ['-C', repo, 'commit', '-qm', 'chore: remove deny for legacy simulation']);
+
+    const pending = checkRepoPendingUpdates(repo, { harness: 'claude' });
+    assert.equal(pending.hasPendingUpdates, true);
+    assert.ok(pending.pendingFiles.includes(denyPath));
+
+    const updSeed = updateRepo(repo, { harness: 'claude', autoCommit: true, homeDir: fakeHome });
+    assert.equal(updSeed.committed, true, updSeed.commitError);
+    assert.ok(existsSync(denyPath));
+    assert.match(readFileSync(denyPath, 'utf8'), /@defaults/);
+    assert.equal(checkRepoPendingUpdates(repo, { harness: 'claude' }).hasPendingUpdates, false);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
+
 
 
 

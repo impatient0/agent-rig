@@ -15,6 +15,7 @@ import {
   isRiggedRepo,
   isWorktreeRiggedRepo,
 } from './lib/hook-io.mjs';
+import { isDenyPolicyFile } from './lib/deny-policy.mjs';
 
 export { existingAncestor, isRiggedRepo, isWorktreeRiggedRepo };
 
@@ -152,6 +153,16 @@ export function checkEditTarget(filePath, options = {}) {
   // in the main checkout so globally-installed hooks do not block unrigged repos
   // (governed by docs/adr/0004-strict-unrigged-repository-isolation.md).
   if (!isRigged) return null;
+
+  // Hardcoded anti-tamper self-protection of .rig/deny and .rig/deny.local across both
+  // main checkout and linked worktrees (governed by docs/adr/0006-configurable-deny-policy-and-secops-guards.md).
+  if (isDenyPolicyFile(absPath, { cwd })) {
+    const policyLabel = path.basename(absPath) === 'deny.local' ? '.rig/deny.local' : '.rig/deny';
+    return (
+      `Refusing to modify \`${policyLabel}\`: \`.rig/deny\` and \`.rig/deny.local\` are protected against agent edits ` +
+      'and may only be edited directly by the user in their editor or terminal.'
+    );
+  }
 
   // Protect the agent-rig managed blocks in AGENTS.md across both main checkout and worktrees
   const isAgentsMd =

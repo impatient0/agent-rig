@@ -4,5 +4,6 @@ node_modules
 *.log
 .DS_Store
 .rig.local.json
+.rig/deny.local
 dist/
 

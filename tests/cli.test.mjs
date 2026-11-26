@@ -256,7 +256,7 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     assert.equal(existsSync(path.join(fakeHome, '.claude/rules/contract-change-gate.md')), false);
     assert.equal(existsSync(path.join(fakeHome, '.claude/rules/ui-change-gate.md')), false);
     const claudeSettings = JSON.parse(readFileSync(path.join(fakeHome, '.claude/settings.json'), 'utf8'));
-    assert.equal(claudeSettings.hooks.PreToolUse.length, 2);
+    assert.equal(claudeSettings.hooks.PreToolUse.length, 3);
     assert.match(claudeSettings.hooks.PreToolUse[0].hooks[0].command, /Run 'rig update'/);
 
     // Plant a dangling symlink and verify updateRig prunes it without prompting
@@ -274,7 +274,7 @@ test('detectHarnesses, installRig, and updateRig manage state, hydrate roles, an
     const updatedAgyHooks = JSON.parse(readFileSync(path.join(agyPluginDir, 'hooks.json'), 'utf8'));
     assert.match(updatedAgyHooks['remote-mutation-guard'].PreToolUse[0].hooks[0].command, /NODE="\/mock\/node\/updated"/);
     const updatedClaudeSettings = JSON.parse(readFileSync(path.join(fakeHome, '.claude/settings.json'), 'utf8'));
-    assert.equal(updatedClaudeSettings.hooks.PreToolUse[0].hooks.length, 2);
+    assert.equal(updatedClaudeSettings.hooks.PreToolUse[0].hooks.length, 3);
     assert.match(updatedClaudeSettings.hooks.PreToolUse[0].hooks[0].command, /NODE="\/mock\/node\/updated"/);
   } finally {
     rmSync(fakeHome, { recursive: true, force: true });
@@ -542,9 +542,9 @@ test('self-contained initRepo bundles skills, subagents, rules, hooks, and linte
     assert.equal(st.skills.effective.length, listSkills(path.join(RIG_ROOT, 'skills')).length);
     assert.equal(st.skillsPresent.length, listSkills(path.join(RIG_ROOT, 'skills')).length);
     assert.ok(st.skillsPresent.includes('rig-onboard'));
-    assert.equal(st.hooks.local.length, 3);
-    assert.equal(st.hooks.effectiveGuards.length, 3);
-    assert.equal(st.hooksPresent.length, 3);
+    assert.equal(st.hooks.local.length, 4);
+    assert.equal(st.hooks.effectiveGuards.length, 4);
+    assert.equal(st.hooksPresent.length, 4);
     assert.equal(st.hooks.gitPreCommit, '.rig/hooks/pre-commit');
     assert.equal(st.hooks.gitPreMergeCommit, '.rig/hooks/pre-merge-commit');
     assert.ok(existsSync(path.join(dir, '.claude/agents/verifier.md')));
@@ -589,6 +589,7 @@ test('both Antigravity and Claude Code plugin manifests are valid and point to e
   assert.ok(agyHooks['remote-mutation-guard']);
   assert.ok(agyHooks['main-checkout-edits-guard']);
   assert.ok(agyHooks['symlinked-node-modules-guard']);
+  assert.ok(agyHooks['secret-exposure-guard']);
 
   const claudePlugin = JSON.parse(readFileSync(path.join(RIG_ROOT, '.claude-plugin/plugin.json'), 'utf8'));
   assert.equal(claudePlugin.skills, './skills');
@@ -2301,16 +2302,19 @@ test('statusRepo reports mode (attached vs self-contained vs unrigged) with loca
     assert.deepEqual(attachedStatus.hooks.global, [
       'guard-main-checkout-edits.mjs',
       'guard-remote-mutation.mjs',
+      'guard-secret-exposure.mjs',
       'guard-symlinked-node-modules.mjs',
     ]);
     assert.deepEqual(attachedStatus.hooks.effectiveGuards, [
       'guard-main-checkout-edits.mjs',
       'guard-remote-mutation.mjs',
+      'guard-secret-exposure.mjs',
       'guard-symlinked-node-modules.mjs',
     ]);
     assert.deepEqual(attachedStatus.hooksPresent, [
       'guard-main-checkout-edits.mjs',
       'guard-remote-mutation.mjs',
+      'guard-secret-exposure.mjs',
       'guard-symlinked-node-modules.mjs',
     ]);
     assert.equal(attachedStatus.hooks.gitPreCommit, '.rig/hooks/pre-commit');
@@ -2329,6 +2333,7 @@ test('statusRepo reports mode (attached vs self-contained vs unrigged) with loca
     assert.deepEqual(parsedCli.hooks.effectiveGuards, [
       'guard-main-checkout-edits.mjs',
       'guard-remote-mutation.mjs',
+      'guard-secret-exposure.mjs',
       'guard-symlinked-node-modules.mjs',
     ]);
   } finally {

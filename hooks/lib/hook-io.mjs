@@ -105,6 +105,7 @@ export function isRiggedRepo(repoRoot) {
   if (isWorktreeRiggedRepo(repoRoot)) return true;
   if (
     existsSync(path.join(repoRoot, '.rig/hooks/guard-remote-mutation.mjs')) ||
+    existsSync(path.join(repoRoot, '.rig/hooks/guard-secret-exposure.mjs')) ||
     existsSync(path.join(repoRoot, '.rig/bin/rig.mjs'))
   ) {
     return true;
@@ -205,6 +206,7 @@ export function parseHookInput(rawText, { argv = process.argv.slice(2), env = pr
       args.AbsolutePath,
       args.TargetFile,
       args.File,
+      args.FilePath,
       args.SearchPath,
       args.DirectoryPath,
       args.SearchDirectory,
@@ -236,8 +238,8 @@ export function parseHookInput(rawText, { argv = process.argv.slice(2), env = pr
   if (raw && (typeof raw.tool_input === 'object' || typeof raw.hook_event_name === 'string')) {
     const ti = raw.tool_input ?? {};
     const toolName = typeof raw.tool_name === 'string' ? raw.tool_name : '';
-    const filePath = firstNonEmptyString(ti.file_path, ti.path, ti.Path);
-    const searchPath = firstNonEmptyString(ti.path, ti.file_path, ti.Path);
+    const filePath = firstNonEmptyString(ti.file_path, ti.path, ti.Path, ti.filePath);
+    const searchPath = firstNonEmptyString(ti.path, ti.file_path, ti.Path, ti.filePath);
     return {
       harness,
       schema: 'claude',
@@ -259,20 +261,31 @@ export function parseHookInput(rawText, { argv = process.argv.slice(2), env = pr
     raw?.Path,
     raw?.AbsolutePath,
     raw?.TargetFile,
+    raw?.File,
     raw?.SearchPath,
+    raw?.DirectoryPath,
+    raw?.SearchDirectory,
     raw?.file_path,
     raw?.path,
     toolArgs?.Path,
     toolArgs?.AbsolutePath,
+    toolArgs?.TargetFile,
+    toolArgs?.File,
     toolArgs?.SearchPath,
+    toolArgs?.DirectoryPath,
+    toolArgs?.SearchDirectory,
     toolArgs?.file_path,
     toolArgs?.path,
   );
   const searchPath = firstNonEmptyString(
     raw?.searchPath,
     raw?.SearchPath,
+    raw?.SearchDirectory,
+    raw?.DirectoryPath,
     raw?.path,
     toolArgs?.SearchPath,
+    toolArgs?.SearchDirectory,
+    toolArgs?.DirectoryPath,
     toolArgs?.path,
     filePath,
   );

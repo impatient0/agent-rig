@@ -105,6 +105,7 @@ export function isRiggedRepo(repoRoot) {
   if (isWorktreeRiggedRepo(repoRoot)) return true;
   if (
     existsSync(path.join(repoRoot, '.rig/hooks/guard-remote-mutation.mjs')) ||
+    existsSync(path.join(repoRoot, '.rig/hooks/guard-secret-exposure.mjs')) ||
     existsSync(path.join(repoRoot, '.rig/bin/rig.mjs'))
   ) {
     return true;
@@ -782,6 +783,7 @@ export function rewriteDocLinks(
     result = result.replaceAll('`hooks/guard-main-checkout-edits.mjs`', '`.rig/hooks/guard-main-checkout-edits.mjs`');
     result = result.replaceAll('`hooks/guard-symlinked-node-modules.mjs`', '`.rig/hooks/guard-symlinked-node-modules.mjs`');
     result = result.replaceAll('`hooks/guard-remote-mutation.mjs`', '`.rig/hooks/guard-remote-mutation.mjs`');
+    result = result.replaceAll('`hooks/guard-secret-exposure.mjs`', '`.rig/hooks/guard-secret-exposure.mjs`');
     result = result.replaceAll('`hooks/lib/hook-io.mjs`', '`.rig/hooks/lib/hook-io.mjs`');
     result = result.replaceAll('`hooks/lib/remote-allowlist.mjs`', '`.rig/hooks/lib/remote-allowlist.mjs`');
     result = result.replaceAll('`hooks/lib/shell-parser.mjs`', '`.rig/hooks/lib/shell-parser.mjs`');
@@ -1226,7 +1228,9 @@ export function mergeClaudeSettings(existing, incoming) {
       }
       if (!Array.isArray(existingGroup.hooks)) existingGroup.hooks = [];
       for (const inHook of inGroup.hooks ?? []) {
-        const rigScriptMatch = inHook.command.match(/guard-(?:remote-mutation|symlinked-node-modules|main-checkout-edits)\.mjs/);
+        const rigScriptMatch = inHook.command.match(
+          /guard-(?:remote-mutation|symlinked-node-modules|main-checkout-edits|secret-exposure)\.mjs/,
+        );
         const existingIdx = rigScriptMatch
           ? existingGroup.hooks.findIndex((h) => h.type === inHook.type && h.command.includes(rigScriptMatch[0]))
           : existingGroup.hooks.findIndex((h) => h.type === inHook.type && h.command === inHook.command);
@@ -1453,7 +1457,13 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
     }
   }
 
-  for (const hookEntry of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs', 'lib']) {
+  for (const hookEntry of [
+    'guard-remote-mutation.mjs',
+    'guard-main-checkout-edits.mjs',
+    'guard-symlinked-node-modules.mjs',
+    'guard-secret-exposure.mjs',
+    'lib',
+  ]) {
     linkSafe(path.join(rigRoot, 'hooks', hookEntry), path.join(claudeDir, 'hooks', hookEntry), { force: true, linked, skipped });
   }
 
@@ -1474,12 +1484,20 @@ function installForClaude(homeDir, { force = false, hydrated = [], linked = [], 
           hooks: [
             { type: 'command', command: buildHookCommand(path.join(claudeDir, 'hooks/guard-remote-mutation.mjs'), '--harness=claude', { nodeBin }) },
             { type: 'command', command: buildHookCommand(path.join(claudeDir, 'hooks/guard-symlinked-node-modules.mjs'), '--harness=claude', { nodeBin }) },
+            { type: 'command', command: buildHookCommand(path.join(claudeDir, 'hooks/guard-secret-exposure.mjs'), '--harness=claude', { nodeBin }) },
           ],
         },
         {
           matcher: 'Edit|Write',
           hooks: [
             { type: 'command', command: buildHookCommand(path.join(claudeDir, 'hooks/guard-main-checkout-edits.mjs'), '--harness=claude', { nodeBin }) },
+            { type: 'command', command: buildHookCommand(path.join(claudeDir, 'hooks/guard-secret-exposure.mjs'), '--harness=claude', { nodeBin }) },
+          ],
+        },
+        {
+          matcher: 'Read|Grep',
+          hooks: [
+            { type: 'command', command: buildHookCommand(path.join(claudeDir, 'hooks/guard-secret-exposure.mjs'), '--harness=claude', { nodeBin }) },
           ],
         },
       ],
@@ -1684,6 +1702,7 @@ export const VENDORED_RIG_FILES = [
   { src: 'hooks/guard-remote-mutation.mjs', dest: '.rig/hooks/guard-remote-mutation.mjs' },
   { src: 'hooks/guard-main-checkout-edits.mjs', dest: '.rig/hooks/guard-main-checkout-edits.mjs' },
   { src: 'hooks/guard-symlinked-node-modules.mjs', dest: '.rig/hooks/guard-symlinked-node-modules.mjs' },
+  { src: 'hooks/guard-secret-exposure.mjs', dest: '.rig/hooks/guard-secret-exposure.mjs' },
   { src: '.rig/hooks/pre-merge-commit', dest: '.rig/hooks/pre-merge-commit' },
 ];
 
@@ -1911,6 +1930,7 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
             { src: 'hooks/guard-remote-mutation.mjs', dest: path.join(dotDir, 'hooks/guard-remote-mutation.mjs') },
             { src: 'hooks/guard-main-checkout-edits.mjs', dest: path.join(dotDir, 'hooks/guard-main-checkout-edits.mjs') },
             { src: 'hooks/guard-symlinked-node-modules.mjs', dest: path.join(dotDir, 'hooks/guard-symlinked-node-modules.mjs') },
+            { src: 'hooks/guard-secret-exposure.mjs', dest: path.join(dotDir, 'hooks/guard-secret-exposure.mjs') },
           ];
           for (const cf of claudeHookFiles) {
             if (checkFilePending(path.join(rigRoot, cf.src), cf.dest)) {
@@ -1985,7 +2005,12 @@ export function checkRepoPendingUpdates(targetDir, { harness = null, rigRoot = R
         if (checkFilePending(path.join(rigRoot, 'hooks/lib/deny-policy.mjs'), path.join(dir, 'hooks/lib/deny-policy.mjs'))) {
           pendingFiles.push(path.join(dir, 'hooks/lib/deny-policy.mjs'));
         }
-        for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
+        for (const hf of [
+          'guard-remote-mutation.mjs',
+          'guard-main-checkout-edits.mjs',
+          'guard-symlinked-node-modules.mjs',
+          'guard-secret-exposure.mjs',
+        ]) {
           if (existsSync(path.join(dir, 'hooks', hf))) {
             if (checkFilePending(path.join(rigRoot, 'hooks', hf), path.join(dir, 'hooks', hf))) {
               pendingFiles.push(path.join(dir, 'hooks', hf));
@@ -2249,7 +2274,12 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
         copied,
         skipped,
       });
-      for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
+      for (const hf of [
+        'guard-remote-mutation.mjs',
+        'guard-main-checkout-edits.mjs',
+        'guard-symlinked-node-modules.mjs',
+        'guard-secret-exposure.mjs',
+      ]) {
         copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dir, '.rig/hooks', hf), {
           force: true,
           copied,
@@ -2353,7 +2383,12 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
             copied,
             skipped,
           });
-          for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
+          for (const hf of [
+            'guard-remote-mutation.mjs',
+            'guard-main-checkout-edits.mjs',
+            'guard-symlinked-node-modules.mjs',
+            'guard-secret-exposure.mjs',
+          ]) {
             copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dotDir, 'hooks', hf), {
               force: true,
               copied,
@@ -2449,7 +2484,12 @@ export function updateRepo(targetDir, { harness = null, rigRoot = RIG_ROOT, auto
           copied,
           skipped,
         });
-        for (const hf of ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']) {
+        for (const hf of [
+          'guard-remote-mutation.mjs',
+          'guard-main-checkout-edits.mjs',
+          'guard-symlinked-node-modules.mjs',
+          'guard-secret-exposure.mjs',
+        ]) {
           if (existsSync(path.join(dir, 'hooks', hf))) {
             copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dir, 'hooks', hf), {
               force: true,
@@ -3344,8 +3384,13 @@ export function initRepo(
           skipped,
         });
         const hookFiles = worktrees
-          ? ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']
-          : ['guard-remote-mutation.mjs'];
+          ? [
+              'guard-remote-mutation.mjs',
+              'guard-main-checkout-edits.mjs',
+              'guard-symlinked-node-modules.mjs',
+              'guard-secret-exposure.mjs',
+            ]
+          : ['guard-remote-mutation.mjs', 'guard-secret-exposure.mjs'];
         for (const hf of hookFiles) {
           copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dotDir, 'hooks', hf), {
             force,
@@ -3450,8 +3495,13 @@ export function initRepo(
   });
   seedDenyPolicyIfMissing(dir, { copied, skipped });
   const rigHookFiles = worktrees
-    ? ['guard-remote-mutation.mjs', 'guard-main-checkout-edits.mjs', 'guard-symlinked-node-modules.mjs']
-    : ['guard-remote-mutation.mjs'];
+    ? [
+        'guard-remote-mutation.mjs',
+        'guard-main-checkout-edits.mjs',
+        'guard-symlinked-node-modules.mjs',
+        'guard-secret-exposure.mjs',
+      ]
+    : ['guard-remote-mutation.mjs', 'guard-secret-exposure.mjs'];
   for (const hf of rigHookFiles) {
     copyFileSafe(path.join(rigRoot, 'hooks', hf), path.join(dir, '.rig/hooks', hf), {
       force,
@@ -3748,6 +3798,7 @@ export function statusRepo(targetDir = process.cwd(), { homeDir = homedir(), rig
   const standardGuards = [
     'guard-main-checkout-edits.mjs',
     'guard-remote-mutation.mjs',
+    'guard-secret-exposure.mjs',
     'guard-symlinked-node-modules.mjs',
   ];
   let hooksGlobal = [];

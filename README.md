@@ -296,6 +296,74 @@ cp templates/ci/rig-verify.yml .github/workflows/rig-verify.yml
 
 ---
 
+## Secret Hygiene & Remote Orchestration (`.rig/deny`)
+
+Governed by [`docs/adr/0006-configurable-deny-policy-and-secops-guards.md`](docs/adr/0006-configurable-deny-policy-and-secops-guards.md), `agent-rig` combines a configurable `.rig/deny` policy file with cross-harness `PreToolUse` guards for secret exposure and live infrastructure/remote orchestration.
+
+### 1. Configurable `.rig/deny` Policy
+
+`rig init` and `rig update --repo` seed `.rig/deny` (only when `.rig/deny` does not yet exist) with `@defaults`, inheriting built-in secret globs and rule switches from `templates/deny.default` without duplicating stale boilerplate into every repository.
+Rules are evaluated top-to-bottom where the **last matching rule wins** (`.gitignore` semantics):
+
+- **Inherit defaults:** Include `@defaults` at the top of `.rig/deny` (or omit `.rig/deny` entirely) to inherit built-in host credential globs, repo secret globs, `@content:*` header checks, `@shell:*` leak rules, and `@remote:*` guards.
+- **Add custom sensitive globs:** Append path or directory globs such as `wg/*.conf`, `secrets/**`, `clusters/**/kubeconfig*`, or `~/...` paths below `@defaults`.
+- **Exempt safe paths:** Add `!` negations after `@defaults` (such as `!tests/fixtures/**` or `!secrets/**/*.sops.yaml`) to permit non-sensitive fixtures or encrypted containers.
+- **Toggle named rule switches:** Enable or disable built-in detectors via `@category:id` and `!@category:id` switches (for example `!@remote:kubectl-read`, `!@remote:terraform-plan`, or `!@content:private-key`).
+- **Blank-slate mode:** Delete `@defaults` from `.rig/deny` to start from an empty rule set and opt in only to explicit paths and `@category:id` switches.
+- **Untracked personal overrides (`.rig/deny.local`):** Place machine-local overrides in `.rig/deny.local` (automatically ignored by `rig init` `.gitignore` normalization and evaluated after `.rig/deny`).
+
+```gitignore
+@defaults
+
+# Project-specific secret directories and files
+wg/*.conf
+secrets/**
+clusters/**/kubeconfig*
+
+# Exemptions and workflow tuning
+!tests/fixtures/**
+!secrets/**/*.sops.yaml
+!@remote:kubectl-read
+!@remote:terraform-plan
+```
+
+- **Linked worktrees & `--stealth` mode:** `hooks/lib/deny-policy.mjs` resolves `<repoRoot>/.rig/deny` via `resolveGitRoots`, so an untracked `.rig/deny` in a `--stealth` repository applies uniformly across linked `.worktrees/*`, layered with worktree-local rules and `.rig/deny.local`.
+- **Hardcoded anti-tamper protection:** Humans can freely edit or delete any rule (including `@defaults`) in `.rig/deny` or `.rig/deny.local` in their editor or terminal, whereas agent file-edit and shell write/delete tools targeting `.rig/deny` or `.rig/deny.local` are unconditionally refused (`deny`).
+
+### 2. Secret-Exposure Guard (`hooks/guard-secret-exposure.mjs`)
+
+Under [`docs/adr/0004-strict-unrigged-repository-isolation.md`](docs/adr/0004-strict-unrigged-repository-isolation.md), `hooks/guard-secret-exposure.mjs` activates whenever `cwd` or the target path resides in a rigged repository, blocking rigged sessions from reading `$HOME` credential stores (`~/.ssh/id_*`, `~/.gnupg/**`, `~/.aws/credentials`, `~/.config/sops/age/**`, `~/.kube/config`, `~/.config/rclone/rclone.conf`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.docker/config.json`, `~/.config/gh/hosts.yml`) while leaving unrigged repositories untouched:
+
+- **File-read & search tools (`read_file`/`view_file`/`Read`, `grep_search`/`Grep`):** Refuses reads of denied paths and searches targeting denied files, denied directories, `$HOME` credential stores, or secret-matching `glob`/`Includes` filters, while permitting directory-level searches on repository roots.
+- **In-process header inspection (`@content:*`):** Inspects local file headers without emitting contents into transcripts:
+  `@content:private-key` refuses `PRIVATE KEY` blocks while allowing public `CERTIFICATE` files, `@content:unencrypted-sops` refuses `*.sops.*`/`*.enc.*` files lacking `ENC[` or `$ANSIBLE_VAULT;` ciphertext markers, and `@content:npmrc-auth` refuses `.npmrc` files containing `_authToken`, `_auth=`, or `_password`.
+- **Shell secret-leak rules (`@shell:*`):**
+  - `@shell:file-read` refuses stdout file readers and filters (`cat`, `head`, `tail`, `less`, `grep`/`rg`, `sed`, `awk`, `jq`, `yq`, `<` input redirection) on `.rig/deny`-matched files, while permitting zero-stdout variable checks (`grep -q '^API_KEY=' .env` or `rg -q`).
+  - `@shell:sops-decrypt` refuses `sops -d`/`--decrypt`/`decrypt` and `ansible-vault view|decrypt` stdout leaks and text-printer pipes (`| jq`, `| grep`, `| cat`), allows `/dev/null` validation (`sops -d secrets.sops.yaml >/dev/null`), and prompts (`ask`) on non-echoing pipes or file redirections while pointing to `sops exec-env`, `sops exec-file`, and encrypted schema inspection in [`skills/secure-credential-handoff/SKILL.md`](skills/secure-credential-handoff/SKILL.md).
+  - `@shell:env-dump` refuses bare `env`, `printenv` (bare or targeting secret-named variables), `export -p`, `declare -xp`, bare `set`, and `set -x` / `bash -x` chains that source `.rig/deny`-matched files.
+  - `@shell:cli-secret-dump` refuses `rclone config show|dump`, `kubectl get secret` with value-bearing `-o` formats, `kubectl config view --raw`, and `terraform`/`tofu` `state pull` or `output -json|-raw`.
+- **Explicit non-goal:** `hooks/guard-secret-exposure.mjs` is an accidental-leak and transcript-hygiene guardrail rather than an untrusted runtime sandbox against arbitrary `python` or `node` code execution.
+
+### 3. IaC & Remote Orchestration Guards (`hooks/guard-remote-mutation.mjs`)
+
+Alongside SSH/Docker (`rig allow remote <host>` and `~/.ssh/config` `# agent-rig: allow`), `crontab`, `git push` to `main`/`master` or `--force`, mutating `gh` commands, and `rig allow` self-escalation, `hooks/guard-remote-mutation.mjs` evaluates token-aware IaC and remote CLI rules gated by `@remote:*` switches in `.rig/deny`:
+
+- **Ansible (`@remote:ansible`):** Prompts (`ask`) on `ansible` and `ansible-playbook` (including `--check` / `-C` because it opens live SSH connections), while allowing local flags (`--syntax-check`, `--version`, `--help`, `-h`, `--list-tasks`, `--list-tags`, `--list-hosts`).
+- **Terraform, OpenTofu & Terragrunt (`@remote:terraform`, `@remote:terraform-plan`):** Resolves `-chdir` and `--terragrunt-working-dir` relative to `activeCwd` before checking rigged status;
+  allows offline commands (`validate`, `fmt`, `hclfmt`, `version`, `providers`, `init -backend=false`, `--help`/`-h`), prompts on `plan` (including `terragrunt run-all plan`) under `@remote:terraform-plan`, and prompts on state/infrastructure mutations (`apply`, `destroy`, `import`, `refresh`, `taint`, `untaint`, `force-unlock`, `console`, `init` with backend, `workspace new|delete|select`, `state rm|mv|push|replace-provider`, `run-all ...`) under `@remote:terraform`.
+- **Kubernetes & Helm (`@remote:kubectl`, `@remote:kubectl-read`, `@remote:helm`, `@remote:helm-read`):** Parses leading/interspersed global flags (`-n`, `--context`, `--kubeconfig`, etc.);
+  allows offline client invocations (`--dry-run=client`, `kubectl version --client`, `kubectl config current-context|get-contexts|get-clusters|view`, `helm lint|template|show|inspect|search|version|env|verify|create|package|dependency list`, `helm --dry-run`);
+  prompts on live cluster reads (`kubectl get|describe|logs|top|...`, `helm list|status|history|get`) under `@remote:kubectl-read` / `@remote:helm-read`;
+  and prompts on cluster/release mutations (`apply`, `delete`, `drain`, `exec`, `port-forward`, `helm install|upgrade|uninstall|rollback`, `--dry-run=server`) under `@remote:kubectl` / `@remote:helm`.
+- **rclone (`@remote:rclone`, `@remote:rclone-read`):** Detects both `<remote>:` (excluding Windows drive letters and paths with `/` before `:`) and `:backend:` connection strings;
+  allows local-to-local operations and purely local commands (`version`, `--version`, `-V`, `help`, `listremotes`, `obscure`, `genautocomplete`);
+  prompts on remote listings/checks (`ls`, `lsd`, `lsf`, `lsl`, `lsjson`, `stat`, `size`, `about`, `check`, `tree`) under `@remote:rclone-read`;
+  and prompts on remote transfers, mounts, and mutations (`sync`, `copy`, `move`, `purge`, `mount`, `cat`, etc.) under `@remote:rclone`.
+
+To allow unprompted live reads or plans while keeping mutations gated, negate the read/plan switch in `.rig/deny` (for example `!@remote:terraform-plan`, `!@remote:kubectl-read`, `!@remote:helm-read`, or `!@remote:rclone-read`).
+
+---
+
 ## What's Inside
 
 ### Universal Engineering Rules (`rules/`)
@@ -317,8 +385,11 @@ cp templates/ci/rig-verify.yml .github/workflows/rig-verify.yml
 
 ### Multi-Protocol Mechanical Guards (`hooks/` & `.rig/hooks/`)
 - `hooks/lib/hook-io.mjs` — Documented `PreToolUse` JSON schema adapter supporting Antigravity (`toolCall.args` → `{ decision, reason }`), Claude Code (`tool_input` → `{ hookSpecificOutput }`), generic JSON runners, and explicit `--harness=<name>` flags.
+- `hooks/lib/shell-parser.mjs` — Zero-dependency pipeline-aware shell parser extracting command lists, ordered pipeline stages, I/O redirections, wrappers, subshells, nested shells, and `cd` segments.
+- `hooks/lib/deny-policy.mjs` — Configurable `.rig/deny` policy engine supporting `@defaults` inheritance from `templates/deny.default`, last-match-wins path/directory globs, `@category:id` rule switches, `.rig/deny.local` overrides, and `--stealth` `repoRoot` resolution.
 - `hooks/lib/remote-allowlist.mjs` — Repo-scoped expiring remote host allowlist (`<git-common-dir>/rig/allowed-remotes.json`, managed via `rig allow remote`, default `24h` TTL) plus `~/.ssh/config` `# agent-rig: allow` manual fallback parser.
-- `hooks/guard-remote-mutation.mjs` — Prompts (`ask`) before commands that mutate remote or shared state (`ssh`, `scp`, `sftp`, `rsync`, `crontab`, `docker -H` / `--context`, `git push` to `main`, mutating `gh` calls, and mutating `rig allow` calls), while auto-allowing SSH-family and remote Docker commands targeting explicitly allowlisted hosts.
+- `hooks/guard-secret-exposure.mjs` — Refuses (`deny` / `ask`) accidental secret reads, search-filter leaks, `@content:*` private keys or plaintext SOPS/npmrc credentials, `@shell:*` stdout/env/CLI credential dumps, `$HOME` host-credential reads from rigged sessions, and agent tampering with `.rig/deny` or `.rig/deny.local`.
+- `hooks/guard-remote-mutation.mjs` — Prompts (`ask`) before commands that mutate or query remote or shared state (`ssh`, `scp`, `sftp`, `rsync`, `crontab`, `docker -H` / `--context`, `git push` to `main`, mutating `gh` calls, mutating `rig allow` calls, plus `ansible`/`ansible-playbook`, `terraform`/`tofu`/`terragrunt`, `kubectl`/`helm`, and `rclone` controlled by `@remote:*` switches in `.rig/deny`), while auto-allowing SSH-family and remote Docker commands targeting explicitly allowlisted hosts.
 - `hooks/guard-main-checkout-edits.mjs` — Refuses (`deny`) code file edits in the root checkout while permitting `README.md`, `AGENTS.md` project context, and `docs/` edits (and auto-attaching `core.hooksPath` in fresh clones).
 - `hooks/guard-symlinked-node-modules.mjs` — Refuses (`deny`) `npm`, `pnpm`, `yarn`, and `bun` installs when `node_modules` is a shared symlink (including `cd .worktrees/<slug> && npm install` chains).
 - `.rig/hooks/pre-commit` — Invokes `rig hook pre-commit` (with POSIX shell fallback) to refuse direct code commits in the root checkout and direct commits on `main` in linked worktrees, while allowing Cold-Verifier-stamped merge commits (`rig verify-stamp`), linter-verified doc commits (`docs/`, `README.md`, `AGENTS.md`), and `.rig/` or vendored harness asset updates on `main`/`master`.
@@ -339,4 +410,4 @@ cp templates/ci/rig-verify.yml .github/workflows/rig-verify.yml
 npm test
 ```
 
-`npm test` runs the full `node:test` suite (`tests/hookIo.test.mjs`, `tests/guard-remote-mutation.test.mjs`, `tests/guard-main-checkout-edits.test.mjs`, `tests/guard-symlinked-node-modules.test.mjs`, `tests/gitHooks.test.mjs`, `tests/checkDocLinks.test.mjs`, `tests/reflowDocs.test.mjs`, `tests/cli.test.mjs`, `tests/demarcated-stealth-integration.test.mjs`, `tests/docsIndexAndAdrStatus.test.mjs`), followed by `scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs --check`.
+`npm test` runs the full `node:test` suite (`tests/hookIo.test.mjs`, `tests/shellParser.test.mjs`, `tests/denyPolicy.test.mjs`, `tests/guard-secret-exposure.test.mjs`, `tests/guard-remote-mutation.test.mjs`, `tests/guard-main-checkout-edits.test.mjs`, `tests/guard-symlinked-node-modules.test.mjs`, `tests/gitHooks.test.mjs`, `tests/checkDocLinks.test.mjs`, `tests/reflowDocs.test.mjs`, `tests/cli.test.mjs`, `tests/demarcated-stealth-integration.test.mjs`, `tests/docsIndexAndAdrStatus.test.mjs`), followed by `scripts/check-doc-links.mjs` and `scripts/reflow-docs.mjs --check`.

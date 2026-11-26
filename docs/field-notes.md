@@ -169,3 +169,27 @@ When a developer works across multiple machines with different subscription tier
 **Fix in [`docs/adr/0005-workflow-only-opinionatedness-and-unified-profiles.md`](adr/0005-workflow-only-opinionatedness-and-unified-profiles.md):**
 `agent-rig` enforces workflow-only opinionatedness:
 the demarcated `AGENTS.md` block is 100% harness-agnostic and profile-agnostic, while concrete model bindings are hydrated into each machine's global harness skills and subagents from the unified `templates/profiles.json` catalog and sparse `~/.config/agent-rig/config.json` overrides (with copy-on-write pinning into `<harness>-custom` only when `rig profile set` is invoked).
+
+---
+
+## 11. Why Secret & IaC Protection Uses `@defaults` Inheritance, Pipeline Parsing, and Anti-Tamper
+
+Real-world infrastructure repositories exposed four failure modes that prompt-only guidance (such as [`skills/secure-credential-handoff/SKILL.md`](../skills/secure-credential-handoff/SKILL.md)) and naive shell regexes could not prevent:
+
+1. **Stale Pre-Seeded Policies vs. `@defaults` Inheritance:**
+   Hardcoding un-overridable path rules in hook scripts breaks legitimate workflows such as test certificate fixtures or unprompted `kubectl get` / `terraform plan` in staging repositories.
+   Conversely, copy-seeding dozens of default globs directly into every project's `.rig/deny` repeats the stale-config failure mode from Section 10—freezing existing repositories on outdated protections whenever upstream `agent-rig` adds new secret globs or remote rules.
+   Seeding `.rig/deny` with a single `@defaults` directive (resolving `templates/deny.default` at runtime under `.gitignore` last-match-wins precedence) lets repositories inherit upstream updates automatically via `rig update`, while supporting `!pattern` / `!@category:id` overrides, `.rig/deny.local`, and blank-slate deletion of `@defaults`.
+2. **Pipe-Blind Shell Splitting vs. Pipeline-Aware `sops -d` Parsing:**
+   Splitting shell commands indiscriminately on `|` erases pipeline stage boundaries and output redirections needed to tell safe validation apart from credential leaks.
+   Validating that a SOPS file decrypts cleanly (`sops -d secrets.sops.yaml >/dev/null`) emits zero bytes to the transcript, whereas `sops -d secrets.sops.yaml` or `sops -d secrets.sops.yaml | jq .` writes decrypted secrets to stdout and `sops -d secrets.sops.yaml | my-consumer` hands stdout to an uninspected consumer.
+   Extracting a shared pipeline-aware parser in `hooks/lib/shell-parser.mjs` lets `hooks/guard-secret-exposure.mjs` allow `/dev/null` validation, deny terminal stdout and text-printer sinks, and prompt (`ask`) on non-echoing pipes or file redirections.
+3. **`$HOME` Host-Credential Gating Under ADR 0004:**
+   Checking only whether a target file path lives inside a rigged repository misses the common exfiltration path where an agent inside a rigged session runs `read_file ~/.ssh/id_ed25519` or `cat ~/.aws/credentials`.
+   Evaluating `isDirectoryInRiggedRepo(cwd) || (targetPath && isDirectoryInRiggedRepo(targetPath))` blocks rigged sessions from reading `$HOME` credential stores while preserving [`docs/adr/0004-strict-unrigged-repository-isolation.md`](adr/0004-strict-unrigged-repository-isolation.md) zero-interference inside unrigged repositories.
+4. **Hardcoded Anti-Tamper Protection of `.rig/deny` and `.rig/deny.local`:**
+   Because `.rig/deny` supports `!pattern` negations and blank-slate deletion of `@defaults`, an autonomous agent blocked from reading `.env` or running `terraform apply` could otherwise edit `.rig/deny` first and retry.
+   Both file-edit tools (`edit_file`/`write_file`/`Edit`/`Write`) and shell write/in-place-edit/delete commands targeting `.rig/deny` or `.rig/deny.local` are unconditionally refused (`deny`) to agent tools, while remaining freely editable by humans in their editor or terminal.
+
+**Fix in [`docs/adr/0006-configurable-deny-policy-and-secops-guards.md`](adr/0006-configurable-deny-policy-and-secops-guards.md):**
+`hooks/lib/shell-parser.mjs`, `hooks/lib/deny-policy.mjs`, `hooks/guard-secret-exposure.mjs`, and `hooks/guard-remote-mutation.mjs` enforce configurable secret hygiene and token-aware IaC/remote prompts across Antigravity and Claude Code while keeping unrigged repositories isolated.
